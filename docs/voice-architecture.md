@@ -1,10 +1,10 @@
 # Voice protocol · Private interview and public delivery
 
-Module 1 uses the OpenAI Realtime model as the spoken interviewer. The browser connects over WebRTC after the host enables the microphone. Express authenticates signaling and opens a server-side connection to the same call. The voice model proposes replies and actions. The authoritative controller validates actions against the current private project, the saved plan and the host's approval. Typed chat uses the same state and rules. [Module 1 architecture](architecture.md#module-1-saas-architecture)
+Module 1 uses OpenAI Live as the spoken interviewer. The browser connects over WebRTC after the host enables the microphone. Express authenticates signaling and opens a sideband on the same call. The controller validates actions against the private project, saved plan and host approval. Typed chat uses the same controller. [Sideband controller](../backend/src/controllers/live-call.ts)
 
-The recorded-turn HTTP endpoint also accepts complete audio files. The public presentation scaffold still uses native browser speech controls. [Interview adapter](../voice/server.py) · [Studio](../frontend/components/research/ResearchWorkspace.tsx)
+The private audio worker transcribes completed turns and synthesizes approved presentation sentences. [Audio worker](../voice/server.py) · [Same-screen presentation](presentation-flow.md)
 
-Implementation status and outstanding acceptance tests are tracked in the [current gap register](continuation-review.md#current-gap-register).
+Use the [module handoffs](../handoffs) for observed acceptance outcomes.
 
 ## Transport and events
 

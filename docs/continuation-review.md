@@ -1,6 +1,6 @@
 # Release review · The interruptible presenter
 
-Pre-implementation review and acceptance fixtures from baseline fcbe40d. For the current stack and release contract see [architecture.md](architecture.md). The earlier direct-Realtime design and its simulation results describe a different voice path.
+Pre-implementation review and acceptance fixtures from baseline fcbe40d. The [presentation flow](presentation-flow.md) describes the current host workflow.
 
 ## Current gap register
 
@@ -20,7 +20,7 @@ Build **Module 1, the private pitch studio**, as an independently usable SaaS re
 
 An evidence ID verifies provenance. It takes a separate content check to establish that a sentence follows from the cited passage. Likewise, a worker screenshot, an audience paint acknowledgment and a person seeing the intended element are three different observations. Keep them distinct in judging traces.
 
-See [module contracts](architecture.md), [release gates](plan.md) and [builder/tester handoffs](orchestration.md). The sections below preserve the original baseline assessment and its fixtures.
+The sections below preserve the original baseline assessment and its fixtures. See [work assignments and validation](orchestration.md) for current implementation work.
 
 ## What the demo must distinguish
 

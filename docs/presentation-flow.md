@@ -2,14 +2,14 @@
 
 ## Current release goal
 
-Ship one presentation flow in which the agent decides whether the verified research is sufficient, plans slides within the requested count, and fills the shared HTML templates. Playwright renders and checks the whole deck. The agent can revise a failed layout and rerender it, with three whole-deck passes total. Present on the host's screen with echo-aware speech interruption and private approval of slide edits.
+The studio checks whether the saved evidence supports the exact requested slide count and fills the shared HTML templates. Playwright renders and checks the deck. The planner can revise a failed layout and rerender it, with three whole-deck passes total. Present on the host's screen with echo-aware speech interruption and private approval of slide edits.
 
 The deck is the deliverable. Research findings, source links, and graph data stay in the project for planning and citations. Validate in Chrome against real providers, then check echo and double-talk with a physical microphone and speakers. The running preview is outside this change.
 
 ## The host flow
 
 1. Approve the research scope in chat. The worker saves an account-scoped research revision with verified findings, evidence IDs, and supported charts.
-2. In the conversation, answer **How many slides?** with a number from 1–12. The agent aims for that count when the evidence supports it. The host sees any shortfall and what evidence would close it. The agent renders through the shared templates and can repair a failed layout within three whole-deck passes.
+2. Select a slide count from 1–12. OpenAI Decisions assesses evidence for the requested count and the approved goal. If the coverage is thin, the worker can run one targeted follow-up within the approved public source scope and then reassesses readiness. Files-only projects use the saved materials. Preparation saves an exact-count reviewed deck or reports what the host can retry or add.
 3. Review the slide sequence, private narration, and sources. **Approve and present** approves the displayed revision and starts delivery on this screen. The browser can ask for microphone permission at this point.
 4. Once the microphone is available, speak over the agent to ask a question or request a change. The browser compares capture with recent speaker audio to reject echo. The host can type if the room is noisy or the microphone is unavailable. A proposed slide change stays private until the host accepts it.
 5. Exit live view to return to review, or download the public HTML deck.
@@ -21,9 +21,11 @@ flowchart LR
     Chat["Host chat and attachments"] --> Brief["Approved research brief"]
     Brief --> Worker["Leased research worker"]
     Worker --> Research[("Saved research revision<br/>findings · evidence · verified chart blocks")]
-    Research --> Ready{"Agent readiness decision"}
-    Ready -->|missing material| Chat
-    Ready -->|sufficient evidence| Planner["Deck planner<br/>research ID + slide limit"]
+    Research --> Ready{"OpenAI Decisions readiness"}
+    Ready -->|first gap with approved public search| Followup["Targeted source research"]
+    Followup --> Ready
+    Ready -->|unresolved evidence gap| Chat
+    Ready -->|sufficient evidence| Planner["Deck planner<br/>research ID + exact slide count"]
     Planner --> Check["Schema and evidence review"]
     Check --> Render["Playwright<br/>shared HTML templates · whole deck"]
     Render --> Judge{"Browser metrics and screenshot review"}
@@ -101,4 +103,4 @@ sequenceDiagram
 - The prepare request queues a durable job and returns its ID. The host can close the page while review continues. Opening the project again can resume observation for the same research revision and slide count.
 - Check in a real browser that choosing a count produces a deck bound to the saved research ID. Inspect a charts-plus-points slide and verify the values, units, and citation survive the HTML download.
 - Check that the transcript and guardrails stay out of the slides and spoken sentences. Use a physical microphone and speakers to measure barge-in latency and test echo, denied permission, two interruptions, and resume at the pinned sentence.
-- [Workspace architecture](architecture.md) · [Module 2 requirements](module-2-prd.md) · [HTML slide and edit design](module-2-html-presentation.md) · [Voice protocol](voice-architecture.md)
+- [Coverage and gate audit](audit/07-presentation-gates.md) · [HTML slide and edit design](module-2-html-presentation.md) · [Voice protocol](voice-architecture.md)

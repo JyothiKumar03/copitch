@@ -6,7 +6,7 @@ Module 1 is a private conversation that creates a source-backed pitch. The cente
 
 A typed turn sends the host's message to Express. One purpose-scoped model call returns a reply, BCP-47 language, proposed memory updates and an intent. A plan includes the topic, audience, purpose and proposed search scope. A file answer identifies the excerpts that support the reply. Express validates the result, filters actions by phase, and commits accepted changes and the reply together. The message offering research includes the saved plan. [Structured outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
 
-For voice, Express authorizes a project-bound Realtime call. The trusted sideband observes finalized host text and the provider's structured proposal, then applies it through the same phase controller. It voices the saved reply. Transcript partials remain display state. Browser messages do not select actions or submit provider tool results. [Voice protocol](voice-architecture.md)
+For voice, Express authorizes a project-bound OpenAI Live call. The trusted sideband observes finalized host text and the provider's structured proposal, then applies it through the same phase controller. It voices the saved reply. Transcript partials remain display state. Browser messages do not select actions or submit provider tool results. [Voice protocol](voice-architecture.md)
 
 | Phase | Controller behavior |
 |---|---|
@@ -27,7 +27,7 @@ A replay with the same turn identity returns the saved outcome. Changed input un
 
 An uploaded file becomes usable after its parser returns authorized source records. File replies carry exact excerpts with their PDF page, PowerPoint slide or CSV row. Invalid excerpts are withheld. Unsupported and unavailable files surface their own outcomes.
 
-Research uses the reviewed plan. The worker records a direct read of the host's selected public page separately from hosted search results, preserving which sources yielded usable text and citations. Files-only work skips external retrieval. An evidence gap remains a needs-input outcome when there is nothing to publish. With sufficient evidence, the worker saves a readable draft with a speakable pitch and a source list. Comparable cited values can render as a chart. The download and preview point to the same saved revision. [Module 1 architecture](architecture.md#module-1-saas-architecture)
+Research uses the reviewed plan. The worker tracks candidate search results and direct page reads separately. Only a page read can contribute public evidence. Files-only work skips external retrieval. With sufficient evidence the worker saves verified findings and cited sources. Comparable cited values can render as a chart. The download and preview point to the same saved revision. [Research worker](../backend/src/workers/research.ts)
 
 ## Cases to verify
 

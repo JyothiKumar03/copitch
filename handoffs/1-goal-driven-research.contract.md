@@ -1,6 +1,6 @@
 # Contract: Goal-driven research (module 1)
 Owner decisions pending: none
-Source: docs/product.md#first-deliverable--a-research-brief-you-can-present-from, docs/architecture.md#1-interview-and-research
+Source: Module 1 contract at the time of implementation. See docs/orchestration.md for the current build order.
 
 | ID | Actor action | Observable outcome | Check (entry point + exact command or click path) | Required evidence |
 |----|--------------|--------------------|---------------------------------------------------|-------------------|

@@ -1,7 +1,7 @@
 # Contract: Private pitch studio (module 1)
 
 Owner decisions pending: Confirm the public launch language list after the proposed English/Hindi live checks. Production voice spend limits, customer data retention and authorization for public deployment remain open.
-Source: docs/product.md#module-1-customer-journey, docs/architecture.md
+Source: Module 1 contract at the time of implementation. See docs/orchestration.md for the current build order.
 
 | ID | Actor action | Observable outcome | Check (entry point + exact command or click path) | Required evidence |
 |----|--------------|--------------------|---------------------------------------------------|-------------------|
