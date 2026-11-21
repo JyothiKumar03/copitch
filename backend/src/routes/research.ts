@@ -1,12 +1,15 @@
 import { download_pitch } from "../controllers/pitch-markdown";
 import { read_pitch_content } from "../controllers/pitch-content";
 import express, { Router } from "express";
-import { source_host, upload_source } from "../controllers/source";
+import { source_calls, source_host, upload_source } from "../controllers/source";
+import { studio_events } from "../controllers/studio-events";
 import { max_source_bytes } from "../services/source";
 import { research_handlers } from "../controllers/research";
 
 export const research = Router();
 const handlers = research_handlers();
+research.get("/:session_id/interview/events", studio_events);
+research.get("/:session_id/research/source-calls", source_host, source_calls);
 research.post("/:session_id/research/sources", source_host,
   express.raw({ type:"multipart/form-data",limit:max_source_bytes + 65536,inflate:false }),upload_source);
 research.post("/:session_id/research/brief", handlers.review);
