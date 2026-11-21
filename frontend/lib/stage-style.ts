@@ -21,6 +21,27 @@ export const stageStyle = `
 .slide-shell[data-density=dense] ul { gap:6px; font-size:clamp(15px,1.55cqw,22px); line-height:1.32; }
 .slide-shell[data-density=dense] li { padding-top:4px; }
 .slide-shell[data-density=dense] footer { padding-top:4px; }
+.audience-slide { min-height:calc(100dvh - 2rem); }
+.template-metrics,.template-comparison { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(125px,100%),1fr)); gap:clamp(10px,2cqw,22px); margin:0; }
+.template-metrics div,.template-comparison section { border-top:1px solid currentColor; padding:10px 0; }
+.template-metrics div { display:flex; flex-direction:column-reverse; gap:6px; }
+.template-metrics dd { margin:0; font:500 clamp(22px,5cqw,46px)/1.1 var(--font-display,Georgia),serif; }
+.template-metrics dt,.template-timeline,.template-quote cite,.template-chart-data,.template-comparison ul { font:500 clamp(14px,2.55cqw,20px)/1.4 system-ui; }
+.template-timeline { display:grid; gap:8px; margin:0; padding:0; list-style:none; }
+.template-timeline li { display:grid; grid-template-columns:minmax(5ch,auto) 1fr; gap:12px; }
+.template-comparison h4 { margin:0 0 4px; font-size:clamp(15px,3cqw,22px); }
+.template-comparison ul { gap:4px; }
+.template-quote { margin:0; border-left:3px solid currentColor; padding-left:16px; }
+.template-quote p { margin:0 0 8px; font:400 clamp(22px,4cqw,40px)/1.2 var(--font-display,Georgia),serif; }
+.template-chart { display:grid; gap:12px; margin:0; }
+.template-chart svg { width:100%; max-height:140px; }
+.template-chart-donut_chart { grid-template-columns:minmax(84px,130px) minmax(0,1fr); align-items:center; }
+.template-chart-data { display:grid; gap:5px; margin:0; }
+.template-chart-data div { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:8px; }
+.template-chart-bar_chart .template-chart-data div { grid-template-columns:minmax(0,1fr) minmax(20px,1fr) auto; }
+.template-chart-data meter { width:100%; accent-color:#77354f; }
+.template-chart-data dd { margin:0; font-variant-numeric:tabular-nums; text-align:end; }
+.template-chart-dot { display:inline-block; width:.6em; height:.6em; margin-right:.4em; border-radius:50%; }
 `;
 
 export const slideDensity = (title: string, highlights: string[]) => {

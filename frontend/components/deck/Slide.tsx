@@ -1,22 +1,27 @@
 import { ConversionChart } from "./ConversionChart";
-import { slideSource } from "@/lib/slide-source";
-import { Fragment } from "react";
+import { SlideTemplate } from "./SlideTemplate";
 import { stageStyle, slideDensity } from "@/lib/stage-style";
-import type { TDeck, TSlide } from "@/types/deck";
+import type { TDeck, TSlide, TSlideView } from "@/types/deck";
 
-export const Slide = ({ deck, slide, index }: { deck: TDeck; slide: TSlide; index: number }) => {
+export const deckSlideView = (deck: TDeck, slide: TSlide, index: number): TSlideView => {
+  const { slide_id, layout, title, highlights, evidence_ids, chart, template } = slide;
+  return { deckTitle: deck.title, index, total: deck.slides.length, slide: { slide_id, layout, title, highlights, evidence_ids, chart, template } };
+};
+
+export const PublicSlide = ({ view, className = "" }: { view: TSlideView; className?: string }) => {
+  const { deckTitle, slide, index, total } = view;
   return (
-    <section className="slide-shell" data-layout={slide.layout} data-density={slideDensity(slide.title, slide.highlights)} aria-label={`Slide ${index + 1} of ${deck.slides.length}`}>
-      <style>{stageStyle}</style>
-      <div className="slide-top"><span>{deck.title}</span><span>{String(index + 1).padStart(2, "0")} / {String(deck.slides.length).padStart(2, "0")}</span></div>
+    <section className={`slide-shell ${className}`} data-layout={slide.layout} data-density={slideDensity(slide.title, slide.highlights)}
+      aria-label={`Slide ${index + 1} of ${total}`}>
+      <div className="slide-top"><span>{deckTitle}</span><span>{index + 1} / {total}</span></div>
       <h3>{slide.title}</h3>
       {slide.highlights.length > 0 && <ul>{slide.highlights.map((item, i) => <li key={i}>{item}</li>)}</ul>}
+      {slide.template && <SlideTemplate template={slide.template} />}
       {slide.chart && <ConversionChart chart={slide.chart} />}
-      {!!slide.evidence_ids.length && <footer>Sources · {slide.evidence_ids.map((id, i) => {
-        const source = slideSource(deck, id);
-        return <Fragment key={id}>{i > 0 && ", "}{source.href
-          ? <a href={source.href} target="_blank" rel="noreferrer" className="underline">{source.label}</a> : source.label}</Fragment>;
-      })}</footer>}
+      {!!slide.evidence_ids.length && <footer>Sources · {slide.evidence_ids.join(", ")}</footer>}
     </section>
   );
 };
+
+export const Slide = ({ deck, slide, index }: { deck: TDeck; slide: TSlide; index: number }) =>
+  <><style>{stageStyle}</style><PublicSlide view={deckSlideView(deck, slide, index)} /></>;

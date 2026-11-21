@@ -1,8 +1,10 @@
-import { slideSource } from "./slide-source";
-import { stageStyle, slideDensity } from "./stage-style";
+import { createElement } from "react";
+import { PublicSlide, deckSlideView } from "@/components/deck/Slide";
+import { stageStyle } from "./stage-style";
 import type { TDeck } from "@/types/deck";
 
-export const exportDeck = (deck: TDeck) => {
+export const exportDeck = async (deck: TDeck) => {
+  const { renderToStaticMarkup } = await import("react-dom/server.browser");
   const doc = document.implementation.createHTMLDocument(`${deck.title} · copitch`);
   doc.documentElement.lang = "en";
   const charset = doc.createElement("meta");
@@ -32,51 +34,11 @@ export const exportDeck = (deck: TDeck) => {
     return node;
   };
   deck.slides.forEach((slide, index) => {
-    const section = doc.createElement("section");
+    const template = doc.createElement("template");
+    template.innerHTML = renderToStaticMarkup(createElement(PublicSlide, { view: deckSlideView(deck, slide, index) }));
+    const section = template.content.firstElementChild as HTMLElement;
     section.id = "slide-" + (index + 1);
-    section.className = "slide-shell";
-    section.dataset.layout = slide.layout;
-    section.dataset.density = slideDensity(slide.title, slide.highlights);
     doc.body.append(section);
-    const header = append(section, "div", "");
-    header.className = "slide-top";
-    append(header, "span", deck.title);
-    append(header, "span", `${index + 1} / ${deck.slides.length}`);
-    append(section, "h3", slide.title);
-    const list = append(section, "ul", "");
-    slide.highlights.forEach(highlight => append(list, "li", highlight));
-    if (slide.chart) {
-      const figure = append(section, "figure", "");
-      figure.className = "conversion-chart";
-      append(figure, "figcaption", "Conversion rate" + (slide.chart.period ? " · " + slide.chart.period : ""));
-      for (const row of slide.chart.rows) {
-        const line = append(figure, "div", "");
-        line.className = "conversion-row";
-        append(line, "span", row.label);
-        const meter = doc.createElement("meter");
-        meter.setAttribute("aria-label", row.label + " conversion rate");
-        meter.value = row.denominator ? row.numerator / row.denominator : 0;
-        meter.hidden = !row.denominator;
-        line.append(meter);
-        const rate = row.denominator ? meter.value.toLocaleString("en", { style: "percent", maximumFractionDigits: 2 }) : "Unavailable";
-        append(line, "strong", `${rate} (${row.numerator}/${row.denominator})`);
-      }
-    }
-    if (slide.evidence_ids.length) {
-      const footer = append(section, "footer", "Sources · ");
-      slide.evidence_ids.forEach((id, i) => {
-        if (i) footer.append(", ");
-        const source = slideSource(deck, id);
-        if (source.href) {
-          const link = doc.createElement("a");
-          link.href = source.href;
-          link.rel = "noreferrer";
-          link.target = "_blank";
-          link.textContent = source.label;
-          footer.append(link);
-        } else footer.append(source.label);
-      });
-    }
     const nav = append(section, "nav", "");
     for (const [offset, label] of [[-1, "Previous"], [1, "Next"]] as const) {
       const target = index + offset;

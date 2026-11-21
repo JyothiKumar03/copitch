@@ -6,7 +6,9 @@
   padding: clamp(12px, 2vw, 30px);
 }
 
-.deck-live .slide-shell { min-height: calc(100dvh - 120px); }
+.deck-live .slide-shell { min-height: min(58vh, 560px); }
+.live-console { grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 1024px) { .live-console { grid-template-columns: minmax(0, 1fr) minmax(270px, 340px); } }
 .deck-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 16px; }
 .deck-edit, .pitch-preview { display: grid; gap: 16px; }
 .deck-edit label, .pitch-form label, .pitch-picker { display: grid; align-content: start; gap: 6px; font-size: .875rem; font-weight: 500; }
