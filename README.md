@@ -72,7 +72,7 @@ Open a project and start voice or type in chat. Review the plan and approve it b
 
 ## Product and implementation
 
-Start with [the orchestration plan](docs/orchestration.md) for work assignments and integration gates. See [product behavior](docs/product.md), [runtime contracts](docs/architecture.md) and [the rehearsal fixtures](docs/plan.md).
+See the [host presentation flow](docs/presentation-flow.md) and [implementation workflow](docs/orchestration.md). Run `bun scripts/audit-presentation-gates.ts` to locate coverage gates and limits in the deck and research paths.
 
 ## AWS deployment
 
@@ -80,7 +80,13 @@ Follow the [AWS operations guide](docs/aws-operations.md) to build the four imag
 
 ## HTML presentation and model selection
 
-Open the research workspace, confirm a brief and generate the memo. Enter the audience and speaking time, then select Prepare slides. Review the chosen slides, estimated duration and speaker notes. A second audience or duration creates a separate saved pitch. Start the presentation explicitly or download the HTML. Slide edits produce private proposals. The offline HTML contains public slide content and source identifiers.
+Open the research workspace, approve the research plan, and request a slide count. The preparation checks readiness through OpenAI Decisions and can follow up on evidence gaps within the approved source scope. Review the saved slides and speaker notes, then approve the displayed revision to present or download the HTML. Slide edits produce private proposals. The offline HTML contains slide content and source identifiers.
+
+## Website walkthrough and PowerPoint
+
+Open a private project and choose **Website walkthrough**. Enter the public starting URL, the audience, the presentation goal and crawl depth. Depth 0 captures the starting page. Each additional level allows another link hop within the approved website. Review the scope and select **Approve and capture**.
+
+The job saves observed pages and screenshot evidence to the project. Open the result to review captures, failed pages and the PowerPoint download. Reopening the project restores the same result. Capture follows visible public links and uses a bounded read-only browser for screenshots. The [acceptance contract](handoffs/3-website-to-powerpoint.contract.md) covers depth, source links, file validity and privacy.
 
 Optional `purposes` on each OPENAI_TEXT_MODELS entry accepts `interview`, `research`, `planning`, `live` and `chat`. A matching entry takes priority over generic entries. Entries scoped exclusively to other purposes are excluded. A single existing entry without purposes still works everywhere. Interview and research handlers select the first eligible entry; the generic chat model-step service supports ordered transport fallback. The deterministic deck compiler spends zero additional text-model tokens. The typed live router uses the same configuration contract.
 

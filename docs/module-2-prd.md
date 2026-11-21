@@ -41,7 +41,7 @@ The deck is only as good as the brief. Module 2 consumes the verified research b
 
 | What | Where in live-slides | Why |
 |---|---|---|
-| Beat = narration + one slide, planned fully before narration starts | `packages/shared/src/agent.ts:17-22`, `architecture.md:20-31` | Simple, checkpointable unit; deck exists before the talk |
+| Beat = narration + one slide, planned fully before narration starts | `backend/src/types/deck.ts`, `backend/src/services/presentation-planner.ts` | The deck exists before the talk and each beat can be resumed |
 | Slide schema with 12 layouts and bounded fields (title ≤72, ≤4 bullets ≤110, metrics, quote, timeline, chart ≤3 series × 8 points, comparison) | `packages/shared/src/slide.ts:3-16, 54-70` | Our deck has 3 layouts; this covers people, metrics, timelines and comparisons |
 | Planner rules: preserve every material claim and number, never add facts, 35–90 spoken words per beat, 1–4 scan-friendly bullets, chart values only when stated | `apps/server/prompts/script-planner.md` | Matches our grounding stance; becomes a prompt in `prompts.ts` |
 | Spoken-number normalisation and evidence detectors (quote, comparison, timeline, metrics) | `apps/server/src/services/slide-evidence.ts:44,151,197,219,259,269` | Deterministic layout choice and a fallback planner |

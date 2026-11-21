@@ -1,6 +1,6 @@
 # Frontend
 
-Use the Next.js App Router in this workspace. Read docs/product.md for the host and audience flows and docs/architecture.md for the playback contract. The current voice chat is a scaffold. Use shadcn/ui primitives, Tailwind CSS and TanStack Query, installed through the repository's Bun workspace.
+Use the Next.js App Router in this workspace. Start the host journey at `frontend/app/research/page.tsx`. Review and presentation controls live in `frontend/components/deck`. Use shadcn/ui primitives, Tailwind CSS and TanStack Query, installed through the repository's Bun workspace.
 
 ## File ownership
 
@@ -20,13 +20,9 @@ Keep each responsibility in its own file. Reuse shared wire contracts when avail
 ## Presentation behavior
 
 - Keep typed input and manual playback controls usable when microphone permission or audio setup fails.
-- Give the host the microphone and control channel. Bind the audience view to the public projection payload only. Keep the brief, transcript, notes, source uploads and private cues on the host surface.
+- Give the host the microphone and control channel. Render only slide content on the fullscreen presentation stage. Keep the brief, transcript, notes, source uploads and private cues on the host surface.
 - Acknowledge the exact slide revision or browser frame after the stage displays it. Wire single-screen fallback to the same acknowledgment path. Only the controller schedules narration and advances beats.
 - Restore reopened or reconnected sessions paused. Ignore stale stream events after an interruption or revision change using the controller's identifiers.
-
-## Verification
-
-From frontend/ run `bun run lint`, `bun run typecheck` and `bun run build` for UI changes. Exercise the changed flow with typed controls and check both host and audience views when projection changes.
 
 <!-- BEGIN:nextjs-agent-rules -->
 
@@ -37,3 +33,7 @@ This version has breaking changes — APIs, conventions, and file structure may 
 This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
 
 <!-- END:nextjs-agent-rules -->
+
+## Visual system
+
+Use the semantic Tailwind tokens in `frontend/app/globals.css` for evergreen workspace surfaces, chalk document and slide surfaces, chartreuse actions, borders, focus and feedback. Use font-display (Newsreader) for editorial titles and Hanken Grotesk for controls and data. Compose controls from `frontend/components/ui`. Keep mic and job status readable in text, and check the host journey at desktop and mobile widths with keyboard controls. Keep the fullscreen stage free of workspace navigation. Label landing-page examples clearly.
