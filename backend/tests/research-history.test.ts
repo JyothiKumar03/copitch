@@ -31,9 +31,12 @@ test("restored interview history contains only committed replies and preserves l
   const host = await (await http.request("/api/sessions", { method: "POST" })).json();
   const base = "/api/sessions/" + host.session_id;
   const headers = { Authorization: "Bearer " + host.token, "Content-Type": "application/json" };
-  const saved = { brief_id: crypto.randomUUID(), messages: ["Pitch the buyer"], summary: "A buyer pitch.",
+  const intent = { subject: "Buyer pilot", audience: "Operations lead", outcome: "Approve a pilot", deliverable: "Pitch deck" };
+  const saved = { intent, brief_id: crypto.randomUUID(), messages: ["Pitch the buyer"], summary: "A buyer pitch.",
     question: "Which buyer?", public_queries: [], source_policy: "files_only" as const, urls: [], materials: "" };
   database().replace_brief(host.session_id, undefined, saved);
+  const workspace = base + "/interview/workspace";
+  expect((await (await http.request(workspace, { headers })).json()).brief.intent).toEqual(intent);
   const send = (message: string, brief_id: string) => http.request(base + "/research/brief",
     { method: "POST", headers, body: JSON.stringify({ message, brief_id, source_policy: "files_only" }) });
   const stale = send("Discard this", saved.brief_id);
@@ -42,7 +45,6 @@ test("restored interview history contains only committed replies and preserves l
   release();
   expect((await stale).status).toBe(409);
   expect((await send("Failed", submitted.brief_id)).status).toBe(502);
-  const workspace = base + "/interview/workspace";
   expect((await http.request(workspace)).status).toBe(401);
   const restored = await (await http.request(workspace, { headers })).json();
   expect(restored.brief.history).toEqual([

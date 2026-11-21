@@ -12,6 +12,7 @@ import type { TStudioAgent, TStudioAgentInput } from "./studio-agent";
 import { studio_context } from "./studio-state";
 import { quotes } from "./excerpt";
 import { site_url } from "./host-pages";
+import type { TLiveExchange } from "./live-interviewer";
 
 export { initial_studio_context, studio_context } from "./studio-state";
 
@@ -242,7 +243,7 @@ export const apply_voice_action = (db: SessionStore, session: string, message: s
 };
 
 // What the host and the agent actually said in one exchange, saved verbatim.
-export const record_voice_exchange = (db: SessionStore, session: string, exchange: { turn_id: string; host: string; agent: string; voice_items: string[] }) => {
+export const record_voice_exchange = (db: SessionStore, session: string, exchange: TLiveExchange) => {
   const host = exchange.host.trim();
   const agent = exchange.agent.trim();
   if (!host && !agent) return;
@@ -250,7 +251,7 @@ export const record_voice_exchange = (db: SessionStore, session: string, exchang
   const prior_history = snapshot && revision > 0 ? snapshot.prior_history : interview_workspace(session, db).history;
   const language = state.reply_language ?? state.last_language ?? "en";
   const turn: TStudioTurn = { turn_id: exchange.turn_id, created_at: Date.now(), user_text: host, text: agent.slice(0, spoken_text_limit),
-    voice_items: exchange.voice_items, language, phase: state.phase, proposal: state.proposal };
+    voice_items: exchange.voice_items, voice_reply: exchange.voice_reply, language, phase: state.phase, proposal: state.proposal };
   return db.studio.commit(session, revision, state, prior_history, createHash("sha256").update(JSON.stringify(exchange)).digest("hex"), turn, () => {});
 };
 

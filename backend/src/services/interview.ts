@@ -52,6 +52,7 @@ const studio_history = (brief: TResearchBrief, session?: string, db = database()
 export const interview_brief = (brief: TResearchBrief, session?: string, db?: SessionStore): TInterviewBrief => ({
   brief_id: brief.brief_id,
   summary: brief.summary,
+  ...(brief.intent && { intent: brief.intent }),
   question: brief.question,
   public_queries: brief.public_queries,
   spoken_prompt: spoken_prompt(brief),
@@ -65,10 +66,13 @@ export const interview_workspace = (session: string, db = database()): TIntervie
   const turns = snapshot ? db.studio.turns(session) : [];
   const history = snapshot && turns.length ? [...snapshot.prior_history, ...turns.flatMap(turn => {
     const identity = { turn_id: turn.turn_id, created_at: turn.created_at, intent: turn.intent, answer_to: turn.answer_to, option_id: turn.option_id };
+    // Live transcript frames carry timestamps and text. The stored language there is a preference or fallback.
+    const reply_language = turn.voice_reply || turn.voice_items?.some(item => item.startsWith("live:")) ? undefined : turn.language;
     // An exchange where only the agent spoke (reading back a plan) has no host words; it must not render an empty bubble.
     return [...(turn.user_text.trim() || turn.option_id ? [{ role: "host" as const, text: turn.user_text, ...identity,
       ...(turn.voice_items && { voice_items: turn.voice_items }) }] : []),
-      ...(turn.text.trim() ? [{ role: "assistant" as const, text: turn.text, ...identity }] : [])];
+      ...(turn.text.trim() ? [{ role: "assistant" as const, text: turn.text, ...identity, ...(reply_language && { language: reply_language }),
+      ...(turn.voice_reply && { voice_items: [turn.voice_reply] }) }] : [])];
   })] : brief ? studio_history(brief, session, db) : snapshot?.prior_history ?? [];
   const conversation = {
     history, sources: snapshot ? db.sources.selected(session, state.source_ids).map(source_summary) : brief?.sources ?? [],

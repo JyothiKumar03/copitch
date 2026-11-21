@@ -65,12 +65,15 @@ export const connect_live = (fetch_worker: typeof fetch | ((url: string, options
       wake: (job: string) => research_worker.wake(job),
     };
     const interviewer = create_live_interviewer({
+      caption_scope: lease,
       send: event => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(event)); },
       close: end,
       record: exchange => { record_voice_exchange(db, session, exchange); },
       act: (message, action) => apply_voice_action(db, session, message, action, services),
       heard: (proposal, turn) => { db.studio.hear_proposal(session, proposal, turn); },
     });
+    // A host hangup commits the visible exchange before the browser refreshes conversation history.
+    active.finish = interviewer.close;
     active.flush = interviewer.flush;
     ws.onmessage = ({ data }) => {
       if (typeof data !== "string" || data.length > 200000 || calls.get(session)?.lease !== lease) return;

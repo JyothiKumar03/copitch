@@ -1,0 +1,2 @@
+export const LIVE_EXCHANGE_IDLE_MS = 2500;
+export const LIVE_BACKCHANNEL_MS = 1500;

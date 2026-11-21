@@ -161,12 +161,14 @@ test("an explicit Telugu preference survives project reopen", async () => {
   expect(interview_workspace(session, db).state.reply_language).toBe("te");
 });
 
-test("a turn is labelled with the language its reply is written in", async () => {
-  const { responses, send } = studio();
+test("saved replies are labelled with their own language", async () => {
+  const { db, session, responses, send } = studio();
   responses.push({ reply: "సరే, తెలుగులో మాట్లాడతాను.", language: "te", actions: [{ kind: "set_reply_language", language: "te" }] });
   await send("Please speak Telugu with me.");
   responses.push({ reply: "Sure. What should the deck say first?", language: "en", actions: [] });
   expect((await send("What do you need from me first?")).language).toBe("en");
+  const history = interview_workspace(session, db).history;
+  expect(history.map(turn => turn.language)).toEqual([undefined, "te", undefined, "en"]);
 });
 
 test("a voice turn that began before the previous reply was saved is still recorded", async () => {

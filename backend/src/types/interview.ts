@@ -3,7 +3,7 @@ import type { TSourceSummary } from "./source";
 import type { TInterviewTurn, TResearchBrief, TResearchBundle } from "./research";
 import type { TResearchProposal, TStudioActivity, TStudioPhase, TStudioState } from "./studio-turn";
 
-export type TInterviewBrief = Pick<TResearchBrief, "brief_id" | "summary" | "question" | "public_queries"> & {
+export type TInterviewBrief = Pick<TResearchBrief, "brief_id" | "summary" | "question" | "public_queries" | "intent"> & {
   sources: TSourceSummary[];
   spoken_prompt: string;
   history: TInterviewTurn[];

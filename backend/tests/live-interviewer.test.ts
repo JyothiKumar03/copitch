@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
 import { create_live_interviewer } from "../src/services/live-interviewer";
+import type { TLiveExchange } from "../src/services/live-interviewer";
+import { SessionStore } from "../src/repositories/session";
+import { apply_voice_action, record_voice_exchange, studio_context } from "../src/services/studio-turn";
 import type { TVoiceAction } from "../src/services/studio-turn";
 import type { TStudioTurn } from "../src/types/studio-turn";
 
@@ -132,4 +135,74 @@ test("a typed turn or button click first saves the voice exchange in progress, s
   await pause();
   expect(f.recorded).toHaveLength(1);
   f.live.close();
+});
+
+test("sideband replay preserves verbatim multilingual fragments and call-scoped host and agent identifiers", async () => {
+  const recorded: TLiveExchange[] = [];
+  const live = create_live_interviewer({
+    send: () => {}, close: () => {}, record: turn => recorded.push(turn), caption_scope: "fixture-lease",
+    act: () => { throw new Error("A caption may not act"); }, heard: () => {},
+  });
+  const input = { type: "session.input_transcript.delta", event_id: "input-first", delta: "నేను pitch చేస్తున్నా", start_ms: 100, end_ms: 450 };
+  await live.receive(input);
+  await live.receive(input);
+  await live.receive({ type: "session.output_transcript.delta", event_id: "reply-first", delta: "సరే, tell me more.", start_ms: 400, end_ms: 620 });
+  await live.receive({ ...input, event_id: "input-tail", delta: ".", start_ms: 430, end_ms: 490 });
+  live.close();
+  expect(recorded).toHaveLength(1);
+  expect(recorded[0]).toMatchObject({
+    host: "నేను pitch చేస్తున్నా.", agent: "సరే, tell me more.",
+    voice_items: ["live:fixture-lease:100"], voice_reply: "agent:fixture-lease:400",
+  });
+});
+
+const first_spoken_approval = async (start_ms: number, end_ms: number) => {
+  const db = new SessionStore(":memory:");
+  const session = "timed-first-approval";
+  const jobs: string[] = [];
+  const outputs: TSent[] = [];
+  const live = create_live_interviewer({
+    send: event => outputs.push(event as TSent), close: () => {},
+    record: exchange => { record_voice_exchange(db, session, exchange); },
+    act: (message, action) => apply_voice_action(db, session, message, action,
+      { ensure_research: () => {}, wake: job => jobs.push(job) }),
+    heard: (proposal_id, turn_id) => { db.studio.hear_proposal(session, proposal_id, turn_id); },
+  });
+  const call = (name: string, args: object, delegation_id: string) => live.receive({
+    type: "response.event", delegation_id, event: { type: "response.output_item.done", item: {
+      type: "function_call", call_id: delegation_id, name, arguments: JSON.stringify(args),
+    } },
+  });
+  try {
+    await live.receive({ type: "session.input_transcript.delta", start_ms: 150, end_ms: 2000,
+      delta: "Research my website jk-ai.in for a bank pitch to my new team." });
+    await call("propose_research", { subject: "Portfolio", audience: "Bank team", outcome: "Know the host's background",
+      deliverable: "Introductory deck", summary: proposal.summary, urls: proposal.urls, queries: [] }, "offer");
+    const offered_turn = studio_context(db, session).state.proposal_turn_id;
+    await live.receive({ type: "session.output_transcript.delta", start_ms: 2500, end_ms: 4350,
+      delta: "I'll research jk-ai.in for your bank pitch to your new team. Shall I start?" });
+    await live.receive({ type: "session.delegation.created", offset_ms: 5200,
+      delegation: { id: "first-approval", target: "responses" } });
+    await call("start_research", {}, "first-approval");
+    expect(studio_context(db, session).state.proposal_turn_id).toBe(offered_turn);
+    expect(jobs).toHaveLength(0);
+    await live.receive({ type: "session.input_transcript.delta", start_ms, end_ms, delta: "Yes, go ahead." });
+    return { jobs, outputs, phase: studio_context(db, session).state.phase };
+  } finally { live.close(); }
+};
+
+test("one spoken approval starts once when the correlated tool arrives before its transcript", async () => {
+  const result = await first_spoken_approval(4480, 5080);
+  expect(result.phase).toBe("researching");
+  expect(result.jobs).toHaveLength(1);
+  expect(result.outputs.at(-2)?.item?.output).toContain("Research has started");
+});
+
+test("speech overlapping the plan or arriving after a different delegation cannot release a pending start", async () => {
+  for (const [start, end] of [[4010, 4800], [5300, 5650]]) {
+    const result = await first_spoken_approval(start, end);
+    expect(result.phase).toBe("proposed");
+    expect(result.jobs).toHaveLength(0);
+    expect(result.outputs.at(-2)?.item?.output).toContain("The spoken approval could not be confirmed");
+  }
 });
