@@ -31,8 +31,11 @@ test("signed-in presentation fences stale speech, pins Q&A and publishes only ap
       classifier_started.resolve();
       await release_classification.promise;
     }
-    if (context.message.startsWith("Where")) return { kind: "answer", text: "He studied at KMIT.",
-      support: [{ evidence_id: "P1", excerpt: "studied at KMIT" }] };
+    if (context.message.startsWith("Where")) return { kind: "answer", text: "He studied at KMIT in cohort 3.",
+      support: [{ evidence_id: "P1", excerpt: "studied at KMIT in cohort three" }] };
+    if (!context.message.startsWith("Please")) return { kind: "edit", text: "", changes: {},
+      additions: { highlights: ["Processed 30k+ calls"], narration: "The pipeline processed 30k+ calls." },
+      support: [{ evidence_id: "P2", excerpt: "processed 30k+ calls" }] };
     return { kind: "edit", text: "I drafted one addition.", changes: {
       highlights: ["Built production agents", "Processed 30k+ calls"],
       narration: "First sentence. Second sentence. The pipeline processed 30k+ calls.",
@@ -67,7 +70,7 @@ test("signed-in presentation fences stale speech, pins Q&A and publishes only ap
     expect(db.replace_brief(session_id, undefined, brief)).toBe(true);
     expect(db.save_research(session_id, { research_id, confirmed_brief: brief, brief_id: brief.brief_id,
       markdown: "Private notes", gaps: [], findings: { title: "Introduction", sections: [] }, evidence: [
-        { id: "P1", origin: "public", location: "Education", url: "https://example.org/education", passage: "He studied at KMIT." },
+        { id: "P1", origin: "public", location: "Education", url: "https://example.org/education", passage: "He studied at KMIT in cohort three." },
         { id: "P2", origin: "public", location: "Projects", url: "https://example.org/projects", passage: "The pipeline processed 30k+ calls." },
       ] })).toBe(true);
     const deck: TDeck = { deck_id: crypto.randomUUID(), research_id, revision: 1, title: "Introduction", slides: [
@@ -136,13 +139,13 @@ test("signed-in presentation fences stale speech, pins Q&A and publishes only ap
     expect(answer.status).toBe(200);
     expect(duplicate.status).toBe(200);
     state = await answer.json();
-    expect(state.last_reply).toMatchObject({ kind: "answer", citations: [{ evidence_id: "P1", excerpt: "studied at KMIT" }] });
+    expect(state.last_reply).toMatchObject({ kind: "answer", citations: [{ evidence_id: "P1", excerpt: "studied at KMIT in cohort three" }] });
     expect(model_calls).toBe(1);
     expect(state.attempt?.kind).toBe("answer");
     state = await complete(state);
     expect(state.attempt?.text).toBe("Second sentence.");
     expect(state.attempt?.attempt_id).not.toBe(second);
-    expect(verified_text).toEqual([["He studied at KMIT."]]);
+    expect(verified_text).toEqual([["He studied at KMIT in cohort 3."]]);
 
     state = await command(state, { kind: "interrupt", attempt_id: state.attempt!.attempt_id });
     const displaced = send_turn(state, "Where, delayed, did he study?");
@@ -156,6 +159,9 @@ test("signed-in presentation fences stale speech, pins Q&A and publishes only ap
     const first_proposal = state.proposal!;
     expect(first_proposal.attribution).toEqual([{ evidence_id: "P2", excerpt: "processed 30k+ calls" }]);
     expect(first_proposal.after.template).toEqual({ type: "title_card" });
+    expect(first_proposal.after.highlights).toEqual(["Built production agents", "Processed 30k+ calls"]);
+    expect(first_proposal.after.narration).toBe("First sentence. Second sentence. The pipeline processed 30k+ calls.");
+    expect(first_proposal.after.sentences?.slice(0, 2)).toEqual(first_proposal.before.sentences);
     const rotated = await (await send(live + "/stage", {})).json();
     state = rotated.state;
     const new_token = rotated.stage.token as string;
@@ -170,6 +176,7 @@ test("signed-in presentation fences stale speech, pins Q&A and publishes only ap
     state = await command(state, { kind: "interrupt" });
     state = await (await send_turn(state, "Please add that the pipeline processed 30k+ calls.")).json();
     expect(state.proposal?.after.template).toMatchObject({ type: "metric_grid", metrics: [{ label: "processed", value: "30k+" }] });
+    expect(verified_text.at(-1)).toContain(JSON.stringify(state.proposal?.after.template));
     const approve = { kind: "decide", decision: "approve", proposal_id: state.proposal!.proposal_id, slide_id: "intro" } as const;
     const decision_id = crypto.randomUUID();
     const before = state;

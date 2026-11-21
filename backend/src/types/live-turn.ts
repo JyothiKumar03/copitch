@@ -23,7 +23,7 @@ export type TLiveNavigation = "pause" | "resume" | "back" | "next" | "skip" | "g
 export type TLiveDecision =
   | { kind: "answer"; text: string; support: TLiveCitation[] }
   | { kind: "clarify"; text: string }
-  | { kind: "edit"; text: string; changes: TSlideChanges; support?: TLiveCitation[] }
+  | { kind: "edit"; text: string; changes: TSlideChanges; support?: TLiveCitation[]; additions?: { highlights?: string[]; narration?: string } }
   | { kind: "ignore"; text: string }
   | { kind: "control"; text: string; command: TLiveNavigation; slide_id?: string };
 

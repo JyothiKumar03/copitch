@@ -6,5 +6,5 @@ export type TAudienceProjection = {
   deck_title: string;
   index: number;
   total: number;
-  slide: Pick<TSlide, "slide_id" | "layout" | "title" | "highlights" | "evidence_ids" | "chart" | "template">;
+  slide: Pick<TSlide, "slide_id" | "layout" | "title" | "highlights" | "evidence_ids" | "chart" | "chart_period" | "template">;
 };

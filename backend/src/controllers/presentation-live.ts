@@ -87,7 +87,7 @@ const numeric_tokens = (items: string[]) => new Set(items.flatMap(numbers));
 const same_words = (left: string, right: string) => quotes(left, right) && quotes(right, left);
 
 const route_turn = (turn: TPresentationTurn, pin: TPresentationPin, decision: TLiveDecision,
-  context: TLiveTurnContext, research: TResearchBundle): TPresentationRoute => {
+  context: TLiveTurnContext, research: TResearchBundle, has_independent_review: boolean): TPresentationRoute => {
   const checked = check_live_answer(decision, context);
   if (checked.kind === "ignore") return { kind: "ignore" };
   if (checked.kind === "control") {
@@ -100,7 +100,10 @@ const route_turn = (turn: TPresentationTurn, pin: TPresentationPin, decision: TL
   }
   if (checked.kind === "answer") {
     const known = numeric_tokens(checked.citations?.map(citation => citation.excerpt) ?? []);
-    if ([...numeric_tokens([checked.text])].some(value => !known.has(value))) return clarify("The available sources do not give that number. Which source should I use?");
+    // A reformatted amount or period can proceed only through independent claim verification.
+    if (!has_independent_review && [...numeric_tokens([checked.text])].some(value => !known.has(value))) {
+      return clarify("The available sources do not give that number. Which source should I use?");
+    }
     return { kind: "reply", reply: checked };
   }
   if (checked.kind !== "edit") return { kind: "reply", reply: checked };
@@ -109,15 +112,27 @@ const route_turn = (turn: TPresentationTurn, pin: TPresentationPin, decision: TL
   const valid = support.length && support.every(ref => ref.excerpt.length <= 1500 &&
     (ref.evidence_id === "host" ? quotes(turn.message, ref.excerpt) : evidence.some(row => row.id === ref.evidence_id && quotes(row.passage, ref.excerpt))));
   if (!valid) return clarify("Which source or exact detail should I use for that change?");
-  const request = live_edit_input.safeParse({ base_revision: pin.revision, command_id: turn.turn_id, slide_id: pin.slide_id, changes: checked.changes });
+  const additions = checked.additions;
+  const requested = { ...checked.changes };
+  if (additions?.highlights?.length) {
+    const highlights = [...slide.highlights];
+    for (const highlight of additions.highlights) {
+      if (!highlights.some(existing => same_words(existing, highlight))) highlights.push(highlight);
+    }
+    if (highlights.length > 4) return clarify("This slide has room for four highlights. Which one should I replace?");
+    requested.highlights = highlights;
+  }
+  if (additions?.narration?.trim()) requested.narration = [slide.narration.trim(), additions.narration.trim()].join(" ");
+  const request = live_edit_input.safeParse({ base_revision: pin.revision, command_id: turn.turn_id, slide_id: pin.slide_id, changes: requested });
   if (!request.success) return clarify("Which title, point or narration sentence should change?");
   const { changes } = request.data;
   if (changes.template && !template_supported(changes.template, support.map(ref => ({
     id: ref.evidence_id, origin: "host", location: "Verified verbatim excerpt", passage: ref.excerpt,
   })))) return clarify("Which source contains the labels and values for that visual?");
-  const changed = [changes.title, changes.narration, ...(changes.highlights ?? [])].filter((value): value is string => Boolean(value));
   const speech = changes.narration ? presentation_sentences({ ...slide, narration: changes.narration }).map(sentence => sentence.text) : [];
-  if ([...changed, ...speech].some(value => same_words(value, turn.message))) return clarify("What factual point should the audience see or hear?");
+  const changed = [changes.title, ...(changes.highlights ?? []), ...speech].filter((value): value is string => Boolean(value));
+  if ((changes.narration && same_words(changes.narration, turn.message)) ||
+      changed.some(value => same_words(value, turn.message))) return clarify("What factual point should the audience see or hear?");
   const known = numeric_tokens([slide.title, slide.narration, ...slide.highlights, ...support.map(item => item.excerpt)]);
   if ([...numeric_tokens(changed)].some(value => !known.has(value))) return clarify("Can you confirm the exact number or its source?");
   try { propose_slide(slide, changes); }
@@ -142,6 +157,11 @@ const claims_for = (route: TPresentationRoute, context: TLiveTurnContext): TPres
   const new_sentences = changes.narration ? presentation_sentences({ ...slide, narration: changes.narration }).map(sentence => sentence.text) : [];
   const changed = [changes.title, ...(changes.highlights ?? []), ...new_sentences]
     .filter((text): text is string => !!text && !old.some(prior => same_words(prior, text)));
+  const visual = changes.template;
+  if (visual && visual.type !== "title_card" && visual.type !== "bullet_slide" &&
+      JSON.stringify(visual) !== JSON.stringify(slide.template)) {
+    changed.push(JSON.stringify(visual));
+  }
   return [...new Set(changed)].map(text => ({ text, support: route.attribution }));
 };
 
@@ -176,7 +196,7 @@ export const presentation_turn_handler = (model: TLiveModel = classify_live_turn
     const signal = AbortSignal.timeout(35_000);
     const on_attempt: NonNullable<Parameters<TLiveModel>[2]> = attempt => db.presentations.model_attempt(session, deck_id, turn.turn_id, ++ordinal, attempt);
     const result = model(context, signal, on_attempt)
-      .then(decision => route_turn(turn, run.pin, decision, context, research))
+      .then(decision => route_turn(turn, run.pin, decision, context, research, !!verify))
       .then(async route => {
         if (!verify) return route;
         const claims = claims_for(route, context);
@@ -188,7 +208,14 @@ export const presentation_turn_handler = (model: TLiveModel = classify_live_turn
         if (ids.has("host")) evidence.push({ id: "host", origin: "host", location: "Host statement in this turn", passage: turn.message });
         return await verify(claims, evidence, signal, on_attempt) ? route : clarify("The available sources don’t verify that wording. Can you give an exact statement or source?");
       })
-      .catch(() => clarify("I couldn't confirm that request. You can ask again or use the presentation controls."))
+      .catch(error => {
+        if (process.env.TRACE_LOGS === "1") console.log(JSON.stringify({
+          operation: "presentation.turn_failure", turn_id: turn.turn_id,
+          error_kind: error instanceof Error ? error.name : "unknown",
+          ...(error instanceof AppError && { status: error.status }),
+        }));
+        return clarify("I couldn't confirm that request. You can ask again or use the presentation controls.");
+      })
       .then(reply => db.presentations.finish_turn(session, deck_id, turn, reply)).finally(() => pending.delete(key));
     pending.set(key, { signature, result });
     return res.json(await result);

@@ -26,7 +26,8 @@ export class AudienceRepository {
     const slide = deck.slides[index];
     const projection: TAudienceProjection = {
       sequence: sequence + 1, revision: deck.revision, deck_title: deck.title, index, total: deck.slides.length,
-      slide: { slide_id, layout: slide.layout, title: slide.title, highlights: slide.highlights, evidence_ids: slide.evidence_ids, chart: slide.chart, template: slide.template },
+      slide: { slide_id, layout: slide.layout, title: slide.title, highlights: slide.highlights, evidence_ids: slide.evidence_ids,
+        chart: slide.chart, chart_period: slide.chart_period, template: slide.template },
     };
     this.db.query("INSERT OR REPLACE INTO audience_stages VALUES(?,?,?,?)")
       .run(session, deck.deck_id, projection.sequence, JSON.stringify(projection));
