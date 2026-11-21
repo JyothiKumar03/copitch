@@ -1,10 +1,14 @@
+import { LANGUAGE_OPTIONS, type TInterviewLanguage } from "../../../shared/languages";
+import { createRealtimeTurns } from "./realtime-turns";
 import { connectInterview } from "../interview";
 import type { TGetSession } from "@/types/interview";
 
 type TStreamCallbacks = {
   onStart: () => void;
   onEnd: () => void;
-  onFinal: (text: string) => void;
+  onInterim: (text: string) => void;
+  onFinal: (text: string, turnId: string) => void;
+  onWarning: (message: string) => void;
   onFailure: (message: string) => void;
 };
 
@@ -16,9 +20,23 @@ export const openRealtimeInterview = async (getSession: TGetSession, signal: Abo
   const channel = peer.createDataChannel("oai-events");
   let stream: MediaStream | undefined;
   let closed = false;
+  const turns = createRealtimeTurns(callbacks);
+  const staleTimer = window.setInterval(turns.expire, 5000);
+  let language: TInterviewLanguage | undefined;
+  let model: string | undefined;
+  let configured: string | undefined;
+  const updateLanguage = () => {
+    if (!language || !model || configured === language || channel.readyState !== "open") return;
+    channel.send(JSON.stringify({ type: "session.update", session: { type: "transcription", audio: { input: {
+      transcription: { model, language, prompt: LANGUAGE_OPTIONS[language].transcription_prompt },
+    } } } }));
+    configured = language;
+  };
+  const setLanguage = (value: TInterviewLanguage) => { language = value; updateLanguage(); };
   const close = () => {
     if (closed) return;
     closed = true;
+    window.clearInterval(staleTimer);
     signal.removeEventListener("abort", close);
     stream?.getTracks().forEach(track => track.stop());
     channel.close();
@@ -27,32 +45,21 @@ export const openRealtimeInterview = async (getSession: TGetSession, signal: Abo
   const fail = () => {
     if (!closed) callbacks.onFailure("The voice connection ended. Reconnect voice or type your message.");
   };
-  const committed: string[] = [];
-  const seen = new Set<string>();
-  const transcripts = new Map<string, string>();
   channel.onmessage = ({ data }) => {
-    if (closed || typeof data !== "string") return;
+    if (closed || typeof data !== "string" || data.length > 131072) return;
     let event;
     try { event = JSON.parse(data); } catch { return; }
     if (!event || typeof event !== "object") return;
+    if (event.type === "session.created") {
+      const transcription = event.session?.audio?.input?.transcription;
+      if (typeof transcription?.model === "string") model = transcription.model;
+      configured = transcription?.language;
+      updateLanguage();
+    }
     if (event.type === "input_audio_buffer.speech_started") callbacks.onStart();
     if (event.type === "input_audio_buffer.speech_stopped") callbacks.onEnd();
-    if (event.type === "error" || event.type === "conversation.item.input_audio_transcription.failed") { fail(); return; }
-    if (typeof event.item_id !== "string") return;
-    if (event.type === "input_audio_buffer.committed" && !seen.has(event.item_id)) {
-      seen.add(event.item_id);
-      committed.push(event.item_id);
-    }
-    if (event.type === "conversation.item.input_audio_transcription.completed" && typeof event.transcript === "string") {
-      if (seen.has(event.item_id) && !committed.includes(event.item_id)) return;
-      transcripts.set(event.item_id, event.transcript.trim());
-    }
-    while (committed.length && transcripts.has(committed[0])) {
-      const id = committed.shift()!;
-      const text = transcripts.get(id)!;
-      transcripts.delete(id);
-      callbacks.onFinal(text);
-    }
+    if (event.type === "error") { fail(); return; }
+    turns.handle(event);
   };
   signal.addEventListener("abort", close, { once: true });
   channel.onclose = fail;
@@ -102,7 +109,7 @@ export const openRealtimeInterview = async (getSession: TGetSession, signal: Abo
         if (signal.aborted) finish();
       });
     }
-    return { close };
+    return { close, setLanguage };
   } catch (cause) {
     close();
     throw cause;

@@ -5,13 +5,16 @@ import { openRealtimeInterview } from "@/lib/voice/realtime-interview";
 import type { THandsFreeOptions } from "@/types/vad";
 import { speakQuestion, transcribeAudio } from "@/lib/interview";
 import type { TGetSession, TRecordingPhase } from "@/types/interview";
+import { DEFAULT_LANGUAGE } from "../../../shared/languages";
 
 export const useBriefDictation = (getSession: TGetSession, options?: THandsFreeOptions) => {
   const settings = useRef({getSession, options});
   useEffect(() => { settings.current = { getSession, options }; }, [getSession, options]);
   const listening = useRef<AbortController | null>(null);
-  const graph = useRef<{ close: () => void } | null>(null);
-  const [turns, setTurns] = useState<string[]>([]);
+  const graph = useRef<Awaited<ReturnType<typeof openRealtimeInterview>> | null>(null);
+  const [interimTranscript, setInterimTranscript] = useState("");
+  const [turns, setTurns] = useState<{ text: string; turnId: string }[]>([]);
+  const queued = useRef(0);
   const [handsFree, setListening] = useState(false);
   const recorder = useRef<MediaRecorder | null>(null);
   const capture = useRef<AbortController | null>(null);
@@ -30,9 +33,14 @@ export const useBriefDictation = (getSession: TGetSession, options?: THandsFreeO
 
   useEffect(() => {
     if (!turns.length || options?.suspended || !listening.current) return;
-    settings.current.options?.onFinal(turns[0]);
+    queued.current--;
+    settings.current.options?.onFinal(turns[0].text, turns[0].turnId);
     setTurns(current => current.slice(1));
   }, [turns, options?.suspended]);
+
+  useEffect(() => {
+    graph.current?.setLanguage(options?.language ?? DEFAULT_LANGUAGE);
+  }, [options?.language]);
 
   const stopPlayback = () => {
     setSpeaking(false);
@@ -64,7 +72,9 @@ export const useBriefDictation = (getSession: TGetSession, options?: THandsFreeO
     listening.current = null;
     graph.current?.close();
     graph.current = null;
+    queued.current = 0;
     setTurns([]);
+    setInterimTranscript("");
     hostSpeaking.current = false;
     setListening(false);
   };
@@ -153,16 +163,24 @@ export const useBriefDictation = (getSession: TGetSession, options?: THandsFreeO
       const active = await openRealtimeInterview(settings.current.getSession, controller.signal, {
         onStart: () => { hostSpeaking.current = true; stopPlayback(); setPhase("recording"); },
         onEnd: () => { hostSpeaking.current = false; setPhase("transcribing"); },
-        onFinal: text => {
+        onInterim: text => { if (!controller.signal.aborted) setInterimTranscript(text); },
+        onWarning: message => { if (!controller.signal.aborted) { setError(message); setPhase("idle"); } },
+        onFinal: (text, turnId) => {
           if (!controller.signal.aborted) {
             setPhase("idle");
-            if (text) setTurns(current => [...current, text]);
+            if (queued.current >= 24) {
+              setError("The voice queue is full. Please finish the pending messages and repeat this turn.");
+            } else if (text) {
+              queued.current++;
+              setTurns(current => [...current, { text, turnId }]);
+            }
           }
         },
         onFailure: fail,
       });
       if (controller.signal.aborted) { active.close(); return; }
       graph.current = active;
+      active.setLanguage(settings.current.options?.language ?? DEFAULT_LANGUAGE);
       setPhase("idle");
     } catch (cause) {
       if (!controller.signal.aborted) fail(cause instanceof DOMException && cause.name === "NotAllowedError"
@@ -179,7 +197,9 @@ export const useBriefDictation = (getSession: TGetSession, options?: THandsFreeO
       listening.current = null;
       graph.current?.close();
       graph.current = null;
+      queued.current = 0;
       setTurns([]);
+      setInterimTranscript("");
       stopPlayback();
       setListening(false); setPhase("idle");
     };
@@ -212,5 +232,5 @@ export const useBriefDictation = (getSession: TGetSession, options?: THandsFreeO
     setVoiceEnabled(value);
     if (!value) stopPlayback();
   };
-  return { speaking, handsFree, setHandsFree, dictate, cancelCapture, readQuestion, stopPlayback, phase, voiceEnabled, enableVoice, error };
+  return { speaking, handsFree, setHandsFree, dictate, cancelCapture, readQuestion, stopPlayback, phase, voiceEnabled, enableVoice, error, interimTranscript };
 };

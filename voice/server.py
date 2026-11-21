@@ -3,6 +3,7 @@
 import json
 import os
 import secrets
+import unicodedata
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -135,6 +136,9 @@ async def transcribe(request: Request) -> Response:
         return error_response("No speech was recognized", 422)
     if len(text.strip()) > 6000:
         return error_response("Transcript exceeds the brief input limit", 422)
+    letters = [unicodedata.name(char, "") for char in text if char.isalpha()]
+    if letters and not any("LATIN" in name or "DEVANAGARI" in name for name in letters):
+        return error_response("Please repeat your message in English or Hindi", 422)
     return JSONResponse({"text": text.strip()}, headers=NO_STORE)
 
 

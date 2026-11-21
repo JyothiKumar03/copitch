@@ -9,7 +9,8 @@ import { call_voice_worker, max_recording_bytes, recording_type } from "../servi
 export const interview_handlers = (fetch_worker: (url:string,options:RequestInit) => Promise<globalThis.Response> = fetch) => ({
   connect: async (req: Request, res: Response) => {
     if (!Buffer.isBuffer(req.body) || !req.body.toString("utf8").startsWith("v=0")) throw new AppError(400, "Invalid audio offer");
-    const reply = await call_voice_worker("connect", "application/sdp", req.body.toString("utf8"), fetch_worker);
+    const language = database().studio.language_preference(res.locals.host_session_id);
+    const reply = await call_voice_worker("connect", "application/sdp", req.body.toString("utf8"), fetch_worker, language);
     if (reply.kind !== "sdp") throw new AppError(502, "Unexpected voice answer");
     res.type("application/sdp").send(reply.sdp);
   },
@@ -29,7 +30,8 @@ export const interview_handlers = (fetch_worker: (url:string,options:RequestInit
     if (audio.size > max_recording_bytes) throw new AppError(413,"Recording exceeds 8 MiB");
     const mime = recording_type(audio.type);
     if (!mime) throw new AppError(415,"Unsupported recording format");
-    const reply = await call_voice_worker("transcribe",mime,audio,fetch_worker);
+    const language = database().studio.language_preference(res.locals.host_session_id);
+    const reply = await call_voice_worker("transcribe",mime,audio,fetch_worker,language);
     if (reply.kind !== "text") throw new AppError(502,"Unexpected interview voice response");
     res.json({text:reply.text});
   },
@@ -55,9 +57,12 @@ export const interview_handlers = (fetch_worker: (url:string,options:RequestInit
     const session = res.locals.host_session_id as string;
     const brief = database().current_brief(session);
     const greeting = input.data.text === interview_greeting;
-    const progress = input.data.progress_turn_id && database().research_jobs.progress_answer(session, input.data.progress_turn_id) === input.data.text;
+    const turn_id = input.data.progress_turn_id;
+    const progress = turn_id && (database().research_jobs.progress_answer(session, turn_id) === input.data.text ||
+      database().studio.reply(session, turn_id) === input.data.text);
     if (!progress && !greeting && (!brief || spoken_prompt(brief) !== input.data.text)) throw new AppError(409,"Prompt no longer matches the current brief");
-    const reply = await call_voice_worker("speech","application/json",JSON.stringify({ text: input.data.text }),fetch_worker);
+    const reply = await call_voice_worker("speech","application/json",JSON.stringify({ text: input.data.text }),fetch_worker,
+      database().studio.language_preference(session));
     if (!progress && !greeting && database().current_brief(session)?.brief_id !== brief?.brief_id) throw new AppError(409,"Brief changed during speech generation");
     if (reply.kind !== "audio") throw new AppError(502,"Unexpected interview voice response");
     res.type("audio/mpeg").send(Buffer.from(reply.bytes));

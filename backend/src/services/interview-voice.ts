@@ -1,5 +1,6 @@
 import { AppError } from "../errors/app-error";
 import { z } from "zod";
+import { DEFAULT_LANGUAGE, type TInterviewLanguage } from "../../../shared/languages";
 
 export const max_recording_bytes = 8 * 1024 * 1024;
 const supported_audio: Record<string,string> = {
@@ -46,6 +47,7 @@ const bounded_body = async (input: Response, maximum: number, oversized: AppErro
 export const call_voice_worker = async (
   operation: "speech" | "transcribe" | "connect", content_type: string, body: Blob | string,
   fetch_worker: (url:string, options:RequestInit) => Promise<Response> = fetch,
+  language: TInterviewLanguage = DEFAULT_LANGUAGE,
 ) => {
   const token = process.env.VOICE_WORKER_TOKEN?.trim();
   let base: URL;
@@ -58,7 +60,7 @@ export const call_voice_worker = async (
   try {
     const response = await fetch_worker(base.href.replace(/\/$/,"") + "/" + operation,{
       method:"POST", redirect:"error", signal, body,
-      headers:{ "Content-Type":content_type, Authorization:"Bearer " + token },
+      headers:{ "Content-Type":content_type, Authorization:"Bearer " + token, "X-Interview-Language": language },
     });
     if (!response.ok) {
       void response.body?.cancel().catch(() => {});
