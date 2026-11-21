@@ -5,23 +5,26 @@ import { z } from "zod";
 import { database } from "../repositories/store";
 import { session_for } from "../middleware/host-session";
 import { pitch_variant_key } from "../repositories/deck";
-import { prepare_pitch } from "../services/pitch";
+import { prepare_reviewed_deck } from "../services/deck-render-review";
 import type { TDeck } from "../types/deck";
+import { MAX_PRESENTATION_SLIDES } from "../types/deck";
 import { public_url } from "../services/research";
 import { compile_deck, edit_input } from "../services/deck";
+import { DeckPreparationWorker } from "../workers/deck-preparation";
 
 const prepare_input = z.strictObject({
   research_id: z.string().uuid(),
-  pitch: z.strictObject({
+  pitch: z.union([z.strictObject({ slide_count: z.number().int().min(1).max(MAX_PRESENTATION_SLIDES) }), z.strictObject({
     audience: z.string().trim().max(6000).transform(value => value.normalize("NFKC").replace(/\s+/gu, " ")),
     duration_minutes: z.number().int().min(1).max(60),
     slide_count: z.number().int().min(1).max(100).optional(),
     demo: z.strictObject({ url: z.string().max(2048).refine(value => !!public_url(value)),
       objective: z.string().trim().min(1).max(240), seconds: z.number().int().min(1).max(3600),
     }).optional(),
-  }).optional(),
+  })]).optional(),
 });
 const preparing = new Map<string, Promise<TDeck>>();
+export const deck_preparation_worker = new DeckPreparationWorker(database);
 
 export const list_decks = (req: TApiRequest, res: Response) => {
   const session = session_for(req);
@@ -38,7 +41,7 @@ const preview_editable = (session: string, deck_id: string) => {
   }
 };
 
-export const create_deck = async (req: TApiRequest, res: Response) => {
+export const create_deck_handler = (wake = () => deck_preparation_worker.wake()) => async (req: TApiRequest, res: Response) => {
   const session = session_for(req);
   if (!session) return res.status(401).json({ error: "Unauthorized" });
   const body = prepare_input.safeParse(req.body);
@@ -51,14 +54,30 @@ export const create_deck = async (req: TApiRequest, res: Response) => {
   const bundle = db.research_by_id(session, research_id);
   if (!bundle) return res.status(404).json({ error: "Unknown research artifact" });
   if (!pitch) return res.status(201).json(db.decks.create(session, compile_deck(bundle)));
+  if (!("duration_minutes" in pitch)) {
+    const queued = db.deck_preparations.enqueue(session, research_id, variant, pitch.slide_count);
+    if (queued.deck) return res.json(queued.deck);
+    res.set("Cache-Control","private, no-store").status(202).json(queued.job);
+    wake();
+    return;
+  }
   const key = JSON.stringify([session, research_id, variant]);
   const running = preparing.get(key);
   if (running) return res.json(await running);
-  const result = prepare_pitch(bundle, pitch)
+  const result = prepare_reviewed_deck(bundle, pitch)
     .then(snapshot => db.decks.create(session, snapshot, variant))
     .finally(() => preparing.delete(key));
   preparing.set(key, result);
   return res.status(201).json(await result);
+};
+export const create_deck = create_deck_handler();
+
+export const read_deck_preparation = (req: TApiRequest, res: Response) => {
+  const session = session_for(req);
+  if (!session) return res.status(401).json({ error: "Unauthorized" });
+  const job = database().deck_preparations.get(session, req.params.job_id);
+  if (!job) return res.status(404).json({ error: "Unknown slide preparation" });
+  return res.set("Cache-Control","private, no-store").json(job);
 };
 
 export const read_deck = (req: TApiRequest, res: Response) => {

@@ -1,14 +1,16 @@
 import { download_pitch_plan } from "../controllers/pitch-plan";
 import { live_turn_handler } from "../controllers/live-turn";
 import { Router } from "express";
-import { create_deck, decide_edit, list_decks, propose_edit, read_deck, read_edit, reorder_deck } from "../controllers/deck";
+import { create_deck, decide_edit, list_decks, propose_edit, read_deck, read_deck_preparation, read_edit, reorder_deck } from "../controllers/deck";
 import { command_presentation, open_presentation_stage, presentation_audio, presentation_turn_handler, read_presentation,
   start_live_presentation } from "../controllers/presentation-live";
 
-export const create_deck_router = (turn_handler = presentation_turn_handler(), audio_handler = presentation_audio()) => {
+export const create_deck_router = (turn_handler = presentation_turn_handler(), audio_handler = presentation_audio(),
+  prepare_handler = create_deck) => {
   const decks = Router();
-  decks.post("/:session_id/decks", create_deck);
+  decks.post("/:session_id/decks", prepare_handler);
   decks.get("/:session_id/decks", list_decks);
+  decks.get("/:session_id/decks/preparations/:job_id", read_deck_preparation);
   decks.get("/:session_id/decks/:deck_id", read_deck);
   decks.get("/:session_id/decks/:deck_id/live", read_presentation);
   decks.post("/:session_id/decks/:deck_id/live/start", start_live_presentation);

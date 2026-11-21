@@ -1,16 +1,19 @@
 import type { Database } from "bun:sqlite";
 import { AppError } from "../errors/app-error";
-import type { TDeck, TEditRequest, TEditProposal, TPitchInput } from "../types/deck";
+import type { TDeck, TDeckPlanInput, TEditRequest, TEditProposal } from "../types/deck";
 import type { TLiveReply, TLiveTurnInput, TLiveTurnContext } from "../types/live-turn";
 import { estimate_pitch_seconds } from "../services/pitch";
 import { propose_slide } from "../services/deck";
 
 const pitch_variant_version = 3;
+const context_slides_version = 5;
 
-export const pitch_variant_key = (pitch?: TPitchInput) => pitch
-  ? JSON.stringify([pitch_variant_version, pitch.audience.normalize("NFKC").trim().replace(/\s+/gu, " ").toLowerCase(),
-    pitch.duration_minutes, ...(pitch.slide_count || pitch.demo ? [pitch.slide_count ?? null, pitch.demo ?? null] : [])])
-  : "";
+export const pitch_variant_key = (pitch?: TDeckPlanInput) => {
+  if (!pitch) return "";
+  if (!("duration_minutes" in pitch)) return JSON.stringify([context_slides_version, "context_slides", pitch.slide_count]);
+  return JSON.stringify([pitch_variant_version, pitch.audience.normalize("NFKC").trim().replace(/\s+/gu, " ").toLowerCase(),
+    pitch.duration_minutes, ...(pitch.slide_count || pitch.demo ? [pitch.slide_count ?? null, pitch.demo ?? null] : [])]);
+};
 
 export class DeckRepository {
   constructor(private db: Database) {
@@ -54,7 +57,9 @@ export class DeckRepository {
       SELECT r.payload FROM decks d JOIN deck_revisions r ON r.deck=d.id AND r.revision=d.revision
       WHERE d.session=? AND d.research=? ORDER BY d.rowid DESC LIMIT 100`).all(session, research).map(row => {
       const deck = JSON.parse(row.payload) as TDeck;
-      return { deck_id: deck.deck_id, label: deck.pitch?.audience ? `${deck.pitch.audience} · ${deck.pitch.duration_minutes} min` : deck.title };
+      const label = deck.pitch?.audience ? `${deck.pitch.audience} · ${deck.pitch.duration_minutes} min` :
+        deck.pitch?.slide_count ? `${deck.slides.length} ${deck.slides.length === 1 ? "slide" : "slides"}` : deck.title;
+      return { deck_id: deck.deck_id, label };
     });
   }
 
@@ -78,7 +83,7 @@ export class DeckRepository {
       const by_id = new Map(base.slides.map(slide => [slide.slide_id, slide]));
       if (slide_ids.length !== by_id.size || new Set(slide_ids).size !== by_id.size ||
           !slide_ids.every(key => by_id.has(key))) throw new AppError(400, "Include every slide exactly once");
-      const snapshot = { ...base, slides: slide_ids.map(key => by_id.get(key)!), revision: base_revision + 1 };
+      const snapshot = { ...base, slides: slide_ids.map(key => by_id.get(key)!), revision: base_revision + 1, render_review: undefined };
       if (deck.revision !== base_revision) {
         const saved = this.get(session, id, snapshot.revision);
         if (saved && JSON.stringify(saved) === JSON.stringify(snapshot)) return saved;
@@ -193,7 +198,7 @@ export class DeckRepository {
         const slides = current.slides.map(slide => slide.slide_id === proposal.slide_id ? proposal.after : slide);
         const pitch = current.pitch && { ...current.pitch, estimated_seconds: estimate_pitch_seconds(slides) + (current.pitch.demo?.seconds ?? 0) };
         const sources = proposal.sources_added?.length && [...new Map([...(current.sources ?? []), ...proposal.sources_added].map(source => [source.id, source])).values()];
-        this.save_revision({ ...current, revision, slides, ...(pitch && { pitch }), ...(sources && { sources }) });
+        this.save_revision({ ...current, revision, slides, render_review: undefined, ...(pitch && { pitch }), ...(sources && { sources }) });
         this.db.query("UPDATE decks SET revision=? WHERE id=?").run(revision,deck);
         proposal.approved_revision = revision;
       }

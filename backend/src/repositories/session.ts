@@ -4,6 +4,7 @@ import { StudioUpdates } from "../services/studio-events";
 import { AudienceRepository } from "./audience";
 import { ResearchJobRepository } from "./research-job";
 import { DeckRepository } from "./deck";
+import { DeckPreparationRepository } from "./deck-preparation";
 import { StudioRepository } from "./studio";
 import { ContinuationStore } from "./continuation";
 import { PresentationRepository } from "./presentation-live";
@@ -24,6 +25,7 @@ export class SessionStore {
   readonly continuations: ContinuationStore;
   readonly research_jobs: ResearchJobRepository;
   readonly decks: DeckRepository;
+  readonly deck_preparations: DeckPreparationRepository;
   readonly presentations: PresentationRepository;
   readonly studio: StudioRepository;
   constructor(path: string) {
@@ -37,6 +39,7 @@ export class SessionStore {
     this.continuations.recover();
     this.research_jobs = new ResearchJobRepository(this.db);
     this.decks = new DeckRepository(this.db);
+    this.deck_preparations = new DeckPreparationRepository(this.db, this.decks);
     this.presentations = new PresentationRepository(this.db, this.decks, this.audience);
     this.presentations.recover();
     this.studio = new StudioRepository(this.db);
