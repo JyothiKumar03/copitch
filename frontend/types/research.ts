@@ -13,7 +13,7 @@ export type TResearchBrief = {
 };
 export type TResearchResult = {
   research_id: string;
-  markdown: string;
+  markdown?: string;
   gaps: string[];
 };
 

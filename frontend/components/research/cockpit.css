@@ -43,6 +43,7 @@ main:has(.studio-cockpit) > header { flex: none; }
 .chat-heading div { color: var(--plum); }
 .chat-heading h2 { color: var(--ink); font-size: .95rem; font-weight: 650; }
 .chat-heading span { color: var(--ink-muted); font-size: .8rem; }
+.cockpit-chat:has(.deck-live) .presentation-workspace-header { display: none; }
 
 .conversation-timeline {
   min-width: 0;
@@ -146,7 +147,7 @@ main:has(.studio-cockpit) > header { flex: none; }
 
 .tool-event, .job-summary { display: flex; min-width: 0; align-items: center; gap: .6rem; }
 .tool-event { border-inline-start: 2px solid var(--hairline); padding: .35rem .7rem; }
-.tool-icon, .pitch-icon { display: grid; flex: none; place-items: center; color: var(--plum); }
+.tool-icon { display: grid; flex: none; place-items: center; color: var(--plum); }
 .tool-title, .job-events strong { display: block; font-size: .875rem; font-weight: 650; overflow-wrap: anywhere; }
 .tool-detail { display: block; color: var(--ink-muted); font-size: .78rem; font-weight: 400; overflow-wrap: anywhere; }
 .tool-status { margin-inline-start: auto; color: var(--ink-muted); text-transform: capitalize; }
@@ -154,30 +155,13 @@ main:has(.studio-cockpit) > header { flex: none; }
 .tool-event[data-status=failed] .tool-status { color: var(--carmine); }
 .job-events { border: 1px solid var(--hairline); border-radius: .7rem; background: var(--paper-light); }
 .job-summary { width: 100%; justify-content: flex-start; border: 0; border-radius: .65rem; padding: .65rem .75rem; text-align: start; white-space: normal; }
-.job-summary:hover, .result-toggle:hover { background: color-mix(in srgb, var(--paper-shade) 60%, transparent); }
-.job-summary > svg:last-child, .result-toggle > svg { transition: transform .15s ease; }
-.job-summary[data-state=open] > svg:last-child, .result-toggle[data-state=open] > svg { transform: rotate(180deg); }
+.job-summary:hover { background: color-mix(in srgb, var(--paper-shade) 60%, transparent); }
+.job-summary > svg:last-child { transition: transform .15s ease; }
+.job-summary[data-state=open] > svg:last-child { transform: rotate(180deg); }
 .job-events ol { display: grid; gap: .4rem; margin: .1rem .8rem .7rem 2.2rem; font-size: .81rem; }
 .job-events li { display: flex; align-items: baseline; gap: .4rem; }
 .job-events li svg { flex: none; }
 
-.pitch-response { display: grid; gap: .3rem; }
-.pitch-file {
-  display: flex;
-  width: min(100%, 27rem);
-  justify-content: flex-start;
-  gap: .75rem;
-  border: 1px solid var(--hairline);
-  border-radius: .7rem;
-  background: var(--paper-light);
-  padding: .55rem .75rem;
-  text-align: start;
-}
-
-.pitch-file:hover { border-color: var(--plum); background: color-mix(in srgb, var(--paper-shade) 52%, var(--paper-light)); }
-.pitch-icon { width: 2.5rem; height: 2.5rem; border-radius: .45rem; background: var(--paper-shade); }
-.pitch-file small { display: block; margin-top: .2rem; color: var(--ink-muted); font-size: .8rem; font-weight: 400; }
-.result-toggle { gap: .35rem; border-radius: .5rem; padding-inline: .5rem; color: var(--plum); }
 .chat-error, .source-changes {
   display: flex;
   align-items: center;
@@ -241,5 +225,5 @@ main:has(.studio-cockpit) > header { flex: none; }
 
 @media (prefers-reduced-motion: reduce) {
   .voice-instrument .instrument-weave { animation: none; }
-  .job-summary > svg:last-child, .result-toggle > svg { transition: none; }
+  .job-summary > svg:last-child { transition: none; }
 }

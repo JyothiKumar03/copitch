@@ -1,11 +1,10 @@
 "use client";
 
-import { Fragment, useEffect, useRef, useState } from "react";
-import { ArrowUpRight, ChevronDown, CircleAlert, FileText, LockKeyhole, MessageSquare, Volume2, VolumeX, X } from "lucide-react";
+import { Fragment, useEffect, useEffectEvent, useRef, useState } from "react";
+import { ArrowLeft, CircleAlert, LockKeyhole, MessageSquare, Presentation, Volume2, VolumeX, X } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { DeckWorkspace } from "@/components/deck/DeckWorkspace";
 import { useVoiceAgent } from "@/hooks/research/use-voice-agent";
 import { useStudioEvents } from "@/hooks/research/use-studio-events";
@@ -13,7 +12,6 @@ import { useResearch, useSavedWorkspace } from "@/hooks/research/use-research";
 import { savedSession, restoreSourceSelection, saveSourceSelection } from "@/lib/research";
 import type { TInterviewMessage, TProposalChoice, TResearchProposal, TResearchWorkspace, TSourcePolicy, TTurnInput, TUploadedSource } from "@/types/research";
 import { ResearchProgress, SourceExecution, TurnExecution } from "./ResearchProgress";
-import { ContextFileViewer } from "./ContextFileViewer";
 import { StudioQuestion } from "./StudioQuestion";
 import { liveCaption } from "@/lib/voice-preview";
 import { StudioComposer } from "./StudioComposer";
@@ -24,15 +22,8 @@ export const ResearchWorkspace = () => {
   const workspace = useSavedWorkspace();
   if (workspace.isError && !workspace.data) return <div role="alert">{workspace.error.message} <Button variant="outline" onClick={() => void workspace.refetch()}>Retry</Button></div>;
   if (!workspace.data) return <p role="status">Opening workspace…</p>;
-  return <Interview initial={workspace.data} />;
+  return <Interview key={savedSession()?.session_id} initial={workspace.data} />;
 };
-
-const ContextButton = ({ onOpen, earlier = false }: { onOpen: (opener: HTMLButtonElement) => void; earlier?: boolean }) => (
-  <Button type="button" variant="ghost" onClick={event => onOpen(event.currentTarget)} aria-haspopup="dialog" className="pitch-file" aria-label={earlier ? "Earlier context.md" : "context.md"}>
-    <span className="pitch-icon"><FileText size={19} aria-hidden="true" /></span>
-    <span className="min-w-0 flex-1"><strong>context.md</strong><small>{earlier ? "Earlier context" : "Open saved context"}</small></span><ArrowUpRight size={17} aria-hidden="true" />
-  </Button>
-);
 
 const turnBody = (turn: TInterviewMessage, proposal?: TResearchProposal | null, proposalTurn?: string | null) => {
   if (!proposal || turn.role !== "assistant" || !proposalTurn || proposalTurn !== turn.turn_id) return turn.text;
@@ -71,8 +62,10 @@ const Interview = ({ initial }: { initial: TResearchWorkspace }) => {
   const [notice, setNotice] = useState("");
   const applyButton = useRef<HTMLButtonElement>(null);
   const [greeting, setGreeting] = useState("");
-  const [selectedContext, setSelectedContext] = useState<string | null>(null);
-  const contextOpener = useRef<HTMLButtonElement>(null);
+  const [previewResearchId, setPreviewResearchId] = useState<string | null>(null);
+  const [previewReset, setPreviewReset] = useState(0);
+  const presentationHeading = useRef<HTMLHeadingElement>(null);
+  const returnToConversation = useRef(false);
   const composer = useRef<HTMLTextAreaElement>(null);
   const transcript = useRef<HTMLDivElement>(null);
   const sending = useRef(false);
@@ -84,7 +77,7 @@ const Interview = ({ initial }: { initial: TResearchWorkspace }) => {
   const running = job?.status === "running" || job?.status === "queued";
   const unsuccessful = job?.status === "needs_input" || job?.status === "failed" || job?.status === "superseded";
   const result = job ? (unsuccessful || running ? null : job.result ?? workspace.research) : workspace.research;
-  const archived = (workspace.artifacts ?? []).filter(item => item.research_id !== result?.research_id);
+  const showingPresentation = !!result && previewResearchId === result.research_id;
   const calls = service.calls.data ?? [];
   const selectSources = (next: TUploadedSource[]) => { setSources(next); saveSourceSelection(brief?.brief_id, next); };
   const savedIds = workspace.state?.source_ids ?? brief?.source_ids ?? brief?.sources?.map(source => source.source_id) ?? [];
@@ -92,6 +85,10 @@ const Interview = ({ initial }: { initial: TResearchWorkspace }) => {
     !sameUrls(urls, savedUrls) || JSON.stringify(sources.map(s => s.source_id)) !== JSON.stringify(savedIds);
   const proposal = workspace.phase === "proposed" ? workspace.proposal : null;
   const voice = useVoiceAgent(service.getSession, { onVoiceTurn: setVoiceTurn });
+  const { handsFree, setHandsFree } = voice;
+  useEffect(() => {
+    if (showingPresentation && handsFree) void setHandsFree(false);
+  }, [showingPresentation, handsFree, setHandsFree]);
   const submit = (text: string, choice?: TProposalChoice) => {
     if (!text.trim() || sending.current || parsing.current || service.applySources.isPending) return;
     const payload: TTurnInput = { turn_id: crypto.randomUUID(), message: text.trim(), input: "typed",
@@ -207,23 +204,43 @@ const Interview = ({ initial }: { initial: TResearchWorkspace }) => {
   const scrollKey = [history.length, pending?.turn_id, calls.length, job?.activity?.length, result?.research_id, previewTurn?.id].join("-");
   useEffect(() => {
     const pane = transcript.current;
-    if (pane) pane.scrollTop = pane.scrollHeight;
-  }, [scrollKey]);
+    if (pane && !showingPresentation) pane.scrollTop = pane.scrollHeight;
+  }, [scrollKey, showingPresentation]);
+  const closeInterviewVoice = useEffectEvent(() => { if (voice.handsFree) void voice.setHandsFree(false); });
+  useEffect(() => {
+    if (showingPresentation) {
+      closeInterviewVoice();
+      presentationHeading.current?.focus();
+    }
+    else if (returnToConversation.current) {
+      returnToConversation.current = false;
+      composer.current?.focus({ preventScroll: true });
+    }
+  }, [showingPresentation]);
 
   const error = notice || service.start.error?.message || voice.error || service.job.error?.message;
   const canSend = !!message.trim() && !pending && !service.upload.isPending && !service.applySources.isPending;
-  const openContext = (id: string, opener: HTMLButtonElement) => {
-    contextOpener.current = opener;
-    setSelectedContext(id);
+  const backToConversation = () => {
+    returnToConversation.current = true;
+    setPreviewResearchId(null);
+    setPreviewReset(reset => reset + 1);
   };
   return <div className="studio-cockpit">
-    <Card className="cockpit-chat" role="region" aria-label="Private conversation">
-      <header className="chat-heading"><div><MessageSquare size={16} aria-hidden="true" /><h2>Conversation</h2></div><span><LockKeyhole size={13} aria-hidden="true" />Private</span></header>
-      <div className="conversation-timeline" ref={transcript} tabIndex={0} aria-label="Conversation timeline">
-        {!history.length && !previewTurn && <div className="chat-opening"><h3>{greeting || "What do you want to pitch?"}</h3>
-          <p>Tell copitch what you’re presenting, who it’s for, and what you want them to take away.</p>
+    <Card className="cockpit-chat" role="region" aria-label={showingPresentation ? "Private presentation workspace" : "Private conversation"}>
+      {showingPresentation ? <header className="chat-heading presentation-workspace-header">
+        <div><Presentation size={16} aria-hidden="true" /><h2 ref={presentationHeading} tabIndex={-1}>Presentation</h2></div>
+        <Button type="button" variant="ghost" size="sm" onClick={backToConversation}>
+          <ArrowLeft size={15} aria-hidden="true" /> Back to conversation
+        </Button>
+      </header> : <header className="chat-heading"><div><MessageSquare size={16} aria-hidden="true" /><h2>Conversation</h2></div><span><LockKeyhole size={13} aria-hidden="true" />Private</span></header>}
+      <div className="conversation-timeline" ref={transcript} tabIndex={0} aria-label={showingPresentation ? "Presentation review" : "Conversation timeline"}>
+        {!showingPresentation && !history.length && !previewTurn && <div className="chat-opening"><h3>{greeting || "What do you want to pitch?"}</h3>
+          <p>Tell copitch what you’re presenting and what you want people to take away.</p>
         </div>}
-        <div className="chat-turns" role="log" aria-relevant="additions" aria-live="polite" aria-label="Conversation messages">
+        <div className={showingPresentation ? "contents" : "chat-turns"} role={showingPresentation ? undefined : "log"}
+          aria-relevant={showingPresentation ? undefined : "additions"} aria-live={showingPresentation ? undefined : "polite"}
+          aria-label={showingPresentation ? undefined : "Conversation messages"}>
+          {!showingPresentation && <>
           {history.map((turn, index) => {
             const body = turnBody(turn, proposal, workspace.state?.proposal_turn_id);
             return <Fragment key={(turn.turn_id ?? index) + turn.role}>
@@ -232,8 +249,6 @@ const Interview = ({ initial }: { initial: TResearchWorkspace }) => {
             {turn.role === "assistant" && workspace.activities?.filter(activity => activity.turn_id === turn.turn_id && activity.tool !== "ask_input").map((activity,i) =>
               <TurnExecution key={i} activity={activity} />)}
             {job && index === stepIndex && <ResearchProgress job={job} />}
-            {archived.filter(item => Math.min(item.after_turn, history.length - 1) === index).map(item =>
-              <ContextButton key={item.research_id} earlier onOpen={opener => openContext(item.research_id, opener)} />)}
           </Fragment>;})}
           {calls.filter(call => callIndex(call.started_at) === history.length).map(call => <SourceExecution key={call.call_id} call={call} />)}
           {!history.length && job && <ResearchProgress job={job} />}
@@ -242,19 +257,12 @@ const Interview = ({ initial }: { initial: TResearchWorkspace }) => {
           {previewTurn && <div className={"chat-turn " + (previewTurn.speaker === "host" ? "host" : "assistant")} aria-live="off"><small>{previewTurn.speaker === "host" ? "You" : "copitch"}</small><p>{previewTurn.text}</p></div>}
           {proposal && <StudioQuestion proposal={proposal} filenames={(workspace.sources ?? brief?.sources ?? []).filter(source => savedIds.includes(source.source_id)).map(source => source.filename)} changed={changedScope}
             busy={!!pending || service.upload.isPending || service.applySources.isPending} onChoose={(choice,label) => submit(label, choice)} />}
-          {result && <div aria-label="Research result" className="pitch-response">
-            <ContextButton onOpen={opener => openContext(result.research_id, opener)} />
-            <Collapsible className="result-details">
-              <CollapsibleTrigger asChild><Button type="button" variant="ghost" size="sm" className="result-toggle">
-                Presentation options <ChevronDown size={14} aria-hidden="true" />
-              </Button></CollapsibleTrigger>
-              <CollapsibleContent forceMount className="data-[state=closed]:hidden">
-                <DeckWorkspace key={result.research_id} researchId={result.research_id} getSession={service.getSession} />
-              </CollapsibleContent>
-            </Collapsible>
-          </div>}
+          </>}
+          {result && <DeckWorkspace key={`${result.research_id}:${previewReset}`} researchId={result.research_id} getSession={service.getSession}
+            backToConversation={backToConversation} onPreviewReady={setPreviewResearchId} />}
         </div>
       </div>
+      {!showingPresentation && <>
       {error && <div role="alert" className="chat-error"><CircleAlert size={16} aria-hidden="true" /><span>{error}</span>
         {failedTurn && <Button type="button" size="sm" variant="ghost" onClick={() => execute(failedTurn)}>Retry message</Button>}
         {notice && <Button type="button" size="icon" variant="ghost" aria-label="Dismiss notice" onClick={() => setNotice("")}><X size={14} aria-hidden="true" /></Button>}
@@ -270,6 +278,7 @@ const Interview = ({ initial }: { initial: TResearchWorkspace }) => {
         attachFiles={files => void attachFiles(files)} attachUrl={attachUrl} attachText={attachText} removeFile={id => selectSources(sources.filter(s => s.source_id !== id))}
         removeUrl={url => setUrls(urls.filter(item => item !== url))} removeText={() => setMaterials("")}
         voiceActive={voice.handsFree} toggleVoice={toggleVoice} submit={() => submit(message)} />
+      </>}
     </Card>
     <aside className="cockpit-agent" aria-label="Agent and microphone controls">
       <Card className="agent-panel">
@@ -282,7 +291,5 @@ const Interview = ({ initial }: { initial: TResearchWorkspace }) => {
         </div>
       </Card>
     </aside>
-    {selectedContext && <ContextFileViewer key={selectedContext} project={session?.session_id ?? ""} researchId={selectedContext} getSession={service.getSession}
-      onClose={() => setSelectedContext(null)} restoreFocus={() => contextOpener.current?.focus({ preventScroll: true })} />}
   </div>;
 };
