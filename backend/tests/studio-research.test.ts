@@ -100,6 +100,43 @@ test("the studio worker binds source IDs and publishes a verified files-only con
   expect(saved?.pitch_script).toBeUndefined();
 });
 
+test("approved research uses verbatim host voice statements when extracted notes omit the measurable result", async () => {
+  const note = "I lead onboarding.";
+  const measured = "We recorded 24 completed setups in week three. We do not know whether the guide caused that result.";
+  const scope: TResearchBrief = { ...brief(), source_policy: "files_only", public_queries: [], studio_notes: [note],
+    history: [
+      { role: "host", text: note, voice_items: ["live:1"] },
+      { role: "host", text: measured, voice_items: ["live:2"] },
+      { role: "host", text: measured, voice_items: ["live:3"] },
+      { role: "assistant", text: "The guide caused the increase.", voice_items: ["live:4"] },
+      { role: "host", text: "Go ahead.", intent: "approval", voice_items: ["live:5"] },
+      { role: "host", text: "Prepare the report." },
+    ] };
+  const db = new SessionStore(":memory:");
+  db.replace_brief("host", undefined, scope);
+  const job = db.research_jobs.enqueue("host", scope.brief_id);
+  const configured = provider(async () => { throw new Error("Files only"); });
+  configured.draft = async (_brief, evidence) => {
+    expect(evidence.map(row => [row.id, row.origin, row.passage])).toEqual([["H1", "host", note], ["H2", "host", measured]]);
+    return { title: "Onboarding result", gaps: [], sections: [{ heading: "Week three", paragraphs: [
+      { prose: measured, support: [{ evidence_id: "H2", excerpt: "" }] },
+    ] }] };
+  };
+  let reviewed = false;
+  configured.verify = async review => {
+    reviewed = true;
+    expect(review.evidence.map(row => row.passage)).toEqual([measured]);
+    return review.units.map(({ id }) => ({ id, decision: "supported" }));
+  };
+  await new ResearchWorker(() => db, () => configured).tick(job.job_id);
+  const saved = db.research_by_brief("host", scope.brief_id);
+  expect(reviewed).toBe(true);
+  expect(db.research_jobs.get("host", job.job_id)?.status).toBe("completed");
+  expect(saved?.context_markdown).toContain(measured);
+  expect(saved?.context_markdown).not.toContain("[^H2]");
+  expect(saved?.findings.sections[0].paragraphs[0].support[0]).toEqual({ evidence_id: "H2", excerpt: measured });
+});
+
 test("a replacement lease keeps an empty approved search and does not publish a public brief from private notes alone", async () => {
   const db = new SessionStore(":memory:");
   const scope = { ...brief(), materials: "Twelve teams enrolled.", public_queries: ["pilot enrollment"] };

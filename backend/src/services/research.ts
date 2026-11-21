@@ -29,11 +29,33 @@ const safe_text = (value: string) => {
   return value.replace(/[\r\n]+/g, " ").replace(/([\\\x60*_{}[\]<>#!|])/g, "\\$1").trim();
 };
 
+const max_voice_evidence_turns = 8;
+const max_voice_evidence_chars = 12_000;
+const non_evidence_intents = new Set(["approval", "greeting", "language", "meta", "scope", "status", "url_confirmation", "unsupported"]);
+
 const evidence_from_brief = (brief: TResearchBrief, sources: TUploadedSource[]): TEvidence[] => {
-  const host_records = brief.studio_version === 2 ? brief.studio_notes ?? [] : brief.messages;
+  const studio = brief.studio_version === 2;
+  const host_records = studio ? [...new Set((brief.studio_notes ?? []).filter(text => text.trim()))] : brief.messages;
   const evidence: TEvidence[] = host_records.map((passage, i) => ({
-    id: "H" + (i+1), passage, origin: "host", location: "Host " + (brief.studio_version === 2 ? "note " : "message ") + (i+1),
+    id: "H" + (i+1), passage, origin: "host", location: "Host " + (studio ? "note " : "message ") + (i+1),
   }));
+  if (studio) {
+    const seen = new Set(host_records);
+    const recent = (brief.history ?? []).filter(turn => turn.role === "host" && turn.voice_items?.length &&
+      !turn.option_id && !(turn.intent && non_evidence_intents.has(turn.intent)) && turn.text.trim())
+      .slice(-max_voice_evidence_turns).reverse();
+    const passages: string[] = [];
+    let remaining = max_voice_evidence_chars;
+    for (const { text } of recent) {
+      if (seen.has(text) || text.length > remaining) continue;
+      seen.add(text);
+      remaining -= text.length;
+      passages.push(text);
+    }
+    for (const [index, passage] of passages.reverse().entries()) {
+      evidence.push({ id: "H" + (evidence.length + 1), passage, origin: "host", location: "Host voice transcript " + (index + 1) });
+    }
+  }
   // Keep contiguous source passages with their offsets, including long single-line extracts.
   for (let offset = 0; offset < brief.materials.length; offset += 1800) {
     evidence.push({ id: "M" + (offset / 1800 + 1), passage: brief.materials.slice(offset, offset+1800),
