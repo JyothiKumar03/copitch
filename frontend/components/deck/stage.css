@@ -1,0 +1,26 @@
+.deck-live {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  overflow: auto;
+  padding: clamp(12px, 2vw, 30px);
+}
+
+.deck-live .slide-shell { min-height: calc(100dvh - 120px); }
+.deck-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 16px; }
+.deck-edit, .pitch-preview { display: grid; gap: 16px; }
+.deck-edit label, .pitch-form label, .pitch-picker { display: grid; align-content: start; gap: 6px; font-size: .875rem; font-weight: 500; }
+.deck-edit textarea, .deck-edit input, .pitch-form input { width: 100%; }
+.deck-diff { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 12px; }
+.deck-diff section { border-width: 1px; padding: 16px; border-radius: 2px; overflow-wrap: anywhere; }
+.pitch-preview { justify-items: start; }
+.pitch-preview .pitch-form, .pitch-plan, .pitch-picker { width: 100%; }
+.pitch-form, .pitch-plan { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.pitch-form details[open] label { margin-top: 12px; }
+.pitch-form button, .pitch-rationale { grid-column: 1 / -1; }
+.pitch-plan h3, .pitch-notes h3 { margin-bottom: 4px; font-size: .8rem; font-weight: 650; }
+.pitch-plan p, .pitch-notes p { overflow-wrap: anywhere; font-size: .94rem; line-height: 1.55; }
+.pitch-notes p { white-space: pre-wrap; }
+@media (max-width: 520px) {
+  .pitch-form, .pitch-plan { grid-template-columns: 1fr; }
+}
