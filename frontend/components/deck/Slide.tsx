@@ -2,29 +2,23 @@ import { ConversionChart } from "./ConversionChart";
 import { SlideTemplate } from "./SlideTemplate";
 import { stageStyle, slideDensity } from "../../lib/stage-style";
 import type { TDeck, TSlide, TSlideView } from "@/types/deck";
-
-// The audience sees where a slide's facts come from as site or file names. Host notes stay private.
-export const sourceLabels = (deck: TDeck, evidenceIds: string[]) => [...new Set(evidenceIds.flatMap(id => {
-  const source = deck.sources?.find(item => item.id === id);
-  if (!source || source.origin === "host") return [];
-  if (source.url) { try { return [new URL(source.url).hostname.replace(/^www\./u, "")]; } catch { return []; } }
-  return [source.location.split(",")[0].trim()];
-}))].slice(0, 3);
+import { publicSourceLabels } from "../../../shared/presentation";
 
 export const deckSlideView = (deck: TDeck, slide: TSlide, index: number): TSlideView => {
   const { slide_id, layout, title, highlights, evidence_ids, chart, chart_period, template } = slide;
-  return { deckTitle: deck.title, index, total: deck.slides.length, sources: sourceLabels(deck, evidence_ids),
+  return { deckTitle: deck.title, index, total: deck.slides.length, sources: publicSourceLabels(deck.sources, evidence_ids),
     slide: { slide_id, layout, title, highlights, evidence_ids, chart, chart_period, template } };
 };
 
-export const PublicSlide = ({ view, className = "" }: { view: TSlideView; className?: string }) => {
+export const PublicSlide = ({ view, className = "", embedded = false }: { view: TSlideView; className?: string; embedded?: boolean }) => {
   const { deckTitle, slide, index, total, sources = [] } = view;
   const hasPoints = slide.highlights.length > 0;
   const hasVisual = !!slide.chart || !!slide.template && !["title_card", "bullet_slide"].includes(slide.template.type);
   const composition = hasVisual ? (hasPoints ? "mixed" : "visual") : (hasPoints ? "points" : "title");
+  const Frame = embedded ? "div" : "section";
   const chartRows = slide.template && "points" in slide.template ? slide.template.points.length : slide.chart?.rows.length;
   return (
-    <section className={`slide-shell ${className}`} data-layout={slide.layout} data-density={slideDensity(slide.title, slide.highlights, chartRows)}
+    <Frame role={embedded ? "region" : undefined} className={`slide-shell ${className}`} data-layout={slide.layout} data-density={slideDensity(slide.title, slide.highlights, chartRows)}
       data-composition={composition} data-template={slide.template?.type ?? "bullet_slide"} aria-label={`Slide ${index + 1} of ${total}`}>
       <div className="slide-top"><span>{deckTitle}</span><span>{index + 1} / {total}</span></div>
       <h3>{slide.title}</h3>
@@ -36,7 +30,7 @@ export const PublicSlide = ({ view, className = "" }: { view: TSlideView; classN
         </div>}
       </div>}
       {!!sources.length && <footer>Source: {sources.join(" · ")}</footer>}
-    </section>
+    </Frame>
   );
 };
 

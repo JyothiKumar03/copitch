@@ -1,8 +1,9 @@
+import type { CSSProperties } from "react";
 import type { TSlideTemplate } from "@/types/deck";
 
 type TChartTemplate = Extract<TSlideTemplate, { points: unknown[] }>;
 const number = new Intl.NumberFormat("en", { maximumSignificantDigits: 21 });
-const colors = ["#5b4bdb", "#e0703a", "#1f8a8a", "#b54a7a", "#8a6d1f", "#3f7d3a", "#6a6f7a", "#9a5bd0"];
+const colors = ["#4f8454", "#ca693c", "#429393", "#aa5067", "#9d842a", "#2e5b43", "#6a7770", "#a2916b"];
 
 // Bars read from the room: thick marks drawn to one scale, the label beside each bar, the value at its end,
 // and the largest value in the accent colour so the takeaway stands out.
@@ -13,14 +14,18 @@ const BarChart = ({ chart }: { chart: TChartTemplate }) => {
   const range = max - min || 1;
   const zero = -min / range * 100;
   const top = Math.max(...values);
-  return <div className="bars" role="list">
+  const valueWidth = Math.max(...values.map(value => number.format(value).length)) + 1;
+  return <div className="bars" role="list" data-negative={min < 0 || undefined} data-many={values.length > 5 || undefined}
+    style={{ "--bar-label-space": `${valueWidth}ch` } as CSSProperties}>
     {chart.points.map(({ label, value }, i) => <div className="bar-row" role="listitem" key={i} data-top={value === top || undefined}>
       <span className="bar-label">{label}</span>
-      <span className="bar-track" aria-hidden="true">
-        {min < 0 && <span className="bar-zero" style={{ left: `${zero}%` }} />}
-        <span className="bar-mark" style={{ left: `${Math.min(zero, (value - min) / range * 100)}%`, width: `${Math.max(.6, Math.abs(value) / range * 100)}%` }} />
+      <span className="bar-measure">
+        <span className="bar-track">
+          <span className="bar-mark" aria-hidden="true" style={{ left: `${Math.min(zero, (value - min) / range * 100)}%`, width: `${Math.abs(value) / range * 100}%` }} />
+          {min < 0 && <span className="bar-zero" aria-hidden="true" style={{ left: `${zero}%` }} />}
+          <span className="bar-value" data-negative={value < 0 || undefined} style={{ left: `${(value - min) / range * 100}%` }}>{number.format(value)}</span>
+        </span>
       </span>
-      <span className="bar-value">{number.format(value)}</span>
     </div>)}
   </div>;
 };
@@ -35,34 +40,39 @@ const LineChart = ({ chart }: { chart: TChartTemplate }) => {
   const x = (i: number) => 40 + i * 520 / Math.max(1, values.length - 1);
   const y = (value: number) => 20 + (high - value) / (high - low) * 150;
   const marks = chart.points.map((point, i) => ({ ...point, cx: x(i), cy: y(point.value) }));
-  const labelled = new Set([0, marks.length - 1, values.indexOf(max), values.indexOf(min)]);
+  const ends = new Set([0, marks.length - 1]);
   return <svg viewBox="0 0 600 220" aria-hidden="true" className="line">
     <line x1="40" x2="560" y1="190" y2="190" className="line-axis" />
     <polyline points={marks.map(({ cx, cy }) => `${cx},${cy}`).join(" ")} className="line-path" />
     {marks.map(({ cx, cy, label, value }, i) => <g key={i}>
-      <circle cx={cx} cy={cy} r={labelled.has(i) ? 6 : 4} className="line-dot" />
-      {labelled.has(i) && <text x={cx} y={cy - 14} textAnchor="middle" className="line-value">{number.format(value)}</text>}
-      <text x={cx} y={212} textAnchor="middle" className="line-label">{label}</text>
+      <circle cx={cx} cy={cy} r={ends.has(i) ? 6 : 4} className="line-dot" />
+      {ends.has(i) && <>
+        <text x={cx} y={cy - 14} textAnchor={i === 0 ? "start" : "end"} className="line-value">{number.format(value)}</text>
+        <text x={cx} y={212} textAnchor={i === 0 ? "start" : "end"} className="line-label">{label}</text>
+      </>}
     </g>)}
   </svg>;
 };
 
 const DonutChart = ({ chart }: { chart: TChartTemplate }) => {
-  const values = chart.points.map(point => Math.max(0, point.value));
-  const total = values.reduce((sum, value) => sum + value, 0);
-  if (!total) return null;
+  const total = chart.points.reduce((sum, point) => sum + point.value, 0);
+  if (!Number.isFinite(total) || total <= 0 || chart.points.some(point => point.value < 0)) return null;
+  const percentUnit = /^(?:%|percent|per cent|percentage)$/i.test(chart.unit);
+  const segments = chart.points.map(({ label, value }, index) => {
+    const share = value / total * 100;
+    const offset = chart.points.slice(0, index).reduce((sum, point) => sum + point.value, 0) / total * 100;
+    return { label, value, share, offset, swatch: colors[index % colors.length] };
+  });
   return <div className="donut">
     <svg viewBox="0 0 42 42" aria-hidden="true">
-      {values.map((value, i) => {
-        const length = value / total * 100;
-        const offset = values.slice(0, i).reduce((sum, part) => sum + part, 0) / total * 100;
-        return <circle key={i} cx="21" cy="21" r="15.9155" fill="none" stroke={colors[i % colors.length]} strokeWidth="6"
-          strokeDasharray={`${length} ${100 - length}`} strokeDashoffset={-offset} transform="rotate(-90 21 21)" />;
-      })}
+      <circle cx="21" cy="21" r="16" fill="none" stroke="var(--slide-rule)" strokeWidth="6" />
+      {segments.filter(segment => segment.share > 0).map(({ label, share, offset, swatch }, index) =>
+        <circle key={label + index} cx="21" cy="21" r="16" pathLength="100" fill="none" stroke={swatch} strokeWidth="6"
+          strokeDasharray={`${share} ${100 - share}`} strokeDashoffset={-offset} transform="rotate(-90 21 21)" />)}
     </svg>
-    <dl>{chart.points.map(({ label, value }, i) => <div key={i}>
-      <dt><span aria-hidden="true" className="donut-dot" style={{ background: colors[i % colors.length] }} />{label}</dt>
-      <dd>{number.format(value)}</dd>
+    <dl>{segments.map(({ label, value, swatch }, index) => <div key={label + index}>
+      <dt><span aria-hidden="true" className="donut-dot" style={{ background: swatch }} />{label}</dt>
+      <dd>{number.format(value)}{percentUnit ? "%" : ""}</dd>
     </div>)}</dl>
   </div>;
 };

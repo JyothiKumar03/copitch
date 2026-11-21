@@ -22,6 +22,7 @@ export const exportDeck = async (deck: TDeck) => {
   style.textContent = stageStyle + `
     *{box-sizing:border-box}body{margin:0;background:#0e0f12}h3,ul,footer{margin:0}
     .slide-shell{position:relative;width:min(100vw,177.78dvh);margin:0 auto 12px;border:0;border-radius:0}
+    .slide-shell footer{padding-inline-end:18cqw}
     nav{position:absolute;right:5cqw;bottom:2.6cqw;display:flex;gap:1.4em;font:500 1.3cqw/1.3 var(--slide-font)}
     a{color:var(--slide-muted);text-underline-offset:.25em}
     @media print{body{background:#fff}.slide-shell{width:100%;margin:0;break-after:page}nav{display:none}}`;

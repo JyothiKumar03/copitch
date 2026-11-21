@@ -1,12 +1,46 @@
 .deck-workspace { container-type: inline-size; }
+.deck-review-grid { display: grid; gap: .9rem; align-items: start; }
 
 .deck-canvas {
   min-width: 0;
-  border-radius: .5rem;
-  border: 1px solid var(--hairline);
-  background: var(--paper-shade);
-  padding: clamp(.5rem, 2%, 1rem);
+  overflow: hidden;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--muted);
+  padding: clamp(.4rem, 1.6%, .95rem);
+  container-type: inline-size;
 }
+
+.deck-filmstrip { min-width: 0; overflow: auto; }
+.deck-filmstrip ol { display: flex; gap: .5rem; padding: .25rem; }
+.deck-filmstrip .slide-choice {
+  position: relative;
+  display: grid;
+  width: 7rem;
+  flex: none;
+  min-width: 0;
+  gap: .35rem;
+  padding: .3rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  transition: background-color .15s;
+}
+.deck-filmstrip .slide-choice:is(:hover,[data-current=true]) { background: var(--accent); }
+.deck-filmstrip .slide-choice[data-current=true] { border-color: var(--primary); }
+.deck-filmstrip .slide-choice-trigger {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform: none;
+  translate: none;
+  border-radius: inherit;
+  background: transparent;
+}
+.deck-filmstrip .slide-choice-trigger:focus-visible { outline-offset: 1px; }
+.slide-choice-preview { display: block; container-type: inline-size; pointer-events: none; }
+.slide-choice-preview .slide-shell { border-radius: .25rem; }
 
 .deck-live {
   position: fixed;
@@ -16,8 +50,52 @@
   padding: clamp(.75rem, 2vw, 1.875rem);
 }
 
-.live-canvas { margin: .5rem .5rem 0; }
+.live-canvas { margin: .55rem .55rem 0; }
 .live-console { grid-template-columns: minmax(0, 1fr); align-items: start; }
+.live-stage-panel { color:var(--foreground); }
+.live-sentence {
+  border-top:1px solid var(--border);
+  padding:.85rem 1rem .95rem;
+  color:var(--primary);
+  background:color-mix(in oklab,var(--card),var(--background) 36%);
+  font-size:.875rem;
+}
+.live-sentence[data-interrupted=true] {
+  border-top-color:color-mix(in oklab,var(--live) 52%,var(--border));
+  color:var(--live);
+  background:color-mix(in oklab,var(--live) 9%,var(--card));
+}
+.live-answer {
+  min-width:0;
+  overflow-wrap:anywhere;
+  border-left:2px solid var(--evidence);
+  padding:.75rem .85rem;
+  background:color-mix(in oklab,var(--evidence) 6%,var(--card));
+}
+.deck-live kbd {
+  border:1px solid var(--border);
+  border-radius:4px;
+  padding:.1em .35em;
+  margin-inline-end:.25rem;
+  color:var(--foreground);
+}
+.stage-fullscreen:fullscreen {
+  display: grid;
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  justify-content: center;
+  align-items: center;
+  grid-template-columns: min(100vw, calc(100dvh * 16 / 9));
+  border: 0;
+  border-radius: 0;
+  background: #000;
+}
+.stage-fullscreen:fullscreen .slide-shell {
+  border: 0;
+  border-radius: 0;
+}
 
 .deck-tools, .deck-action-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
 .deck-action-row { justify-content: space-between; row-gap: .75rem; }
@@ -26,6 +104,19 @@
 .deck-edit textarea, .deck-edit input { width: 100%; }
 .deck-diff { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(15rem, 100%), 1fr)); gap: .75rem; overflow-wrap: anywhere; }
 .pitch-notes p { overflow-wrap: anywhere; font-size: .9375rem; line-height: 1.55; white-space: pre-wrap; }
+
+@container (min-width: 53rem) {
+  .deck-review-grid { grid-template-columns: 8rem minmax(0,1fr); }
+  .deck-filmstrip { max-height: 65dvh; }
+  .deck-filmstrip ol { flex-direction: column; }
+  .deck-filmstrip .slide-choice { width: 100%; }
+  .deck-review-inspector { grid-column: 2; grid-template-columns: minmax(0,1fr) minmax(13rem,.75fr); }
+}
+
+@container (min-width: 71rem) {
+  .deck-review-grid { grid-template-columns: 9rem minmax(0,1fr) minmax(14rem,17rem); }
+  .deck-review-inspector { grid-column: auto; grid-template-columns: minmax(0,1fr); }
+}
 
 @media (min-width: 64rem) {
   .live-console { grid-template-columns: minmax(0, 1fr) minmax(19rem, 23rem); }

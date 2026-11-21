@@ -27,10 +27,11 @@ const measureDeck = (sheet: HTMLElement): TRenderIssue[] =>
     const title = slide.querySelector("h3");
     const content = slide.querySelector(".slide-content");
     const footer = slide.querySelector("footer");
-    const visible = Array.from(slide.querySelectorAll<HTMLElement>("h3,footer,li,dt,dd,figcaption,blockquote"));
+    const visible = Array.from(slide.querySelectorAll("h3,footer,li,dt,dd,figcaption,blockquote,.bar-label,.bar-value,.line-label,.line-value"));
     const clips = visible.some(item => {
       const rect = item.getBoundingClientRect();
-      return rect.right > bounds.right + 1 || rect.bottom > bounds.bottom + 1 || item.scrollWidth > item.clientWidth + 2;
+      return rect.right > bounds.right + 1 || rect.bottom > bounds.bottom + 1 ||
+        item instanceof HTMLElement && item.scrollWidth > item.clientWidth + 2;
     });
     if (clips || slide.scrollHeight > slide.clientHeight + 2 || slide.scrollWidth > slide.clientWidth + 2) {
       issues.push({ slide_id: slideId, issue: "overflow", viewport, note: "Content extends beyond the slide frame." });

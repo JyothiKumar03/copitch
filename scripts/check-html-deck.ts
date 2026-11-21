@@ -8,6 +8,10 @@ import type { TDeck } from "../frontend/types/deck";
 
 const deck: TDeck = {
   deck_id: "layout-fixture", research_id: "private-fixture", revision: 2, title: "Enterprise pilot",
+  sources: [
+    { id: "M1", origin: "public", location: "Pilot report", url: "https://www.example.com/pilot" },
+    { id: "M2", origin: "material", location: "PRIVATE_UPLOAD_FILENAME.csv" },
+  ],
   slides: [
     { slide_id: "a", layout: "headline", title: "Start the pilot with enterprise buyers",
       highlights: ["The first cohort gives us a focused place to test onboarding."], narration: "PRIVATE_AUDIO_A", evidence_ids: ["M1"] },
@@ -19,6 +23,10 @@ const deck: TDeck = {
       evidence_ids: ["M1"], chart_period: "FY2025/26", template: { type: "bar_chart", unit: "percentage points", points: Array.from({ length: 12 }, (_, i) => ({ label: `Cohort ${i + 1}`, value: i - 3 })) } },
     { slide_id: "e", layout: "evidence", title: "Paid orders rose in February", highlights: ["Track repeat orders next."],
       narration: "PRIVATE_AUDIO_E", evidence_ids: ["M2"], template: { type: "line_chart", unit: "orders", points: [{ label: "January", value: 14 }, { label: "February", value: 20 }] } },
+    { slide_id: "f", layout: "evidence", title: "Enterprise is the largest trial segment", highlights: [], narration: "PRIVATE_AUDIO_F",
+      evidence_ids: ["M1"], chart_period: "2025", template: { type: "donut_chart", unit: "%", points: [
+        { label: "Enterprise", value: 46 }, { label: "Midmarket", value: 32 }, { label: "Small business", value: 22 },
+      ] } },
   ],
 };
 // Exercise the accepted limits for host-authored copy, including four full-length highlight rows.
@@ -49,7 +57,10 @@ try {
     const file = join(dir, "presentation.html");
     await download.saveAs(file);
     const html = await readFile(file, "utf8");
-    assert.ok(!html.includes("PRIVATE_AUDIO") && !html.includes("private-fixture"), "Export leaked private material");
+    for (const private_value of ["PRIVATE_AUDIO", "private-fixture", "PRIVATE_UPLOAD_FILENAME"]) {
+      assert.ok(!html.includes(private_value), "Export leaked private material");
+    }
+    assert.ok(html.includes("Supplied material"), "Export should show the source category");
     let external = 0;
     const offline = await browser.newContext();
     await offline.route(/^https?:/, route => { external++; return route.abort(); });
@@ -72,11 +83,18 @@ try {
       }));
       assert.ok(sizes.width <= width + 1 && !sizes.clipping, "Content overflow at width " + width);
       assert.ok(sizes.heights.length >= deck.slides.length, "Missing slide sections");
-      assert.equal(await viewer.locator('[data-composition="visual"] .template-chart-mark').count(), 12);
+      const bars = viewer.locator('[data-template="bar_chart"] .bar-mark');
+      assert.equal(await bars.count(), 12);
+      const barLengths = await bars.evaluateAll(marks => marks.map(mark => mark.getBoundingClientRect().width));
+      assert.ok(Math.abs(barLengths.at(-1)! * 3 / 8 - barLengths[0]) < 1, "Positive and negative bars use different scales");
       assert.equal(await viewer.locator('[data-composition="visual"] .slide-points').count(), 0);
       assert.equal(await viewer.getByText("percentage points · FY2025/26", { exact: true }).count(), 1);
-      assert.equal(await viewer.locator('[data-composition="mixed"] svg circle').count(), 2);
+      assert.equal(await viewer.locator('[data-template="line_chart"] .line circle').count(), 2);
       assert.equal(await viewer.locator('[data-composition="mixed"] .slide-points li').count(), 1);
+      const donut = viewer.locator('[data-template="donut_chart"]');
+      assert.equal(await donut.locator("circle[pathLength='100']").count(), 3);
+      assert.deepEqual(await donut.locator("dd").allTextContents(), ["46%", "32%", "22%"]);
+      assert.equal(await donut.getByText("Source: example.com", { exact: true }).count(), 1);
       if (width >= 1000) assert.ok(sizes.heights.every(h => h <= height + 1), `Projector slide exceeds ${height}px: ${sizes.heights.join(", ")}`);
       console.log("PASS standalone HTML at " + width + "×" + height);
     }
