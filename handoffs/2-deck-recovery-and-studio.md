@@ -1,7 +1,7 @@
 # Handoff: Deck recovery and SaaS studio (module 2)
 
 Contract: handoffs/2-deck-recovery-and-studio.contract.md
-Commit/base: Exact-count recovery `fd76927`, studio `5fd1d39`, live review `56e8d4e` and final caption timing `fac001e`.
+Commit/base: Exact-count recovery `fd76927`, studio `5fd1d39`, live review `56e8d4e`, caption timing `fac001e` and objective coverage `ffc65d6`.
 Files changed: `frontend/app/globals.css`, `frontend/components/{home,projects,research,deck,site}/`, `backend/src/services/{presentation-planner,presentation-readiness,presentation-research,studio-agent,live-interviewer}.ts`, `backend/src/workers/deck-preparation.ts`, `shared/presentation.ts`, `shared/voice-transcript.ts`.
 
 ## Frontend done
@@ -29,9 +29,9 @@ Files changed: `frontend/app/globals.css`, `frontend/components/{home,projects,r
 | AC-8 | verified | fixture | Chrome exercised artifact navigation and cited research at four widths with keyboard focus restored. The populated fixture showed saved intent and job state. `/private/tmp/copitch-design-qa/studio-rail.log` | — |
 | AC-9 | verified | fixture | Chrome navigated the ten-slide filmstrip and host review controls. Projector-size review and offline HTML verified legible charts and no private notes or names. `/private/tmp/copitch-final-visual-qa/browser-matrix.log` and `scripts/check-html-deck.ts` | — |
 | AC-10 | verified | fixture | Chrome simulated speech interruption, pinned the active sentence, returned a grounded answer privately and continued at the same position. Another run verified a paused typed question, stage-only fullscreen and return focus. `/private/tmp/copitch-room-voice-check.mjs` and `/private/tmp/copitch-studio-exact-acceptance.mjs` | — |
-| AC-11 | verified | fixture | 169 backend tests, 13 frontend tests, six scoring tests, three HTML sizes and the direct TypeScript and lint checks passed. Browser fixtures checked retry, reopen, research, review and live controls. `/private/tmp/copitch-voice-release-backend.log` and `/private/tmp/copitch-final-visual-qa/browser-matrix.log` | — |
+| AC-11 | verified | fixture | 178 backend tests, 13 frontend tests, six scoring tests, three HTML sizes and the direct TypeScript and lint checks passed. Browser fixtures checked retry, reopen, research, review and live controls. `/private/tmp/copitch-backend-verified-speech.log` and `/private/tmp/copitch-final-visual-qa/browser-matrix.log` | — |
 | AC-12 | unverified | none | Real OpenAI Live in Chrome painted a synthetic host caption at 1.87 seconds before persistence. One approval of the revised plan completed one job and closed the mic. The synthetic English → Telugu → English turns saved in order. With microphone permission denied, typed input still saved. `/private/tmp/copitch-spoken-release/` | Physical microphone and acoustic playback remain unverified. |
-| AC-13 | unverified | none | Live provider deck runs completed team introduction 2 of 2, pilot outcomes 3 of 3 with a donut and fictional market briefing 10 of 10. `/private/tmp/copitch-live-use-cases.log` and `/private/tmp/copitch-live-market-retest.log` | Full live briefing and interrupted presentation for each case still need observation. |
+| AC-13 | unverified | none | Live provider runs completed team introduction 2 of 2, pilot outcomes 3 of 3 with a donut and fictional market briefing 10 of 10. The synthetic CSV voice job completed and its saved research replay produced 24 versus 18 and a 12-minute median on separate slides, with cited live Q&A and same-sentence resume. `/private/tmp/copitch-market-settled.log` and `/private/tmp/copitch-spoken-release/replay-synthetic-deck-with-trace.log` | Full live briefing and interruption still need verification in each contracted case. |
 | AC-14 | verified | fixture | Both theme selections survived navigation and refresh in desktop and mobile Chrome. `/private/tmp/copitch-final-visual-qa/browser-matrix.log` | — |
 
 Owner decisions pending: New authorization for the saved India GDP replay and review before AWS deployment.
