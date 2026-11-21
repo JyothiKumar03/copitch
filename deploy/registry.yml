@@ -1,0 +1,13 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Immutable release image repository for the four Copitch containers.
+Resources:
+  Images:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration: {ScanOnPush: true}
+Outputs:
+  RepositoryUri: {Value: !GetAtt Images.RepositoryUri}
+  RepositoryName: {Value: !Ref Images}

@@ -1,12 +1,6 @@
 import app from "./app";
+import { research_worker } from "./controllers/research";
 
 const port = Number(process.env.PORT ?? 3001);
-
-if (typeof Bun !== "undefined") {
-  Bun.serve({ port, fetch: app.fetch });
-  console.log(`API listening on http://localhost:${port} (Bun)`);
-} else {
-  const { serve } = await import("@hono/node-server");
-  serve({ port, fetch: app.fetch });
-  console.log(`API listening on http://localhost:${port} (Node)`);
-}
+research_worker.start();
+app.listen(port, () => console.log(`Express API listening on port ${port}`));

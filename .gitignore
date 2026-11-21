@@ -9,3 +9,7 @@ dist
 .DS_Store
 coverage
 **/ai-sessions.sqlite*
+
+.venv/
+__pycache__/
+*.pyc

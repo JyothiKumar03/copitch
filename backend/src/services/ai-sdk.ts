@@ -2,7 +2,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { APICallError, isStepCount, streamText, type LanguageModelUsage, type ToolSet } from "ai";
 import type { TAttempt, TModelCandidate, TModelProviders, TModelStep, TToolProviders } from "../types/ai";
 
-function make_attempt(candidate: TModelCandidate, outcome: TAttempt["outcome"], usage?: LanguageModelUsage): TAttempt {
+export const make_attempt = (candidate: TModelCandidate, outcome: TAttempt["outcome"], usage?: LanguageModelUsage): TAttempt => {
   const input_tokens = usage?.inputTokens;
   const cached_input_tokens = usage?.inputTokenDetails.cacheReadTokens;
   const output_tokens = usage?.outputTokens;
@@ -19,26 +19,27 @@ function make_attempt(candidate: TModelCandidate, outcome: TAttempt["outcome"], 
     usage: usage && { input_tokens, cached_input_tokens, output_tokens, reasoning_tokens: usage.outputTokenDetails.reasoningTokens },
     estimated_usd, pricing_version: rates?.version,
   };
-}
+};
 
-function select_tools(candidate: TModelCandidate, registry: TToolProviders): ToolSet {
+const select_tools = (candidate: TModelCandidate, registry: TToolProviders): ToolSet => {
   const tools: ToolSet = {};
   for (const name of candidate.tool_providers) {
     Object.assign(tools, registry[name]);
   }
   return tools;
-}
+};
 
-export function create_model_step(
+export const create_model_step = (
   candidates: readonly TModelCandidate[],
   providers: TModelProviders = { openai: createOpenAI() },
-): TModelStep {
+): TModelStep => {
   if (!candidates.length) throw new Error("Configure at least one OpenAI model");
-  return async ({ instructions, messages, tool_providers, signal, on_text, on_attempt }) => {
+  return async ({ instructions, ephemeral, parallel_tool_calls, messages, tool_providers, signal, on_text, on_attempt }) => {
     for (const [index, candidate] of candidates.entries()) {
       signal.throwIfAborted();
       let exposed = false;
       let usage: LanguageModelUsage | undefined;
+      let result: Awaited<ReturnType<TModelStep>>;
       try {
         const response = streamText({
           model: providers[candidate.provider](candidate.model),
@@ -46,6 +47,7 @@ export function create_model_step(
           messages,
           tools: select_tools(candidate, tool_providers),
           abortSignal: signal,
+          providerOptions: { openai: { ...(ephemeral && { store: false }), parallelToolCalls: parallel_tool_calls } },
           maxRetries: 0,
           maxOutputTokens: candidate.max_output_tokens,
           temperature: candidate.temperature,
@@ -65,15 +67,16 @@ export function create_model_step(
         }
         const finish = await response.finishReason;
         if (finish !== "stop" && finish !== "tool-calls") throw new Error("Incomplete model step: " + finish);
-        const result = await response.response;
-        on_attempt(make_attempt(candidate, "completed", usage));
-        return { messages: result.messages, continue_with_tools: (await response.toolCalls).length > 0 };
+        result = { messages: (await response.response).messages, continue_with_tools: (await response.toolCalls).length > 0 };
       } catch (error) {
         on_attempt(make_attempt(candidate, "failed", usage));
         if (exposed || signal.aborted || !APICallError.isInstance(error) ||
             !error.isRetryable || index === candidates.length - 1) throw error;
+        continue;
       }
+      on_attempt(make_attempt(candidate, "completed", usage));
+      return result;
     }
     throw new Error("OpenAI model candidates exhausted");
   };
-}
+};

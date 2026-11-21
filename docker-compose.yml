@@ -8,6 +8,8 @@ services:
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_TEXT_MODELS: ${OPENAI_TEXT_MODELS:-[]}
+      VOICE_WORKER_TOKEN: ${VOICE_WORKER_TOKEN:-}
+      VOICE_WORKER_URL: http://voice:8900
       AI_SESSION_DB: /data/sessions.sqlite
       PORT: 3001
       CORS_ORIGIN: http://localhost:3000
@@ -22,6 +24,18 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  voice:
+    build:
+      context: .
+      dockerfile: voice/Dockerfile
+    environment:
+      VOICE_WORKER_TOKEN: ${VOICE_WORKER_TOKEN:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_TRANSCRIPTION_MODEL: ${OPENAI_TRANSCRIPTION_MODEL:-gpt-4o-mini-transcribe}
+      OPENAI_SPEECH_MODEL: ${OPENAI_SPEECH_MODEL:-gpt-4o-mini-tts}
+      OPENAI_LIVE_MODEL: ${OPENAI_LIVE_MODEL:-gpt-live-1.1}
+      OPENAI_SPEECH_VOICE: ${OPENAI_SPEECH_VOICE:-marin}
 
   web:
     build:

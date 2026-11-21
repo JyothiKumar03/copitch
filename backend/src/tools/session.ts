@@ -2,7 +2,7 @@ import { tool } from "ai";
 import { z } from "zod";
 import type { TToolProviders } from "../types/ai";
 
-export function session_tools(context: string): TToolProviders {
+export const session_tools = (context: string): TToolProviders => {
   return {
     session: {
       read_context: tool({
@@ -23,4 +23,4 @@ export function session_tools(context: string): TToolProviders {
       }),
     },
   };
-}
+};

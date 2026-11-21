@@ -1,0 +1,8 @@
+{
+  "default_language": "en",
+  "languages": {
+    "en": { "label": "English (India)", "locale": "en-IN" },
+    "hi": { "label": "हिन्दी", "locale": "hi-IN" },
+    "te": { "label": "తెలుగు", "locale": "te-IN" }
+  }
+}

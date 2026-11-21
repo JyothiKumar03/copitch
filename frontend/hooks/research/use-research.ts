@@ -1,28 +1,43 @@
 "use client";
 
 import { useRef } from "react";
-import { useMutation } from "@tanstack/react-query";
-import { clarifyBrief, createSession, downloadResearch, runResearch } from "@/lib/research";
-import type { TBriefInput, TResearchSession } from "@/types/research";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { startInterview, uploadSource, queryJob, getOrCreateSession, savedSession, restoreWorkspace } from "@/lib/research";
+import { applyStudioSources, fetchSourceCalls, sendStudioTurn } from "@/lib/studio-turns";
+import type { TResearchJob, TResearchSession, TStudioSources, TTurnInput } from "@/types/research";
 
-export function useResearch() {
+export const useResearch = (project: string, restored?: TResearchJob | null) => {
+  const polling = !!savedSession()?.token || typeof EventSource === "undefined";
   const session = useRef<Promise<TResearchSession> | null>(null);
-  function getSession() {
-    session.current ??= createSession().catch(error => {
+  const getSession = () => {
+    session.current ??= getOrCreateSession().catch(error => {
       session.current = null;
       throw error;
     });
     return session.current;
-  }
+  };
+  const start = useMutation({ mutationFn: async () => startInterview(await getSession()) });
+  const turn = useMutation({ mutationFn: async (input: TTurnInput) => sendStudioTurn(await getSession(), input) });
+  const applySources = useMutation({ mutationFn: async (scope: TStudioSources) => applyStudioSources(await getSession(), scope) });
+  const upload = useMutation({ mutationFn: async (file: File) => uploadSource(await getSession(), file) });
+  const calls = useQuery({
+    queryKey: ["source-calls", project],
+    queryFn: async ({ signal }) => fetchSourceCalls(await getSession(), signal),
+    refetchInterval: query => polling && (upload.isPending || query.state.data?.some(call => call.status === "running")) ? 700 : false,
+    retry: 1,
+  });
+  const job = useQuery({
+    queryKey: ["research-job", project, restored?.job_id],
+    enabled: !!restored,
+    initialData: restored ?? undefined,
+    queryFn: async ({ signal }) => queryJob(await getSession(), restored!.job_id, signal),
+    refetchInterval: query => polling && ["queued", "running"].includes(query.state.data?.status ?? "queued") ? 1000 : false,
+    retry: 1,
+  });
+  return { start, turn, applySources, upload, calls, getSession, job };
+};
 
-  const clarify = useMutation({
-    mutationFn: async (input: TBriefInput) => clarifyBrief(await getSession(), input),
-  });
-  const research = useMutation({
-    mutationFn: async (briefId: string) => runResearch(await getSession(), briefId),
-  });
-  const download = useMutation({
-    mutationFn: async (researchId: string) => downloadResearch(await getSession(), researchId),
-  });
-  return { clarify, research, download };
-}
+export const useSavedWorkspace = () => useQuery({
+  queryKey: ["host-workspace", savedSession()?.session_id],
+  queryFn: restoreWorkspace, refetchOnMount: "always", retry: false,
+});

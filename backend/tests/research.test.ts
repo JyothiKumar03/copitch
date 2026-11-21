@@ -1,5 +1,7 @@
+import { api_error } from "../src/middleware/api-error";
+import { create_api } from "../src/app";
+import { serve_api } from "./helpers/serve-api";
 import { describe, expect, test } from "bun:test";
-import { Hono } from "hono";
 import { research_handlers } from "../src/controllers/research";
 import { create_session } from "../src/controllers/session";
 import { build_research } from "../src/services/research";
@@ -11,13 +13,14 @@ const brief: TResearchBrief = {
   materials: "The January pilot enrolled 42 people.", question: null,
 };
 
-function fixture_provider(): TResearchProvider {
+const fixture_provider = (): TResearchProvider => {
   return {
     clarify: async scope => ({
       summary: scope.messages.join(" "), question: scope.messages.length === 1 ? "Who will decide?" : null,
       public_queries: ["published pilot measurements"],
     }),
     lookup: async () => { throw new Error("Unexpected network lookup"); },
+    verify: async review => review.units.map(unit => ({ id: unit.id, decision: "supported" })),
     draft: async () => ({
       title: "Pilot findings", gaps: ["Long-term retention remains unknown."],
       sections: [{ heading: "January enrollment", paragraphs: [
@@ -26,7 +29,7 @@ function fixture_provider(): TResearchProvider {
       ] }],
     }),
   };
-}
+};
 
 test("files-only report retains verbatim evidence and identifies invalid citations and unopened URLs", async () => {
   let lookups = 0;
@@ -64,14 +67,16 @@ describe("authenticated research routes", () => {
     process.env.AI_SESSION_DB = ":memory:";
     const provider = fixture_provider();
     const handlers = research_handlers(() => provider);
-    const app = new Hono();
+    const app = create_api();
     app.post("/sessions", create_session);
     app.post("/:session_id/brief", handlers.review);
     app.post("/:session_id/build", handlers.build);
     app.get("/:session_id/:research_id/export", handlers.download);
-    const host = await (await app.request("/sessions", { method: "POST" })).json();
+    app.use(api_error);
+    await using http = await serve_api(app);
+    const host = await (await http.request("/sessions", { method: "POST" })).json();
     const auth = { Authorization: "Bearer " + host.token, "Content-Type": "application/json" };
-    const post = (path: string, body: unknown) => app.request("/" + host.session_id + "/" + path, {
+    const post = (path: string, body: unknown) => http.request("/" + host.session_id + "/" + path, {
       method: "POST", headers: auth, body: JSON.stringify(body),
     });
     const initial = await (await post("brief", { message: "Summarize the pilot", source_policy: "files_only", materials: brief.materials })).json();
@@ -88,8 +93,8 @@ describe("authenticated research routes", () => {
     expect(first.research_id).toBeTruthy();
     expect(second.research_id).toBe(first.research_id);
     const path = "/" + host.session_id + "/" + first.research_id + "/export";
-    expect((await app.request(path)).status).toBe(401);
-    const exported = await app.request(path, { headers: auth });
+    expect((await http.request(path)).status).toBe(401);
+    const exported = await http.request(path, { headers: auth });
     expect(exported.headers.get("Content-Disposition")).toContain("presentation.md");
     expect(await exported.text()).toBe(first.markdown);
   });

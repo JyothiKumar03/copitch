@@ -1,13 +1,15 @@
-import Link from "next/link";
-import { ResearchWorkspace } from "@/components/research/ResearchWorkspace";
+import type { Metadata } from "next";
+import { SiteHeader } from "@/components/site/SiteHeader";
+import { ProjectStudio } from "@/components/projects/ProjectStudio";
 
-export default function ResearchPage() {
-  return (
-    <main className="mx-auto min-h-screen max-w-3xl px-5 py-10 sm:py-16">
-      <Link href="/" className="text-sm text-slate-400 hover:underline">← Equal AI</Link>
-      <h1 className="mt-8 mb-2 text-4xl font-semibold tracking-tight">Private research brief</h1>
-      <p className="mb-8 text-slate-400">Describe the talk, review the research scope, then build a cited memo.</p>
-      <ResearchWorkspace />
+export const metadata: Metadata = { title: "Pitch studio" };
+
+const ResearchPage = async ({ searchParams }: { searchParams: Promise<{ project?: string }> }) => (
+  <>
+    <SiteHeader inStudio />
+    <main className="mx-auto w-full max-w-360 px-4 pb-10 pt-5 text-foreground sm:px-8 sm:pt-7 lg:px-10">
+      <ProjectStudio projectId={(await searchParams).project} />
     </main>
-  );
-}
+  </>
+);
+export default ResearchPage;

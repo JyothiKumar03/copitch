@@ -3,6 +3,7 @@ import type { z } from "zod";
 import type { model_config_schema } from "../services/model-config";
 
 export type TModelCandidate = z.infer<typeof model_config_schema>;
+export type TModelPurpose = NonNullable<TModelCandidate["purposes"]>[number];
 export type TToolProviders = Partial<Record<TModelCandidate["tool_providers"][number], ToolSet>>;
 export type TModelProviders = Record<TModelCandidate["provider"], (model: string) => LanguageModel>;
 
@@ -17,6 +18,8 @@ export type TAttempt = {
 
 export type TStepRequest = {
   instructions?: string;
+  ephemeral?: boolean;
+  parallel_tool_calls?: boolean;
   messages: ModelMessage[];
   tool_providers: TToolProviders;
   signal: AbortSignal;

@@ -1,10 +1,4 @@
 {$PUBLIC_HOST} {
-    @entry {
-        not path /api/sessions/* /api/health
-    }
-    basic_auth @entry {
-        demo {$DEMO_PASSWORD_HASH}
-    }
     handle /api/* {
         reverse_proxy api:3001 {
             flush_interval -1

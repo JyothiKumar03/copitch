@@ -2,7 +2,10 @@
   "name": "equal-ai-hackathon",
   "version": "0.1.0",
   "private": true,
-  "workspaces": ["frontend", "backend"],
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
   "engines": {
     "node": ">=24"
   },
@@ -13,11 +16,17 @@
     "build": "bun run --cwd backend build && bun run --cwd frontend build",
     "start": "bun run --cwd backend start",
     "typecheck": "bun run --cwd backend typecheck && bun run --cwd frontend typecheck",
-    "lint": "bun run --cwd backend lint && bun run --cwd frontend lint",
+    "lint": "bun run lint:arrows && bun run --cwd backend lint && bun run --cwd frontend lint",
     "docker:up": "docker compose up --build",
-    "docker:down": "docker compose down"
+    "docker:down": "docker compose down",
+    "check:html": "bun scripts/check-html-deck.ts",
+    "check:tour": "bun simulations/voice/walkthrough.ts",
+    "lint:arrows": "bun scripts/check-arrow-functions.ts",
+    "dev:voice": "uv run --project voice uvicorn --app-dir voice server:app --host 127.0.0.1 --port 8900",
+    "dev:all": "bun scripts/dev-all.ts"
   },
   "devDependencies": {
+    "playwright": "^1.65.1",
     "typescript": "^5.9.3"
   }
 }

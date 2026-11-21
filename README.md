@@ -1,6 +1,6 @@
-# Equal AI — Voice + UI starter
+# copitch
 
-Bun workspaces with a Next.js frontend, a TypeScript Hono API, and Docker Compose.
+copitch helps a presenter turn a spoken or typed brief into a cited research memo, speaker notes and a pitch deck. The Next.js frontend and Express API share a Bun workspace.
 
 ## Requirements
 
@@ -11,8 +11,9 @@ Bun workspaces with a Next.js frontend, a TypeScript Hono API, and Docker Compos
 ## Layout
 
 ```
-frontend/   Next.js 16 app (Web Speech API voice input + speech synthesis output)
-backend/    Hono API in TypeScript, served by Bun (Node fallback included)
+frontend/   Next.js app for the host and the audience
+backend/    TypeScript, Express 5 and SQLite on Bun
+voice/      Private Python audio adapter for OpenAI interview turns
 ```
 
 ## Local development
@@ -33,6 +34,8 @@ bun run docker:up
 bun run docker:down
 ```
 
+The API image includes the Java reader for legacy PowerPoint uploads. For native development, use Compose to exercise `.ppt` ingestion, or set `COPITCH_PPT_READER` to a compatible local runtime directory containing `bin/java`, the compiled `classes/SlideText.class` and the Apache POI dependencies under `lib/`.
+
 ## Chat and long-running sessions
 
 Set `OPENAI_API_KEY` and `OPENAI_TEXT_MODELS` in the backend process environment. The latter accepts a JSON array in fallback order. Replace the model placeholder with an ID available to your account. Omit temperature for models that require their own sampling defaults.
@@ -49,22 +52,36 @@ Set `OPENAI_API_KEY` and `OPENAI_TEXT_MODELS` in the backend process environment
 ]
 ```
 
-The session tool provider maps to `find_context` (find a phrase) and `read_context` (read an excerpt). Set `tool_providers` to an empty array to disable tools for a model. Optional `pricing` accepts `input`, `cached_input` and `output` in USD per million tokens plus a `version` label. Attempts with insufficient pricing or usage report a null estimate. The starter UI posts to `/api/chat` and uses browser speech recognition and synthesis. OpenAI voice transport and Decisions integration are later milestones.
+The session tool provider maps to `find_context` (find a phrase) and `read_context` (read an excerpt). Set `tool_providers` to an empty array to disable tools for a model. Optional `pricing` accepts `input`, `cached_input` and `output` in USD per million tokens plus a `version` label. Attempts with insufficient pricing or usage report a null estimate. The pitch practice page at `/chat` posts to `/api/chat` and uses browser speech recognition and synthesis. The pitch studio uses the OpenAI Realtime interviewer over WebRTC. The private Python adapter negotiates the call and Express validates actions through the server sideband.
 
-Session persistence uses Bun’s SQLite driver. For a streamed task, create a session with `POST /api/sessions` and keep the returned `session_id` and bearer `token` for the host. Send the token as a Bearer token to `POST /api/sessions/:session_id/runs` with a JSON body containing `message` and optional `context`. The response includes `run_id`. Subscribe to `GET /api/sessions/:session_id/runs/:run_id/events` with the same token. Supply `Last-Event-ID` when reconnecting. Cancel with `DELETE /api/sessions/:session_id/runs/:run_id`. Disconnecting the stream leaves the worker running. A backend restart preserves stored events and marks an unfinished run failed.
+Session persistence uses Bun’s SQLite driver. For a legacy local development client, create a session with `POST /api/sessions` and keep the returned `session_id` and bearer `token` for the host. Send the token as a Bearer token to `POST /api/sessions/:session_id/runs` with a JSON body containing `message` and optional `context`. The response includes `run_id`. Subscribe to `GET /api/sessions/:session_id/runs/:run_id/events` with the same token. Supply `Last-Event-ID` when reconnecting. Cancel with `DELETE /api/sessions/:session_id/runs/:run_id`. Disconnecting the stream leaves the worker running. A backend restart preserves stored events and marks an unfinished run failed.
 
 ## Research workspace
 
-Open `/research` in the frontend to scope a question, paste source material and choose whether public research is allowed. Review the proposed public queries and supplied URLs before confirming. Download the resulting prose memo as `presentation.md`. The workflow requires an OpenAI API key and a configured text model that supports structured output. Public research also requires Responses web search support. The implementation uses OpenAI for discovery and citation-backed public findings. For a named URL the server requires a completed open or find action on that page plus a matching citation. Models without page-reading support can still return discovery results and an explicit gap for the requested URL.
+Open `/research`, sign in and create or reopen a project. Speak or type what you want to pitch and who will be listening. Review the interpreted scope, public research permissions and proposed sources, then choose **Start research**. Open the finished `context.md` to read and download the verified reference document, citations and supported charts. This context can feed slide planning in the same project. The workflow requires a configured OpenAI model. Public research also requires Responses web search support. The worker chooses search or eligible page reads based on the approved purpose and keeps supporting evidence and limitations with the context.
+
+## Spoken research interview
+
+For Compose, set `VOICE_WORKER_TOKEN` to a generated secret shared by the API and Python worker. The local `dev:all` command generates an ephemeral worker credential if the variable is empty. Compose runs the worker on its private network. For development outside Docker, start the frontend, Express and the private audio service together from the repository root. The three processes inherit the root .env. Python 3.11+ and uv are required for voice.
+
+```sh
+bun run dev:all
+```
+
+Open a project and start voice or type in chat. Review the plan and approve it before research starts. The browser releases the microphone after the approval acknowledgement. Chat can show progress while the job runs. The downloadable Markdown, research job and compiled deck survive an API restart when the SQLite volume persists.
 
 ## Product and implementation
 
 Start with [the orchestration plan](docs/orchestration.md) for work assignments and integration gates. See [product behavior](docs/product.md), [runtime contracts](docs/architecture.md) and [the rehearsal fixtures](docs/plan.md).
 
-## AWS demo deployment
+## AWS deployment
 
-Use an EC2 Linux instance with Docker Compose v2 supporting `!reset`, a public DNS name pointing at its stable public address, inbound TCP 80/443 and a mounted EBS data directory. Copy the workspace to the instance. Set PUBLIC_HOST to the hostname, SESSION_DATA_DIR to an absolute directory on that mount, and configure OpenAI in the root .env. Generate DEMO_PASSWORD_HASH interactively with `docker run --rm -it caddy:2-alpine caddy hash-password`. Single-quote the hash in .env to preserve dollar signs. Give invited testers the demo password privately.
+Follow the [AWS operations guide](docs/aws-operations.md) to build the four images, validate the stack, find a trace and rehearse recovery. The [CloudFormation template](deploy/stack.yml) provisions the managed ECS deployment. The gateway exposes HTTPS, the API and voice worker stay private, and encrypted EBS holds the SQLite database. CloudWatch records request and durable research timings. Verify the release using the [Module 1 acceptance contract](handoffs/1-pitch-studio.contract.md).
 
-Run `docker compose -f docker-compose.yml -f deploy/compose.aws.yml up -d --build` from the repository root. The gateway obtains TLS, sends /api requests to Hono and serves Next.js at the same origin. The gateway protects the starter UI, chat and session creation with the demo login. Session-specific endpoints validate their own bearer token. When adding an audience projection, issue a separate read-only audience link. Keep future browser and worker services on the private container network.
+## HTML presentation and model selection
 
-Verify /api/health and the login from another network. From the public origin test typed chat, microphone permission, authenticated session creation, event delivery before run completion and reconnect. Restart the API and verify saved events remain readable. Record the hostname and observed results before marking the AWS deployment live.
+Open the research workspace, confirm a brief and generate the memo. Enter the audience and speaking time, then select Prepare slides. Review the chosen slides, estimated duration and speaker notes. A second audience or duration creates a separate saved pitch. Start the presentation explicitly or download the HTML. Slide edits produce private proposals. The offline HTML contains public slide content and source identifiers.
+
+Optional `purposes` on each OPENAI_TEXT_MODELS entry accepts `interview`, `research`, `planning`, `live` and `chat`. A matching entry takes priority over generic entries. Entries scoped exclusively to other purposes are excluded. A single existing entry without purposes still works everywhere. Interview and research handlers select the first eligible entry; the generic chat model-step service supports ordered transport fallback. The deterministic deck compiler spends zero additional text-model tokens. The typed live router uses the same configuration contract.
+
+Run `bun run check:html` for the standalone HTML layout test and `bun run check:tour` for the offline browser/continuation fixture. Both use Playwright Chromium. Install it with `bunx playwright install chromium` or set `DECK_BROWSER_CHANNEL=chrome` to use installed Chrome.
