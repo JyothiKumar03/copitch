@@ -5,6 +5,16 @@ export type TConversionChart = {
   rows: { label: string; numerator: number; denominator: number; evidence_id: string }[];
 };
 
+export type TSlideTemplate =
+  | { type: "title_card" | "bullet_slide" }
+  | { type: "metric_grid"; metrics: { label: string; value: string }[] }
+  | { type: "timeline"; entries: { date: string; label: string }[] }
+  | { type: "quote"; quote: string; attribution: string | null }
+  | { type: "comparison"; columns: { label: string; points: string[] }[] }
+  | { type: "bar_chart" | "line_chart" | "donut_chart"; unit: string; points: { label: string; value: number }[] };
+
+export type TDeckSentence = { sentence_id: string; text: string; evidence_ids: string[] };
+
 export type TSlide = {
   chart?: TConversionChart;
   slide_id: string;
@@ -13,6 +23,10 @@ export type TSlide = {
   highlights: string[];
   narration: string;
   evidence_ids: string[];
+  template?: TSlideTemplate;
+  beat_id?: string;
+  sentences?: TDeckSentence[];
+  estimated_seconds?: number;
 };
 
 export type TPitchInput = {
@@ -34,7 +48,7 @@ export type TDeck = {
   grounding_mode?: "verified" | "source_extracts";
 };
 
-export type TSlideChanges = Partial<Pick<TSlide, "layout" | "title" | "highlights" | "narration">>;
+export type TSlideChanges = Partial<Pick<TSlide, "layout" | "title" | "highlights" | "narration" | "template">>;
 
 export type TEditRequest = {
   command_id: string;
@@ -52,4 +66,6 @@ export type TEditProposal = {
   after: TSlide;
   status: "pending" | "approved" | "rejected";
   approved_revision: number | null;
+  attribution?: { evidence_id: string; excerpt: string }[];
+  sources_added?: TDeck["sources"];
 };

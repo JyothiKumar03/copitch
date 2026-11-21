@@ -18,6 +18,8 @@ export type TAttempt = {
 
 export type TStepRequest = {
   instructions?: string;
+  ephemeral?: boolean;
+  parallel_tool_calls?: boolean;
   messages: ModelMessage[];
   tool_providers: TToolProviders;
   signal: AbortSignal;

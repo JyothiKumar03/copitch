@@ -1,7 +1,7 @@
 import type { TResearchJob } from "./research-job";
 import type { TSourceSummary } from "./source";
 import type { TInterviewTurn, TResearchBrief, TResearchBundle } from "./research";
-import type { TStudioActivity, TStudioAsk, TStudioContext } from "./studio-turn";
+import type { TResearchProposal, TStudioActivity, TStudioPhase, TStudioState } from "./studio-turn";
 
 export type TInterviewBrief = Pick<TResearchBrief, "brief_id" | "summary" | "question" | "public_queries"> & {
   sources: TSourceSummary[];
@@ -13,8 +13,10 @@ export type TInterviewWorkspace = {
   history: TInterviewTurn[];
   sources: TSourceSummary[];
   activities: (TStudioActivity & { turn_id: string })[];
-  pending_question: TStudioAsk | null;
-  context?: TStudioContext;
+  pending_question: null;
+  phase: TStudioPhase;
+  proposal: TResearchProposal | null;
+  state: TStudioState;
   artifacts?: { research_id: string; after_turn: number }[];
   job: TResearchJob | null;
   capabilities: { source_uploads: boolean };
