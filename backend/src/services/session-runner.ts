@@ -3,11 +3,11 @@ import { session_tools } from "../tools/session";
 import type { SessionStore } from "../repositories/session";
 import type { TModelStep } from "../types/ai";
 
-function user_message(prompt: string, context: string): ModelMessage {
+const user_message = (prompt: string, context: string): ModelMessage => {
   return { role: "user", content: JSON.stringify({
     request: prompt, context_preview: context.slice(0, 4000), context_length: context.length,
   }) };
-}
+};
 
 export class SessionRunner {
   constructor(private session: string, private store: SessionStore, private model_step: TModelStep) {}

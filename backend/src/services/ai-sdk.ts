@@ -2,7 +2,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { APICallError, isStepCount, streamText, type LanguageModelUsage, type ToolSet } from "ai";
 import type { TAttempt, TModelCandidate, TModelProviders, TModelStep, TToolProviders } from "../types/ai";
 
-function make_attempt(candidate: TModelCandidate, outcome: TAttempt["outcome"], usage?: LanguageModelUsage): TAttempt {
+const make_attempt = (candidate: TModelCandidate, outcome: TAttempt["outcome"], usage?: LanguageModelUsage): TAttempt => {
   const input_tokens = usage?.inputTokens;
   const cached_input_tokens = usage?.inputTokenDetails.cacheReadTokens;
   const output_tokens = usage?.outputTokens;
@@ -19,20 +19,20 @@ function make_attempt(candidate: TModelCandidate, outcome: TAttempt["outcome"], 
     usage: usage && { input_tokens, cached_input_tokens, output_tokens, reasoning_tokens: usage.outputTokenDetails.reasoningTokens },
     estimated_usd, pricing_version: rates?.version,
   };
-}
+};
 
-function select_tools(candidate: TModelCandidate, registry: TToolProviders): ToolSet {
+const select_tools = (candidate: TModelCandidate, registry: TToolProviders): ToolSet => {
   const tools: ToolSet = {};
   for (const name of candidate.tool_providers) {
     Object.assign(tools, registry[name]);
   }
   return tools;
-}
+};
 
-export function create_model_step(
+export const create_model_step = (
   candidates: readonly TModelCandidate[],
   providers: TModelProviders = { openai: createOpenAI() },
-): TModelStep {
+): TModelStep => {
   if (!candidates.length) throw new Error("Configure at least one OpenAI model");
   return async ({ instructions, messages, tool_providers, signal, on_text, on_attempt }) => {
     for (const [index, candidate] of candidates.entries()) {
@@ -76,4 +76,4 @@ export function create_model_step(
     }
     throw new Error("OpenAI model candidates exhausted");
   };
-}
+};
