@@ -1,69 +1,77 @@
 # Architecture · Interview, research and interruptible HTML presentation
 
-The product has two independently useful outputs. First, the host receives a ready-to-speak pitch, source references and a supporting research memo. Second, the presenter delivers a reviewed HTML deck, can yield mid-sentence, and can explain which point to cover when the host says “continue.” The durable session connects them. A fresh browser should be able to present an approved deck from its saved revision.
+The host first receives a verified `context.md` with source references and supported charts. The same project can turn that research into a reviewed HTML deck with private narration, interruptions and a resumable sentence cursor. The saved research and deck revisions can be reopened independently.
 
 Implementation status and outstanding acceptance tests are tracked in the [current gap register](continuation-review.md#current-gap-register).
 
 ## Module 1 SaaS architecture
 
-Module 1 delivers a private pitch studio. A customer signs in, opens a project, briefs the agent, approves research and receives a cited pitch they can reopen or download. Live delivery and guided walkthroughs extend that saved project in Modules 2 and 3. The diagram shows the Module 1 release target. [Module 1 acceptance contract](../handoffs/1-pitch-studio.contract.md)
+Module 1 delivers a private pitch studio. A customer signs in, opens a project, briefs the agent, approves research and receives grounded context they can reopen or download. Live delivery and guided walkthroughs extend that saved project in Modules 2 and 3. The diagram shows the Module 1 release target. [Module 1 acceptance contract](../handoffs/1-pitch-studio.contract.md)
 
 ```mermaid
 flowchart LR
   Host["Next.js studio · chat, files, agent, player"] <-->|sign in, projects, turns, files| API["Express · identity and session controller"]
-  Host <-->|continuous audio after opt-in · finalized transcripts| Media["OpenAI transcription WebRTC session"]
-  Voice["Private Python · authenticated signaling and synthesis"] -->|negotiate session| Media
-  Voice <-->|SDP and authorized spoken replies| API
+  Host <-->|interview audio over WebRTC after opt-in| Media["OpenAI Realtime interviewer"]
+  API <-->|authenticated signaling and sideband actions| Media
   API <-->|scoped reads and writes| Store["SQLite and private artifact storage"]
   API -->|confirmed brief and job| Store
   Worker["Research worker"] <-->|lease, checkpoint, publish bundle| Store
   API <-->|interview and routing proposals| Model["OpenAI via Vercel AI SDK"]
   Worker <-->|approved research and synthesis| Model
-  API -->|project-scoped pitch.md| View["React Markdown and Recharts viewer"]
+  API -->|project-scoped context.md or SSE| View["React Markdown and Recharts viewer"]
 ```
 
 | Customer action | Release contract |
 |---|---|
 | Sign in and open a project | Express resolves the account and its private workspace. List and create projects there. Each session belongs to a project. Check project access on every session, source, job, file and voice connection. A fresh browser resolves the project after sign-in and restores the saved transcript, attachments, job status and artifact versions. Sign-out ends access and audio capture. |
-| Speak, attach files and review scope | Chat, attached files and generated files occupy the center of the desktop studio. The agent, microphone status and stop control sit on the right. React plays replies on one host player. The browser streams microphone audio to OpenAI over WebRTC. The private Python adapter negotiates the transcription session. Express accepts a finalized turn once for the current session and resolves the host's intent. Language changes and interruptions keep the same conversation open. |
-| Approve research and keep talking | Confirm the precise brief revision and permitted source scope. A leased job checkpoints its work independently of the browser and voice connection. A question about progress reads that job. A revised scope creates a new brief revision and fences stale results. Reopening the project recovers the active job or its committed outcome. |
-| Select the finished file | The successful job commits evidence, the pitch, its chart and the supporting memo together. The conversation shows a selectable `pitch.md` bound to the completed research ID. Selecting it opens that saved version in a private artifact viewer with Preview, Markdown and Download. `presentation.md` is the supporting research memo. Each later research run has its own file identity. |
+| Speak, attach files and review scope | Chat, attached files and generated files occupy the center of the desktop studio. The browser connects to the Realtime interviewer over WebRTC. The model asks one context-dependent question at a time and proposes updates through the authenticated session controller. Typed chat follows the same project history and action rules. |
+| Approve research | Confirm the precise plan revision and permitted source scope. The microphone closes after the acknowledgement. A leased job reads approved pages and can run public search within the approved scope. It checkpoints independently of the browser. Reopening the project recovers the job or its committed outcome. |
+| Select the finished file | The job publishes verified findings, evidence and a standalone `context.md` for the approved revision. When evidence is insufficient, it asks for a source or example. Module 2 derives its narration from the approved research. |
 
 **Worker authority.** Derive workspace and project identity from the authenticated account. Carry those identifiers, the session and confirmed brief revision on the job lease and resulting artifact records. Scope every lookup by workspace and project. A worker can claim approved jobs, read their permitted sources and commit results against its current lease. A lost lease or superseded brief invalidates that commit. A scoped machine credential authorizes the worker. The customer's login credential stays at the HTTP boundary.
 
-**Chart contract.** The synthesis model proposes a chart type and evidence candidate IDs. The backend checks the selection, comparable units and source values before embedding `{name, description, type, data}` in a fenced `recharts` block. Module 1 supports bar and line charts. Each point has a label, numeric value or null, unit and evidence ID. Rates may carry a numerator and denominator. The private viewer validates the payload, renders Recharts and offers the source table. Invalid data leaves the rest of the pitch readable. [Chart service](../backend/src/services/pitch-chart.ts) · [Viewer](../frontend/components/research/PitchDocument.tsx)
+**Conversation authority.** The studio stores completed turns, scope facts, the open question and explicit language preference under the authenticated project. A structured proposal classifies the current turn. Express validates the requested decision, applies it against the current brief, and records the reply and effects in one transaction. Realtime partials can update the display without entering this transaction. [Studio cases and authority](studio-turns.md)
 
-**Current implementation.** Accounts own projects in SQLite. A signed-in host can reopen a saved pitch in a fresh browser, with the agent on the right and files in the conversation. The studio negotiates continuous transcription through Express and Python. Hosted, provider and physical-room evidence are tracked in the [acceptance handoff](../handoffs/1-pitch-studio.md). [Host session](../frontend/lib/research.ts) · [Studio](../frontend/components/research/ResearchWorkspace.tsx) · [Voice adapter](../voice/server.py)
+**Research coverage.** The model chooses web search or approved URL reads within a bounded pass. A second pass requires a material unanswered question and an eligible new target. The browser distinguishes total tool steps, distinct successfully read public pages and pass count. A focused portfolio or host-only request can finish with fewer sources than broad market research.
 
-**Release evidence.** Walk two accounts through the hosted service. Confirm that each can reopen its own project from a clean browser and that cross-account reads, writes and media connections are denied. Interrupt a spoken status reply during research, restart a worker, then open the resulting pitch and verify its chart against the cited source. Rehearse with real microphones and the selected provider in the supported languages. Exercise provider failure, retry, backup restoration and operator-visible job failures. Record the environment and observed results before calling the module released.
+**Chart contract.** The context model proposes `<graph>` blocks containing `{name, description, type, data}`. Each bar or line point carries a label, finite value, unit, period and evidence ID. The worker checks comparable units and evidence, independently reviews candidates and publishes accepted blocks with the verified context. The authenticated endpoint returns the saved Markdown or replays verified text in SSE deltas. The viewer uses one incremental parser for both paths and renders the completed blocks with Recharts and a source table. [Chart service](../backend/src/services/research-graphs.ts) · [Viewer](../frontend/components/research/ContextArtifact.tsx)
+
+**Persistence.** Accounts own projects in SQLite. A signed-in host can reopen saved context in a fresh browser. The session controller persists model proposals only after it validates their action and project state. Hosted, provider and physical-room evidence are tracked in the [acceptance handoff](../handoffs/1-pitch-studio.md).
+
+**Release evidence.** Walk two accounts through the hosted service. Confirm that each can reopen its own project from a clean browser and that cross-account reads, writes and media connections are denied. Interrupt a spoken status reply during research, restart a worker, then open the resulting context and verify its chart against the cited source. Rehearse with real microphones and the selected provider in the supported languages. Exercise provider failure, retry, backup restoration and operator-visible job failures. Record the environment and observed results before calling the module released.
 
 The [AWS operations guide](aws-operations.md) covers image digests, gateway routing, request and job latency queries, and restoring the project volume.
 
 ## Stack and trust boundaries
+
+The [Module 2 HTML presentation plan](module-2-html-presentation.md) specifies slide templates, private narration, interruption handling and the host's revision decision.
 
 | Component | Selected implementation | Authority |
 |---|---|---|
 | Host and audience | Next.js, React, TypeScript, Tailwind, shadcn/ui and TanStack Query. HTML/CSS slide templates and a host-owned player. | Host can approve a revision. Audience can acknowledge its assigned frame or slide. Only the host plays room audio. |
 | Session controller | Express on Bun, Zod, SQLite on EBS, sequenced events and immutable deck revisions | Validates commands, manages the floor and agenda, records attempts and publishes public projections. Bun matches the existing SQLite implementation. |
 | Text intelligence | OpenAI via Vercel AI SDK. Purpose-scoped model configurations, structured proposals, a stronger synthesis model when justified. | Proposes questions, findings, edits or target IDs from the permitted context. The controller owns execution. |
-| Voice target | OpenAI WebRTC transcription with private Python signaling and synthesis, React-owned playout | The browser receives transcript segments. Python returns approved synthesized audio. React reports application playout and cutoff. |
+| Voice | Module 1 uses an OpenAI Realtime interviewer over WebRTC, with an Express sideband. Module 2 uses browser capture and playout with private Python OpenAI transcription and speech. | React owns the mic and playout. Express authorizes the durable action, active deck revision and current narration attempt. |
 | Browser target | Isolated Chromium/Playwright worker, bounded read-only actions and approved origins | Reports observations and captures frames. The audience device acknowledges display. |
 | AWS | ECS on EC2 behind Caddy HTTPS, encrypted EBS data, private worker services, Secrets Manager and CloudWatch. | Keep keys and private evidence on the server, authenticate workers and issue narrowly scoped audience access. |
 
 ```mermaid
-flowchart LR
-  Host["Host · mic, approvals, player"] <-->|audio in / turn events| Voice["Managed transcription and private synthesis"]
-  Voice <-->|final turns / synthesize claim| Controller["Express · session controller"]
-  Host <-->|commands / playout acknowledgments| Controller
-  Controller <--> DB["SQLite and artifacts on EBS"]
-  Controller <-->|bounded context / proposals| Model["AI SDK · OpenAI"]
-  Controller --> Research["Research · approved search and sources"]
-  Research --> Bundle["Prose memo + evidence + findings"]
-  Bundle --> Deck["Versioned deck · sparse visuals + private narration"]
-  Deck --> Stage["React HTML stage"]
-  Controller <-->|observe / permitted action| Web["Isolated Playwright worker"]
-  Web -->|verified viewport frame| Stage
-  Stage -->|paint acknowledgment| Controller
+flowchart TD
+  Host["Host studio · chat, mic, files"] --> API["Express · account and project"]
+  Host <-->|WebRTC speech and captions| Realtime["OpenAI Realtime interviewer"]
+  Realtime <-->|final turns and action proposals| API
+  API -->|approved brief revision| Worker["Leased research worker"]
+  Worker <-->|native web search, synthesis and independent review| ResearchModel["OpenAI via Vercel AI SDK"]
+  Worker <-->|eligible URL reads| Sources["Public page and PDF extractor"]
+  Worker -->|atomic publish| Bundle["Saved context.md + verified findings + evidence IDs"]
+  Bundle -->|authorized Markdown or SSE| Viewer["Private Markdown and Recharts viewer"]
+  Bundle -->|same project and research ID| Plan["Audience and duration → slide and narration planner"]
+  Plan -->|private review and explicit approval| Runtime["Live deck revision and sentence cursor"]
+  Runtime -->|slide-only public projection| Stage["Host stage and separate audience page"]
+  Stage -->|matching paint and heartbeat| Runtime
+  Runtime <-->|transcribe final turn / synthesize approved attempt| Voice["Private Python voice adapter"]
+  Runtime <-->|playout and interruption events / approve diff| Host
+  Runtime --> Export["Standalone public HTML"]
 ```
 
 ### HTTP ownership
@@ -74,10 +82,10 @@ Express 5 owns the public HTTP boundary on Bun. Feature routers mount at `/api` 
 
 1. Start privately. Spoken and typed input enter the same brief. Keep host words, inferred assumptions, private attachments, approved URLs and proposed public queries distinct. Learn the audience, requested decision, time, language, source scope and requested demonstrations as relevant. A precise prompt can go directly to review. For “pitch onboarding,” ask the one question most likely to change the search, such as whether the listener is a buyer choosing a pilot or an engineer choosing an integration.
 2. Show the interpreted brief and public questions. A host answer patches the brief. Build confirms its exact version. Keep the foreground turn path available during research. “How far did you get?” reads job progress. “Only my files” narrows scope, invalidates dependent results and prevents new outbound searches. Keep one durable job key per session and confirmed brief. Renew leases and check the current revision before every dispatch and commit.
-3. Ingest material with a locator. For pasted material retain its character range. Target PDF pages, PPTX slide numbers and CSV row ranges as additional adapters. In files-only mode omit external lookup tools. For discovery, use hosted web search with reviewed public questions. For an explicit page, require a completed open/find action on that URL and a matching citation. Retrieval failure leaves a gap and offers pasted material. Private material must never be appended to a public search query.
-4. Store findings with evidence IDs and supporting excerpts, origin, retrieval location and gaps. Compare units, population, time period and denominator before combining metrics. Compute charts from source rows. An excerpt match proves traceability; a separate review must evaluate whether it supports the claim. Conflicting sources retain both definitions. The existing research implementation bounds public lookup tasks and withholds unsupported reference/excerpt pairs.
-5. Save the memo and speaking content together. The synthesis response includes an opening, supporting points and a closing ask. The review also checks each speaking passage before the host receives it. The private pitch endpoint reads the saved script or existing reviewed findings without another model call. A second pass compiles the talk. Preserve the distinction between a visible assertion, private explanatory narration and support available for Q&A. A deterministic first compiler can select short highlights from validated findings without another paid call. Pitch variants ask the configured planning model to select and order approved slide IDs for the audience and speaking time. Without a usable model response the service ranks existing slides by audience terms and keeps complete explanations within the budget. Review shows the rationale and a duration estimate at 135 words per minute plus three seconds per slide. Walkthrough time is a later addition.
-6. Private review is the handoff. Preview the actual HTML, clarify omissions, request a diff, approve the revision and start explicitly. Hold spoken updates while the host is speaking. Keep a cleanup path for expired audio and unapplied proposals.
+3. Ingest material with a locator, including the character range for pasted material, page for text PDFs, slide for PPTX and row range for CSV. The studio research worker uses `SessionRunner` and the shared Vercel AI SDK adapter. The agent chooses its next action from the approved goal and returned evidence. Its tools are native OpenAI web search for approved queries and URL reading for approved or discovered links. Search returns candidate links; only a successful source read adds public evidence. Files-only research skips network tools, and private material stays out of public queries.
+4. Checkpoint each tool result, source and runner state in the leased job. A tool call and its result count as one step, including failed calls. Each pass permits up to 10 steps. The model may request one extra pass by naming a material gap, why it matters, and an unused eligible lookup that could resolve it. The server validates that request within the original approval and the job budget. Resume from the last committed result after a worker restart. The writer cites stored records and states material gaps. A separate fact-check reviews each claim against its cited evidence before publication.
+5. Publish the immutable `context.md` and verified findings under the same research ID. The viewer replays verified text from the authenticated SSE endpoint, parses complete graph blocks and lets the host download the same Markdown revision. Internal host-note provenance remains in the private bundle. The research preview ends here and stays usable independently of a deck.
+6. The host chooses **Prepare slides** in the same project. Express loads the verified bundle by research ID. The planner uses the audience, duration, findings and evidence to choose the slide order, templates, concise visible content and private narration. Independent review can keep a consecutive supported sequence or request one repair if all proposed beats fail. The controller assigns slide, beat and sentence IDs and persists a draft. The host sees the actual HTML, narration and sources in review, then explicitly approves the revision to present.
 
 ## 2. Presentation and intervention
 
@@ -90,7 +98,9 @@ Express 5 owns the public HTTP boundary on Bun. Feature routers mount at `/api` 
 | “Actually fix that” | Ask what “that” refers to when ambiguous. For a specific correction show a private before/after of the affected visible highlight and narration. Keep the previous revision playable. | Approve once against the base revision, invalidate changed audio, repaint, then resume. Reject keeps the prior revision. Retain completed credit only for unchanged claims. |
 | Continue, back, skip or reconnect | Consult point requirements, delivered claims, verified demo objectives, explicit skips and current dependencies. | Resume the earliest unfinished eligible point. Replay a partial claim at a safe sentence boundary. Reconnect paused; an explicit revisit gets a new attempt. |
 
-A point in the plan declares what satisfies it. Setup may be satisfied by **either** an explanation **or** a displayed demo. A mandatory limitation may require **both**. If setup is displayed after a mid-sentence interruption, the demo can complete the point while the spoken attempt stays partial. If the site requires login, the explanation remains due. The next sentence follows the plan's requirement and the recorded observations. This is the continuation harness. [Paired fixture and independent scoring](continuation-review.md)
+Module 2 persists the deck revision, current sentence, playback attempt, private pending diff and stage sequence. The host browser stops audio locally on interruption and Express pins the sentence for the turn. A question can resume that sentence after the answer plays. A correction stays private until approved. Approval commits one revision and the corresponding slide must paint before narration of that revision can advance. The audience token serves the slide projection and matching paint acknowledgements. Offline HTML uses the same slide renderer and excludes the private narration and transcript. [Module 2 implementation and rehearsal](../handoffs/2-live-presentation.md)
+
+Module 3 extends that cursor with explanation and demo requirements. A demo can satisfy a point that allows it, while a required limitation remains due until spoken. [Paired fixture and independent scoring](continuation-review.md)
 
 ## 3. Guided walkthrough · from utterance to webpage
 

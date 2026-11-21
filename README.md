@@ -52,13 +52,13 @@ Set `OPENAI_API_KEY` and `OPENAI_TEXT_MODELS` in the backend process environment
 ]
 ```
 
-The session tool provider maps to `find_context` (find a phrase) and `read_context` (read an excerpt). Set `tool_providers` to an empty array to disable tools for a model. Optional `pricing` accepts `input`, `cached_input` and `output` in USD per million tokens plus a `version` label. Attempts with insufficient pricing or usage report a null estimate. The pitch practice page at `/chat` posts to `/api/chat` and uses browser speech recognition and synthesis. The pitch studio uses WebRTC transcription and a private Python adapter for signaling and speech synthesis.
+The session tool provider maps to `find_context` (find a phrase) and `read_context` (read an excerpt). Set `tool_providers` to an empty array to disable tools for a model. Optional `pricing` accepts `input`, `cached_input` and `output` in USD per million tokens plus a `version` label. Attempts with insufficient pricing or usage report a null estimate. The pitch practice page at `/chat` posts to `/api/chat` and uses browser speech recognition and synthesis. The pitch studio uses the OpenAI Realtime interviewer over WebRTC. The private Python adapter negotiates the call and Express validates actions through the server sideband.
 
 Session persistence uses Bun’s SQLite driver. For a legacy local development client, create a session with `POST /api/sessions` and keep the returned `session_id` and bearer `token` for the host. Send the token as a Bearer token to `POST /api/sessions/:session_id/runs` with a JSON body containing `message` and optional `context`. The response includes `run_id`. Subscribe to `GET /api/sessions/:session_id/runs/:run_id/events` with the same token. Supply `Last-Event-ID` when reconnecting. Cancel with `DELETE /api/sessions/:session_id/runs/:run_id`. Disconnecting the stream leaves the worker running. A backend restart preserves stored events and marks an unfinished run failed.
 
 ## Research workspace
 
-Open `/research`, sign in or create an account, then create or reopen a project. Speak or type what you want to pitch and who will be listening. Review the interpreted scope and proposed searches, then choose **Start researching**. Select the finished `pitch.md` file to open the private viewer with an opening, talking points, closing ask and cited sources when supported. You can copy it before preparing any slides. Review the proposed public queries and supplied URLs before confirming. Download the resulting prose memo as `presentation.md`. The workflow requires an OpenAI API key and a configured text model that supports structured output. Public research also requires Responses web search support. The implementation uses OpenAI for discovery and citation-backed public findings. For a named URL the server requires a completed open or find action on that page plus a matching citation. Models without page-reading support can still return discovery results and an explicit gap for the requested URL.
+Open `/research`, sign in and create or reopen a project. Speak or type what you want to pitch and who will be listening. Review the interpreted scope, public research permissions and proposed sources, then choose **Start research**. Open the finished `context.md` to read and download the verified reference document, citations and supported charts. This context can feed slide planning in the same project. The workflow requires a configured OpenAI model. Public research also requires Responses web search support. The worker chooses search or eligible page reads based on the approved purpose and keeps supporting evidence and limitations with the context.
 
 ## Spoken research interview
 
@@ -68,7 +68,7 @@ For Compose, set `VOICE_WORKER_TOKEN` to a generated secret shared by the API an
 bun run dev:all
 ```
 
-Open a project and select **Start voice conversation**. Speak naturally, interrupt the agent, or ask for progress while research runs. The host can mute replies or choose to review each transcript before sending. Public search requires an approved brief and compatible OpenAI model. The downloadable Markdown, research job and compiled deck survive an API restart when the SQLite volume persists.
+Open a project and start voice or type in chat. Review the plan and approve it before research starts. The browser releases the microphone after the approval acknowledgement. Chat can show progress while the job runs. The downloadable Markdown, research job and compiled deck survive an API restart when the SQLite volume persists.
 
 ## Product and implementation
 

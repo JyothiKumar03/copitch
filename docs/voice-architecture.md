@@ -1,6 +1,6 @@
 # Voice protocol · Private interview and public delivery
 
-Module 1 uses a continuous host microphone with OpenAI WebRTC transcription. Express authenticates signaling, Python exchanges the SDP with OpenAI, and React sends finalized speech into the same session path as typed messages. Python synthesizes authorized replies for a single host player. Modules 2 and 3 are planned consumers. [Module 1 architecture](architecture.md#module-1-saas-architecture)
+Module 1 uses the OpenAI Realtime model as the spoken interviewer. The browser connects over WebRTC after the host enables the microphone. Express authenticates signaling and opens a server-side connection to the same call. The voice model proposes replies and actions. The authoritative controller validates actions against the current private project, the saved plan and the host's approval. Typed chat uses the same state and rules. [Module 1 architecture](architecture.md#module-1-saas-architecture)
 
 The recorded-turn HTTP endpoint also accepts complete audio files. The public presentation scaffold still uses native browser speech controls. [Interview adapter](../voice/server.py) · [Studio](../frontend/components/research/ResearchWorkspace.tsx)
 
@@ -8,9 +8,9 @@ Implementation status and outstanding acceptance tests are tracked in the [curre
 
 ## Transport and events
 
-Start capture after the signed-in host enables voice and grants microphone permission. Issue a short-lived grant bound to the authorized workspace, project and session for authenticated media signaling. Keep the connection open through agent replies, scope confirmation, background research and artifact selection. The host can stop capture immediately. A denied microphone leaves the text conversation usable. Reconnect loads durable state paused and prompts the host to resume audio. Logout closes the media connection and releases local tracks.
+Start capture after the signed-in host enables voice and grants microphone permission. Keep the connection open through agent replies and scope confirmation. When research starts, finish the acknowledgement and close capture. The host can stop capture immediately or explicitly reopen voice. A denied microphone leaves the text conversation usable. Reconnect loads durable state with capture off.
 
-After project authorization, Python obtains a scoped, short-lived transcription credential and exchanges the browser offer for an SDP answer. The browser receives the answer and opens a direct encrypted media channel to OpenAI. Keep provider credentials in Python. Browser echo cancellation and provider voice activity detection support interruption during playout. AWS carries HTTPS signaling and reply audio. [OpenAI Realtime transcription](https://developers.openai.com/api/docs/guides/realtime-transcription)
+Express keeps the provider key on the server and uses the provider call ID to bind sideband events to the authorized project. OpenAI manages speech detection and interruption. Use the proposal and originating turn IDs for playback and approval. An interrupted or unconfirmed readback cannot authorize a spoken start. The browser can always approve the current proposal explicitly. Media travels from the browser to OpenAI. [OpenAI Realtime WebRTC](https://developers.openai.com/api/docs/guides/realtime-webrtc) · [Server-side controls](https://developers.openai.com/api/docs/guides/realtime-server-controls)
 
 The wire envelope carries session, producer incarnation, source sequence, turn, generation, revision and event ID. TypeScript assigns the durable commit order. Accept trusted worker observations, player events and stage acknowledgments only from their corresponding authenticated channels. A host command cannot impersonate them. Persist finalized transcript and decision separately. Resume after disconnect in a paused state.
 
@@ -30,7 +30,7 @@ The host player records start, offset, last rendered position, device-output est
 
 ## Verification
 
-For Module 1, start a project, approve a scope in one language, switch languages during a spoken reply and ask for progress while research is running. Verify the interruption, transcript, reply language, single authorized turn and eventual saved pitch. Repeat with a denied mic, a disconnected media stream and another account attempting to open the session. Measure speech onset to audible cutoff and end of speech to first audible reply on a real device. Record languages, hardware, provider and observed timings with the release evidence.
+For Module 1, start a project, switch languages and interrupt a spoken plan. Verify that a premature approval leaves the job unstarted. Approve the current plan, check that capture ends, then ask for progress in chat and reopen the saved pitch. Repeat with a denied mic, a disconnected media stream and another account attempting to open the session. Measure speech onset to audible cutoff and end of speech to first audible reply on a real device. Record languages, hardware, provider and observed timings with the release evidence.
 
 Use the paired setup fixture in continuation-review.md, then rehearse with actual captured speech and acoustic loopback on the event laptop. Score false coverage, missed/false stop, incorrect next point, onset-to-audible-stop and final-turn-to-screen-paint. Separate model, media, rendering and network failures. Keep typed/manual controls when access or hardware fails.
 

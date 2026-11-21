@@ -8,7 +8,7 @@ Implementation status and outstanding acceptance tests are tracked in the [curre
 
 Sign in, create a private project and start one voice session. Speak in each supported language, switch languages mid-conversation and interrupt an agent reply. Attach a source, approve its research scope and ask for progress aloud while the job runs. A microphone denial must leave the same flow available through text.
 
-On desktop, find the agent on the right and the conversation and files in the center. Select the final `pitch.md`, open its private preview, inspect a chart and check its numbers against the cited evidence. Download the saved Markdown. Sign in from a fresh browser and reopen the project at the same result. Verify a second account cannot fetch the first account’s source, job status or artifact even with the resource ID.
+On desktop, find the agent on the right and the conversation and files in the center. Select the final `context.md`, open its private preview, inspect a chart and check its numbers against the cited evidence. Download the saved Markdown. Sign in from a fresh browser and reopen the project at the same result. Verify a second account cannot fetch the first account’s source, job status or artifact even with the resource ID.
 
 Record results from real speech and a provider-backed research run, including recovery after a disconnect or worker restart. Verify account access, persistent storage and restore on the intended host before a SaaS release. Public deployment requires owner approval.
 

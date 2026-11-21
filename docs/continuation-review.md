@@ -4,7 +4,7 @@ Pre-implementation review and acceptance fixtures from baseline fcbe40d. For the
 
 ## Current gap register
 
-Build **Module 1, the private pitch studio**, as an independently usable SaaS release. Its customer output is a saved, cited `pitch.md` with a separate supporting memo. HTML slide preparation is optional. Use the [Module 1 customer release checks](plan.md#module-1-customer-release) to assess readiness. Module 2 can develop against a saved bundle. Module 3 can develop against a recorded presentation cursor. Neither needs production browser automation to begin.
+Build **Module 1, the private pitch studio**, as an independently usable SaaS release. Its customer output is a saved, cited `context.md`. HTML slide preparation is optional. Use the [Module 1 customer release checks](plan.md#module-1-customer-release) to assess readiness. Module 2 can develop against a saved bundle. Module 3 can develop against a recorded presentation cursor. Neither needs production browser automation to begin.
 
 | Priority and owner | Working evidence in the repository | Remaining release gap and independent exit test |
 |---|---|---|
