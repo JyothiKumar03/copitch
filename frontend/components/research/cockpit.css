@@ -1,0 +1,39 @@
+.voice-instrument {
+  position:relative; isolation:isolate; overflow:hidden; color:#fff5ef;
+  background:radial-gradient(ellipse at 53% 37%, #64374e 0%, #492b3d 45%, #352535 88%);
+  border:1px solid #533248;
+}
+.instrument-orb { display:grid; place-items:center; height:clamp(10rem,18vw,16.5rem); }
+.instrument-weave { position:relative; width:clamp(7.5rem,13vw,11.5rem); aspect-ratio:1; filter:drop-shadow(0 0 7px #e7a89c55); }
+.instrument-weave i { position:absolute; inset:0; border:1.15px solid #ffd0ba; border-radius:46% 54% 57% 43% / 48% 43% 57% 52%; }
+.instrument-caption { position:relative; display:flex; align-items:baseline; justify-content:space-between; flex-wrap:wrap; gap:.5rem; padding:0 1.25rem 1.1rem; }
+.instrument-state { display:inline-flex; align-items:center; gap:.4rem; color:#ffe5d8; font-size:.8rem; }
+.instrument-state:before { content:""; width:.44rem; height:.44rem; background:#ffbd9d; border-radius:50%; }
+.voice-instrument:is([data-state=speaking],[data-state=recording]) .instrument-weave { animation:instrument-voice 1.4s ease-in-out infinite alternate; }
+.voice-instrument:is([data-state=researching],[data-state=transcribing],[data-state=thinking],[data-state=connecting]) .instrument-weave { animation:instrument-turn 12s linear infinite; }
+.voice-instrument[data-state=listening] .instrument-weave { animation:instrument-voice 3s ease-in-out infinite alternate; }
+@keyframes instrument-voice { to { transform:scale(1.07,.89) rotate(9deg); filter:drop-shadow(0 0 10px #ffbfaa88); } }
+@keyframes instrument-turn { to { transform:rotate(360deg); } }
+@media(max-width:767px) {
+  .voice-instrument { display:flex; align-items:center; gap:.75rem; padding:1rem; }
+  .instrument-orb { width:4.2rem; height:4.2rem; flex:none; }
+  .instrument-weave { width:3.8rem; }
+  .instrument-caption { display:grid; padding:0; }
+}
+@media(prefers-reduced-motion:reduce) { .voice-instrument .instrument-weave { animation:none!important; } }
+.conversation-timeline { min-width:0; max-height:clamp(15rem,50dvh,45rem); overflow-y:auto; overscroll-behavior:contain; scrollbar-gutter:stable; }
+.studio-cockpit { display:grid; grid-template-columns:minmax(0,1.7fr) minmax(15rem,.8fr); grid-template-rows:auto 1fr; gap:0 2rem; grid-template-areas:"chat agent" "chat settings"; align-items:start; }
+.cockpit-agent { grid-area:agent; }
+.cockpit-settings { grid-area:settings; }
+.cockpit-chat { grid-area:chat; }
+@media(max-width:767px) {
+  .studio-cockpit { grid-template-columns:minmax(0,1fr); grid-template-rows:auto; gap:.75rem; grid-template-areas:"agent" "chat" "settings"; }
+  .cockpit-agent { display:flex; flex-wrap:wrap; align-items:stretch; background:#352535; }
+  .cockpit-agent .voice-instrument { flex:1 1 14rem; }
+  .cockpit-agent > div { flex:1 0 auto; border:0; justify-content:flex-end; align-content:center; background:var(--color-card,var(--paper-light)); }
+  .instrument-orb { width:3rem; height:3rem; }
+  .instrument-weave { width:2.8rem; }
+  .voice-instrument { padding:.65rem .8rem; }
+  .instrument-caption { gap:.2rem; }
+  .conversation-timeline { max-height:47dvh; }
+}
