@@ -1,161 +1,221 @@
 import { expect, test } from "bun:test";
 import { SessionStore } from "../src/repositories/session";
 import { interview_workspace } from "../src/services/interview";
-import { run_studio_turn } from "../src/services/studio-turn";
-import type { TStudioProposal } from "../src/services/studio-intent";
-import type { TStudioTurnInput } from "../src/types/studio-turn";
+import { apply_studio_agent_turn, apply_voice_action, record_voice_exchange, run_studio_turn, studio_context, update_studio_scope } from "../src/services/studio-turn";
+import type { TStudioAgent, TStudioAgentInput } from "../src/services/studio-agent";
+import type { TAgentTurn, TStudioTurnInput } from "../src/types/studio-turn";
 
-const proposed = (intent: TStudioProposal["intent"], data: Partial<TStudioProposal> = {}): TStudioProposal => ({
-  intent, language: "en", subject: null, audience: null, decision: null, fact: null, instruction: null, source_phrase: null, source_url: null, ...data,
-});
+const pitch_intent = { subject: "Onboarding pilot", audience: "The bank", outcome: "Agree to evaluate the pilot",
+  deliverable: "A short pilot pitch" };
+const remembered = {
+  reply: "I'll review the onboarding pilot for the bank. Shall I start?", language: "en",
+  actions: [
+    { kind: "remember", goal: "Onboarding pilot for a bank", notes: ["I led three regulated onboarding pilots."] },
+    { kind: "propose_research", summary: "Review the onboarding pilot for the bank", queries: ["bank onboarding"],
+      urls: ["https://example.com/"], intent: pitch_intent },
+  ],
+} satisfies TAgentTurn;
+const accepts = { reply: "I'll begin.", language: "en", actions: [{ kind: "start_research" }] } satisfies TAgentTurn;
 
 const studio = () => {
   const db = new SessionStore(":memory:");
   const session = crypto.randomUUID();
+  const responses: TAgentTurn[] = [];
+  const calls: TStudioAgentInput[] = [];
   const jobs: string[] = [];
-  const services = {
-    ensure_research: () => {}, wake: (id: string) => { jobs.push(id); },
-    provider: {
-      propose: async ({ message }: { message: string }) => {
-        if (message === "Make a deck about me.") return proposed("brief", { subject: "me" });
-        if (message === "It is JK-IFNA.") return proposed("correction", { subject: "JK-IFNA" });
-        if (message.includes("pilot-bookings.csv")) return proposed("brief", { subject: "pilot-bookings.csv", instruction: "Show a line chart" });
-        if (message === "Could you read the PDF?") return proposed("file_question");
-        if (message === "Does any file confirm a moon mission?") return proposed("file_question");
-        if (message === "What's on the slide?") return proposed("file_question");
-        if (message === "What does the CSV say?") return proposed("file_question");
-        if (message === "Proceed with everything you want") return proposed("approval");
-        return proposed("unsupported");
-      },
-      excerpts: async (question: string, evidence: { id: string; passage: string }[]) => ({ citations: evidence.map(line => ({
-        evidence_id: line.id, excerpt: question.includes("moon") ? "The moon mission was confirmed." : line.passage,
-      })) }),
-    },
+  const agent: TStudioAgent = async input => {
+    calls.push(input);
+    const response = responses.shift();
+    if (!response) throw new Error("Fixture unavailable");
+    return response;
   };
-  const input = (message: string, partial: Partial<TStudioTurnInput> = {}): TStudioTurnInput => ({
-    turn_id: crypto.randomUUID(), message, input: "typed", brief_id: db.current_brief(session)?.brief_id, ...partial,
-  });
-  const send = (message: string, partial: Partial<TStudioTurnInput> = {}) => run_studio_turn(db, session, input(message, partial), services);
-  return { db, session, pending: () => interview_workspace(session, db).pending_question, jobs, send, input, services };
+  const service = { agent, ensure_research: () => {}, wake: (id: string) => { jobs.push(id); } };
+  const send = (message: string, overrides: Partial<TStudioTurnInput> = {}) =>
+    run_studio_turn(db, session, { turn_id: crypto.randomUUID(), input: "typed", message, ...overrides }, service);
+  const state = () => studio_context(db, session).state;
+  const propose = async () => {
+    responses.push(remembered);
+    return send("Build an onboarding pilot pitch for the bank. I led three regulated onboarding pilots. Use https://example.com/.");
+  };
+  return { db, session, responses, calls, jobs, service, send, state, propose };
 };
 
-test("language and open decisions survive reopen, and only the current approved scope queues once", async () => {
-  const { db, session, jobs, send, pending, input, services } = studio();
-  expect((await send("Hi!", { source_policy: "files_only" })).intent).toBe("greeting");
-  expect(interview_workspace(session, db).context?.source_policy).toBe("files_only");
-  expect(interview_workspace(session, db).brief).toBeNull();
-  expect(interview_workspace(session, db).history.map(turn => turn.role)).toEqual(["host", "assistant"]);
-  await send("Please reply in Hindi from now on.");
-  expect(db.studio.language_preference(session)).toBe("hi");
-  const pitch = await send("Make a deck about me.");
-  expect(db.studio.reply_language(session, pitch.turn_id)).toBe("hi");
-  const audience = pending()!;
-  expect(audience.kind).toBe("audience");
-  await send("What language are you speaking?");
-  expect(pending()!.request_id).toBe(audience.request_id);
-  await send("Board", { answer_to: audience.request_id, option_id: "board" });
-  const decision = pending()!;
-  expect(decision.kind).toBe("decision");
-  await expect(send("Potential buyers", { answer_to: audience.request_id, option_id: "buyers" })).rejects.toThrow("no longer open");
-  await expect(send("Invented choice", { answer_to: decision.request_id, option_id: "invented" })).rejects.toThrow("offered");
-  await send("Approve a summer pilot", { answer_to: decision.request_id });
-  const approval = pending()!;
-  expect(approval.kind).toBe("approval");
-  expect(interview_workspace(session, db).context?.entities).toMatchObject({ subject: "me", audience: "बोर्ड", decision: "Approve a summer pilot" });
-  await send("Proceed with everything you want");
-  expect(jobs).toEqual([]);
-  const request = input("Start researching", { answer_to: approval.request_id, option_id: "approve" });
-  const accepted = await run_studio_turn(db, session, request, services);
-  expect(accepted.activity?.tool).toBe("queue_research");
-  expect(await run_studio_turn(db, session, request, services)).toEqual(accepted);
+test("opening greeting creates no proposal", async () => {
+  const { responses, send, calls, jobs } = studio();
+  responses.push({ reply: "Hi. What do you want to pitch?", language: "en", actions: [] });
+  const reply = await send("Hello");
+  expect(reply.phase).toBe("interview");
+  expect(reply.proposal).toBeNull();
+  expect(reply.text).toBe("Hi. What do you want to pitch?");
+  expect(calls).toHaveLength(1);
+  expect(jobs).toHaveLength(0);
+});
+
+test("propose then explicit typed approve queues one job without a second model call", async () => {
+  const { db, session, propose, send, responses, calls, jobs } = studio();
+  const proposal = (await propose()).proposal!;
+  expect(proposal.urls).toEqual(["https://example.com/"]);
+  responses.push(accepts);
+  expect((await send("Yes")).phase).toBe("proposed");
+  expect(jobs).toHaveLength(0);
+  const approve = { input: "typed" as const, message: "Start research", turn_id: crypto.randomUUID(), option_id: "approve" as const, answer_to: proposal.proposal_id };
+  const reply = await run_studio_turn(db, session, approve, { agent: async () => { throw new Error("No model needed"); }, ensure_research: () => {}, wake: id => { jobs.push(id); } });
+  expect(reply.phase).toBe("researching");
+  expect(reply.activity?.tool).toBe("queue_research");
+  expect(db.current_brief(session)?.studio_notes).toEqual(["I led three regulated onboarding pilots."]);
+  expect(db.current_brief(session)?.intent).toEqual(pitch_intent);
+  expect(db.current_brief(session)?.studio_version).toBe(2);
+  expect(calls).toHaveLength(2);
   expect(jobs).toHaveLength(1);
-  expect(pending()).toBeNull();
-  await send("How far along are you?");
-  await send("Make a deck about me.");
-  expect(interview_workspace(session, db).job?.job_id).toBe(jobs[0]);
-  expect(interview_workspace(session, db).brief?.brief_id).toBe(approval.brief_id!);
-  const history = interview_workspace(session, db);
-  expect(history.activities.find(item => item.turn_id === audience.turn_id)?.question?.options).toEqual(audience.options);
-  expect(history.history.find(item => item.turn_id === request.turn_id)).toMatchObject({ answer_to: approval.request_id, option_id: "approve" });
 });
 
-test("spoken addresses need confirmation, and source corrections preserve the subject and never enqueue research", async () => {
-  const { db, session, jobs, send, pending } = studio();
-  await send("Make a deck about me.");
-  await send("Use dk-ai.in", { input: "speech" });
-  const guessed = pending()!;
-  expect(guessed.kind).toBe("source_url");
-  expect(interview_workspace(session, db).context?.entities.urls).toEqual([]);
-  db.studio.offer_question(session, guessed.turn_id);
-  db.studio.acknowledge_question(session, guessed.request_id, guessed.turn_id);
-  await send("It is JK-IFNA.", { input: "speech" });
-  const reference = pending()!;
-  expect(reference.kind).toBe("reference");
-  expect(interview_workspace(session, db).context?.entities.subject).toBe("me");
-  await send("Yes", { input: "speech", heard_question_id: guessed.request_id, heard_turn_id: guessed.turn_id });
-  expect(pending()?.request_id).toBe(reference.request_id);
-  expect(interview_workspace(session, db).context?.entities.urls).toEqual([]);
-  await send("It's the source address", { answer_to: reference.request_id, option_id: "source", heard_question_id: guessed.request_id, heard_turn_id: guessed.turn_id });
-  expect(pending()?.kind).toBe("source_url");
-  await send("No, the source is jk-ai.in", { answer_to: pending()?.request_id });
-  const recovered = interview_workspace(session, db);
-  expect(recovered.context?.entities).toMatchObject({ subject: "me", urls: ["https://jk-ai.in/"] });
-  expect(recovered.context?.pending).toBeNull();
-  await send("Use jk-ai.in", { input: "speech" });
-  const confirm = pending()!;
-  await expect(Promise.resolve().then(() => db.studio.acknowledge_question(session, confirm.request_id, confirm.turn_id))).rejects.toThrow("not offered");
-  await send("Yes, confirm this URL.", { input: "speech" });
-  expect(interview_workspace(session, db).context?.pending?.url).toBe("https://jk-ai.in/");
-  db.studio.offer_question(session, confirm.turn_id);
-  db.studio.acknowledge_question(session, confirm.request_id, confirm.turn_id);
-  await send("Yes, but change the website.", { input: "speech" });
-  expect(interview_workspace(session, db).context?.pending?.url).toBe("https://jk-ai.in/");
-  await send("Yes, that is the correct website.", { input: "speech" });
-  expect(interview_workspace(session, db).context?.pending).toBeNull();
-  await send("Use other-site.in", { input: "speech" });
-  const discard = pending()!;
-  db.studio.offer_question(session, discard.turn_id);
-  db.studio.acknowledge_question(session, discard.request_id, discard.turn_id);
-  await send("No.", { input: "speech" });
-  expect(interview_workspace(session, db).context?.entities.urls).toEqual(["https://jk-ai.in/"]);
-  expect(jobs).toEqual([]);
+test("spoken yes without heard proposal does not start research", async () => {
+  const { db, session, propose, state, service, jobs } = studio();
+  const offered = await propose();
+  const basis_before_heard = { revision: studio_context(db, session).revision, proposal_id: offered.proposal!.proposal_id, proposal_heard: false };
+  db.studio.hear_proposal(session, offered.proposal!.proposal_id, offered.turn_id);
+  const reply = apply_studio_agent_turn(db, session, { input: "speech", message: "Yes", turn_id: crypto.randomUUID() }, accepts, service, basis_before_heard);
+  expect(reply.phase).toBe("proposed");
+  expect(reply.text).toContain("Shall I start?");
+  expect(jobs).toHaveLength(0);
+  expect(state().proposal_turn_id).toBe(reply.turn_id);
+  expect(state().proposal_heard).toBe(false);
 });
 
-test("a fully heard source question accepts the Hindi affirmative without starting research", async () => {
-  const { db, session, jobs, send, pending } = studio();
-  await send("Hindi");
-  await send("मेरी वेबसाइट jk-ai.in है।", { input: "speech" });
-  const question = pending()!;
-  db.studio.offer_question(session, question.turn_id);
-  db.studio.acknowledge_question(session, question.request_id, question.turn_id);
-  await send("हाँ, यही सही वेबसाइट है।", { input: "speech" });
-  expect(interview_workspace(session, db).context?.entities.urls).toEqual(["https://jk-ai.in/"]);
-  expect(jobs).toEqual([]);
+test("a heard plan starts on the agent's start call", async () => {
+  const { db, session, propose, service, jobs } = studio();
+  const offer = await propose();
+  db.studio.hear_proposal(session, offer.proposal!.proposal_id, offer.turn_id);
+  const basis = { revision: studio_context(db, session).revision, proposal_id: offer.proposal!.proposal_id, proposal_heard: true };
+  const started = apply_studio_agent_turn(db, session, { turn_id: crypto.randomUUID(), message: "Yes, go ahead.", input: "speech" }, accepts, service, basis);
+  expect([started.phase, jobs.length]).toEqual(["researching", 1]);
+});
+test("a new goal while proposed returns to interview and invalidates the old option", async () => {
+  const { propose, send, responses, jobs } = studio();
+  const offer = await propose();
+  responses.push({ reply: "Who are you presenting to?", language: "en", actions: [{ kind: "remember", goal: "Partner alignment", notes: [] }] });
+  expect((await send("Switch the pitch to partner alignment.")).phase).toBe("interview");
+  await expect(send("Start research", { option_id: "approve", answer_to: offer.proposal!.proposal_id })).rejects.toThrow("no longer open");
+  expect(jobs).toHaveLength(0);
 });
 
-test("file replies use only project-scoped verified excerpts and their source locators", async () => {
-  const { db, session, send } = studio();
-  for (const kind of ["pdf", "pptx", "csv"] as const) {
-    const source_id = crypto.randomUUID();
-    const filename = "Pilot." + kind;
-    db.sources.save(session, kind, { source_id, kind, filename, locations: 1, records: [{ number: 2, text: "Pilot includes 24 buyers." }], gaps: [] });
-    const question = { pdf: "Could you read the PDF?", pptx: "What does the PowerPoint say about the pilot? Cite the slide.", csv: "What does the CSV say?" }[kind];
-    const result = await send(question, { source_ids: [source_id] });
-    expect(result.text).toContain(filename);
-    expect(result.activity?.citations?.[0]).toMatchObject({ excerpt: "Pilot includes 24 buyers." });
-  }
-  expect((await send("Does any file confirm a moon mission?")).text).toContain("couldn't find");
-  const foreign = crypto.randomUUID();
-  db.sources.save("another-project", "pdf", { source_id: foreign, filename: "Private.pdf", kind: "pdf", locations: 1, records: [], gaps: [] });
-  await expect(send("Could you read the PDF?", { source_ids: [foreign] })).rejects.toThrow("Unknown research source");
-});
-
-test("a supplied filename guides source scope without replacing a missing topic", async () => {
-  const { db, session, send, pending } = studio();
-  await send("Prepare a pitch. Use only pilot-bookings.csv. Show a line chart.");
+test("a scope-only update invalidates the old approval without adding conversation turns", async () => {
+  const { db, session, propose, send, jobs } = studio();
+  const offer = await propose();
+  const history = interview_workspace(session, db).history;
+  update_studio_scope(db, session, { source_ids: [], source_policy: "files_only", urls: [], materials: "",
+    expected_proposal_id: offer.proposal!.proposal_id });
   const workspace = interview_workspace(session, db);
-  expect(workspace.context?.entities.subject).toBeNull();
-  expect(pending()?.kind).toBe("subject");
-  expect(workspace.context?.source_policy).toBe("files_only");
-  expect(workspace.brief?.summary).toContain("Show a line chart");
+  expect(workspace.phase).toBe("interview");
+  expect(workspace.history).toEqual(history);
+  expect(workspace.state.source_policy).toBe("files_only");
+  await expect(send("Start research", { option_id: "approve", answer_to: offer.proposal!.proposal_id })).rejects.toThrow("no longer open");
+  expect(jobs).toHaveLength(0);
+});
+
+test("start_research in interview is ignored", async () => {
+  const { responses, send, jobs, db, session } = studio();
+  responses.push(accepts);
+  expect((await send("Start", { input: "speech" })).phase).toBe("interview");
+  expect(jobs).toHaveLength(0);
+  expect(db.current_brief(session)).toBeUndefined();
+});
+
+test("agent failure leaves state unchanged and records a retry reply", async () => {
+  const { propose, send, state } = studio();
+  await propose();
+  const before = state();
+  const reply = await send("What can we do next?", { materials: "Uncommitted material" });
+  expect(reply.text).toBe("Sorry, I lost that. Could you say it again?");
+  expect(state()).toEqual(before);
+});
+
+test("replayed turn id returns the stored turn without another generation", async () => {
+  const { responses, send, calls } = studio();
+  responses.push({ reply: "What do you want to pitch?", language: "te", actions: [] });
+  const turn_id = crypto.randomUUID();
+  const one = await send("హలో", { turn_id });
+  expect(await send("హలో", { turn_id })).toEqual(one);
+  expect(calls).toHaveLength(1);
+});
+
+test("private file answers cite exact selected source records in the same turn", async () => {
+  const { responses, send, calls, db, session } = studio();
+  const source_id = crypto.randomUUID();
+  db.sources.save(session, "pilot", { source_id, filename: "Pilot.pdf", kind: "pdf", locations: 1, gaps: [],
+    records: [{ number: 2, text: "Pilot includes 24 buyers." }] });
+  responses.push({ reply: "I checked the page.", language: "en", actions: [] });
+  await send("Read the uploaded page.", { source_ids: [source_id] });
+  expect(calls[0].evidence?.[0]).toMatchObject({ location: "Pilot.pdf, page 2", passage: "Pilot includes 24 buyers." });
+  responses.push({ reply: "It includes buyers.", language: "en", actions: [],
+    citations: [{ evidence_id: calls[0].evidence![0].id, excerpt: "Pilot includes 24 buyers." }] });
+  const reply = await send("How many buyers?");
+  expect(reply.activity?.citations?.[0]).toMatchObject({ excerpt: "Pilot includes 24 buyers.", location: "Pilot.pdf, page 2" });
+  expect(interview_workspace(session, db).sources[0].source_id).toBe(source_id);
+});
+
+test("an explicit Telugu preference survives project reopen", async () => {
+  const { responses, send, db, session } = studio();
+  responses.push({ reply: "సరే, తెలుగులో మాట్లాడతాను.", language: "te", actions: [{ kind: "set_reply_language", language: "te" }] });
+  await send("Reply in Telugu");
+  expect(interview_workspace(session, db).state.reply_language).toBe("te");
+});
+
+test("a turn is labelled with the language its reply is written in", async () => {
+  const { responses, send } = studio();
+  responses.push({ reply: "సరే, తెలుగులో మాట్లాడతాను.", language: "te", actions: [{ kind: "set_reply_language", language: "te" }] });
+  await send("Please speak Telugu with me.");
+  responses.push({ reply: "Sure. What should the deck say first?", language: "en", actions: [] });
+  expect((await send("What do you need from me first?")).language).toBe("en");
+});
+
+test("a voice turn that began before the previous reply was saved is still recorded", async () => {
+  const { responses, send, db, session } = studio();
+  const before = { revision: studio_context(db, session).revision, proposal_id: null, proposal_heard: false };
+  responses.push({ reply: "What are you pitching?", language: "en", actions: [] });
+  await send("Hi");
+  const saved = apply_studio_agent_turn(db, session, { turn_id: crypto.randomUUID(), message: "A book I wrote on applied AI.", input: "speech" },
+    { reply: "Who is the book for?", language: "en", actions: [] }, { ensure_research: () => {}, wake: () => {} }, before);
+  expect(saved.text).toBe("Who is the book for?");
+  expect(interview_workspace(session, db).history.map(turn => turn.text)).toContain("A book I wrote on applied AI.");
+});
+
+test("a saved voice turn names the speech items it was built from", async () => {
+  const { db, session } = studio();
+  apply_studio_agent_turn(db, session, { turn_id: crypto.randomUUID(), message: "A book. On applied AI.", input: "speech" },
+    { reply: "Who is it for?", language: "en", actions: [] }, { ensure_research: () => {}, wake: () => {} },
+    { revision: 0, proposal_id: null, proposal_heard: false }, ["item_a", "item_b"]);
+  const host = interview_workspace(session, db).history.find(turn => turn.role === "host");
+  expect(host?.voice_items).toEqual(["item_a", "item_b"]);
+});
+
+const voice_services = (jobs: string[] = []) => ({ ensure_research: () => {}, wake: (id: string) => { jobs.push(id); } });
+
+test("a spoken exchange is recorded word for word", () => {
+  const { db, session, state } = studio();
+  record_voice_exchange(db, session, { turn_id: crypto.randomUUID(), host: "నేను ఒక URL ఇస్తా: jk-ai.in", agent: "సరే. Shall I start?", voice_items: ["live:1200"] });
+  const [host, agent] = interview_workspace(session, db).history;
+  expect([host.text, agent.text, host.voice_items]).toEqual(["నేను ఒక URL ఇస్తా: jk-ai.in", "సరే. Shall I start?", ["live:1200"]]);
+  expect(state().phase).toBe("interview");
+});
+
+test("a spoken plan is set without adding a turn, and only a fully heard plan can be approved by voice", () => {
+  const { db, session, state } = studio();
+  const jobs: string[] = [];
+  record_voice_exchange(db, session, { turn_id: crypto.randomUUID(), host: "I led three onboarding pilots.", agent: "You could mention another pilot.", voice_items: ["live:1"] });
+  const proposed = apply_voice_action(db, session, "Research jk-ai.in for a bank pitch about me.",
+    { kind: "propose_research", goal: "Pitch JK AI's services to a bank", summary: "Review jk-ai.in for a bank pitch", queries: ["JK AI services"],
+      urls: ["https://jk-ai.in/"], intent: pitch_intent,
+      factual_notes: ["I led three onboarding pilots.", "You could mention another pilot.", "I led six pilots."] }, voice_services(jobs));
+  expect(proposed.phase).toBe("proposed");
+  expect(proposed.proposal?.urls).toEqual(["https://jk-ai.in/"]);
+  expect(state().proposal_turn_id).toBe(proposed.turn_id);
+  expect(interview_workspace(session, db).history).toHaveLength(2);
+  // Not yet heard: refused, and the plan is to be read again under a new turn, which must itself be heard.
+  const refused = apply_voice_action(db, session, "Yes, go ahead.", { kind: "start_research" }, voice_services(jobs));
+  expect([refused.phase, state().proposal_turn_id, jobs.length]).toEqual(["proposed", refused.turn_id, 0]);
+  db.studio.hear_proposal(session, refused.proposal!.proposal_id, refused.turn_id);
+  const started = apply_voice_action(db, session, "Yes, go ahead.", { kind: "start_research" }, voice_services(jobs));
+  expect([started.phase, started.activity?.tool, jobs.length]).toEqual(["researching", "queue_research", 1]);
+  expect(db.current_brief(session)?.studio_notes).toEqual(["I led three onboarding pilots."]);
 });

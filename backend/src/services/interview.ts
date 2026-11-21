@@ -5,20 +5,22 @@ import type { SessionStore } from "../repositories/session";
 import { spoken_text_limit } from "../types/studio-turn";
 import type { TInterviewBrief, TInterviewWorkspace } from "../types/interview";
 import type { TResearchBrief } from "../types/research";
+import { studio_context } from "./studio-state";
 
 import type { TResearchJob } from "../types/research-job";
 
 export const progress_reply = (job: TResearchJob, language: "en" | "hi") => {
+  if (job.status === "needs_input") return job.error ?? "Add a source or a specific example before trying again.";
   const messages = {
-    en: { queued: "Your research is queued.", running: "Research is running.", completed: "Your pitch is ready to open.", failed: "Research stopped. You can retry from the studio.", superseded: "A newer brief replaced this research." },
-    hi: { queued: "आपका शोध कतार में है।", running: "शोध जारी है।", completed: "आपकी पिच तैयार है।", failed: "शोध रुक गया है। आप फिर कोशिश कर सकते हैं।", superseded: "शोध का विषय बदल गया है।" },
+    en: { queued: "Your research is queued.", running: "Research is running.", completed: "Your research context is ready to open.", failed: "Research stopped. You can retry from the studio.", superseded: "A newer brief replaced this research.", needs_input: "Research needs another source or a substantive detail before drafting." },
+    hi: { queued: "आपका शोध कतार में है।", running: "शोध जारी है।", completed: "आपका शोध पढ़ने के लिए तैयार है।", failed: "शोध रुक गया है। आप फिर कोशिश कर सकते हैं।", superseded: "शोध का विषय बदल गया है।", needs_input: "शोध के लिए एक और स्रोत या ठोस जानकारी चाहिए।" },
   };
   const progress = messages[language][job.status];
   if (job.status !== "running") return progress;
   return language === "hi" ? `${progress} अब तक खोज के ${job.completed_lookups} प्रयास हुए हैं।` : `${progress} Lookup attempts processed: ${job.completed_lookups}.`;
 };
 
-export const interview_greeting = "What are you pitching, and who will be listening?";
+export const interview_greeting = "What do you want to pitch?";
 export const max_spoken_length = spoken_text_limit;
 
 export const spoken_prompt = (brief: TResearchBrief): string => {
@@ -58,26 +60,25 @@ export const interview_brief = (brief: TResearchBrief, session?: string, db?: Se
 });
 
 export const interview_workspace = (session: string, db = database()): TInterviewWorkspace => {
-  const brief = db.current_brief(session);
+  const { state, snapshot, brief, job } = studio_context(db, session);
   const capabilities = { source_uploads: true };
-  const snapshot = db.studio.snapshot(session);
   const turns = snapshot ? db.studio.turns(session) : [];
   const history = snapshot && turns.length ? [...snapshot.prior_history, ...turns.flatMap(turn => {
     const identity = { turn_id: turn.turn_id, created_at: turn.created_at, intent: turn.intent, answer_to: turn.answer_to, option_id: turn.option_id };
-    return [{ role: "host" as const, text: turn.user_text, ...identity }, { role: "assistant" as const, text: turn.text, ...identity }];
+    return [{ role: "host" as const, text: turn.user_text, ...identity, ...(turn.voice_items && { voice_items: turn.voice_items }) },
+      { role: "assistant" as const, text: turn.text, ...identity }];
   })] : brief ? studio_history(brief, session, db) : snapshot?.prior_history ?? [];
   const conversation = {
-    history, sources: snapshot ? db.sources.selected(session, snapshot.context.source_ids).map(source_summary) : brief?.sources ?? [],
+    history, sources: snapshot ? db.sources.selected(session, state.source_ids).map(source_summary) : brief?.sources ?? [],
     activities: turns.flatMap(turn => turn.activity ? [{ turn_id: turn.turn_id, ...turn.activity }] : []),
-    pending_question: snapshot?.context.ask ?? null,
-    ...(snapshot && { context: snapshot.context }),
+    pending_question: null as null, phase: state.phase, proposal: state.proposal, state,
   };
   if (!brief) return { ...conversation, capabilities, job: null, brief: null, research: null };
   const bundle = db.research_by_brief(session, brief.brief_id);
   return {
     ...conversation, capabilities,
     artifacts: db.earlier_artifacts(session, brief.brief_id),
-    job: db.research_jobs.for_brief(session,brief.brief_id) ?? null,
+    job: job ?? null,
     brief: { ...interview_brief(brief, session, db), history, materials: brief.materials, urls: brief.urls, source_policy: brief.source_policy },
     research: bundle ? { research_id: bundle.research_id, markdown: bundle.markdown, gaps: bundle.gaps } : null,
   };
