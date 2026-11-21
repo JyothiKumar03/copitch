@@ -9,6 +9,8 @@ RUN mkdir classes && javac -cp 'lib/*' -d classes SlideText.java && \
 FROM oven/bun:1.3-alpine
 
 WORKDIR /app
+RUN apk add --no-cache chromium font-noto && \
+    ln -s "$(command -v chromium || command -v chromium-browser)" /usr/local/bin/copitch-chromium
 COPY --from=ppt-reader /reader/runtime /opt/copitch/ppt
 COPY --from=ppt-reader /reader/lib /opt/copitch/ppt/lib
 COPY --from=ppt-reader /reader/classes /opt/copitch/ppt/classes
@@ -25,6 +27,7 @@ COPY backend/tsconfig.json ./backend/tsconfig.json
 ENV NODE_ENV=production
 ENV PORT=3001
 ENV CORS_ORIGIN=http://localhost:3000
+ENV DECK_RENDER_CHROMIUM=/usr/local/bin/copitch-chromium
 
 EXPOSE 3001
 

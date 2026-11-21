@@ -17,6 +17,7 @@
     "cors": "^2.8.6",
     "csv-parse": "^7.0.3",
     "express": "^5",
+    "playwright": "^1.65.1",
     "saxes": "^6.0.0",
     "unpdf": "^2.2.1",
     "yauzl": "^3.4.0",
