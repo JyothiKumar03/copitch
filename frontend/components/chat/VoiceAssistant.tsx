@@ -29,11 +29,7 @@ export const VoiceAssistant = () => {
     recognition.interimResults = true;
     recognition.lang = "en-US";
     recognition.onresult = (event) => {
-      let transcript = "";
-      for (let i = event.resultIndex; i < event.results.length; i += 1) {
-        transcript += event.results[i][0].transcript;
-      }
-      setInput(transcript);
+      setInput(Array.from(event.results, result => result[0].transcript.trim()).filter(Boolean).join(" "));
     };
     recognition.onerror = (event) => {
       setError(`Speech recognition error: ${event.error}`);
@@ -110,7 +106,10 @@ export const VoiceAssistant = () => {
   return (
     <Card role="region" aria-label="Practice conversation" className="overflow-hidden">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4 sm:px-8">
-        <h2 className="font-display text-2xl">Conversation</h2>
+        <div>
+          <h2 className="font-display text-2xl">Conversation</h2>
+          {listening && <p role="status" className="mt-1 flex items-center gap-2 text-sm font-semibold text-live"><span className="size-2 rounded-full bg-live" aria-hidden="true" />Listening</p>}
+        </div>
         <label className="inline-flex min-h-9 cursor-pointer items-center gap-2 rounded-md border border-border px-3 text-sm text-muted-foreground">
           <input type="checkbox" className="size-4 accent-primary" checked={speakReplies}
             onChange={event => { setSpeakReplies(event.target.checked); if (!event.target.checked) window.speechSynthesis?.cancel(); }} />

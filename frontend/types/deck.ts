@@ -29,7 +29,7 @@ export type TSlide = {
   evidence_ids: string[];
 };
 export type TPublicSlide = Pick<TSlide, "slide_id" | "layout" | "title" | "highlights" | "evidence_ids" | "chart" | "chart_period" | "template">;
-// sources: readable source names for the slide footer (site names or file names), never internal evidence IDs.
+// sources: audience-safe site names or generic labels for private material.
 export type TSlideView = { deckTitle: string; index: number; total: number; slide: TPublicSlide; sources?: string[] };
 export type TPitchInput = {
   audience: string;
@@ -49,6 +49,7 @@ export type TDeck = {
   slides: TSlide[];
   pitch?: TPitchPlan;
   grounding_mode?: "verified" | "source_extracts";
+  render_review?: { status: "passed"; rounds: number };
   sources?: { id: string; origin: string; location: string; url?: string }[];
 };
 export type TProposal = {

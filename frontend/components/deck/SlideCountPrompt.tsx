@@ -14,12 +14,12 @@ export const SlideCountPrompt = ({ initialCount, pending, onPrepare }: TSlideCou
   const generate = () => { if (canGenerate) onPrepare({ slide_count: slideCount }); };
   return (
     <div className="grid gap-2" aria-busy={pending}>
-      <label htmlFor={inputId}>How many slides?</label>
+      <label htmlFor={inputId} className="text-sm font-semibold">How many slides?</label>
       <div className="flex flex-wrap items-center gap-2">
-        <Input id={inputId} type="number" inputMode="numeric" className="w-20" min={1} max={MAX_PRESENTATION_SLIDES} step={1}
+        <Input id={inputId} type="number" inputMode="numeric" className="w-22 tabular-nums" min={1} max={MAX_PRESENTATION_SLIDES} step={1}
           disabled={pending} placeholder={`1–${MAX_PRESENTATION_SLIDES}`} value={count} onChange={event => setCount(event.target.value)}
           onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); generate(); } }} />
-        <Button type="button" size="sm" disabled={!canGenerate} onClick={generate}>{pending ? "Generating slides…" : "Generate slides"}</Button>
+        <Button type="button" disabled={!canGenerate} onClick={generate}>{pending ? "Generating slides…" : "Generate slides"}</Button>
       </div>
     </div>
   );
