@@ -9,8 +9,87 @@ import { audience } from "../src/routes/audience";
 import { create_deck_router } from "../src/routes/deck";
 import type { TDeck } from "../src/types/deck";
 import type { TPresentationAction, TPresentationState } from "../src/types/presentation-live";
-import type { TResearchBrief } from "../src/types/research";
+import type { TEvidence, TResearchBrief } from "../src/types/research";
 import { serve_api } from "./helpers/serve-api";
+
+test("a reopened deck answers the pinned source question from private supplemental evidence", async () => {
+  process.env.AI_SESSION_DB = ":memory:";
+  const excerpt = "The total time spent outside the LM was 2 hours 31 minutes 40 seconds";
+  const source_only = "Source-only mission archive note";
+  const source: TEvidence = { id: "P9", origin: "public", location: "NASA Apollo 11 mission summary",
+    url: "https://www.nasa.gov/wp-content/uploads/static/history/SP-4029/Apollo_11a_Summary.htm",
+    passage: `${excerpt}. ${source_only}.` };
+  const answer = "NASA's Apollo 11 mission summary reports a moonwalk duration of 2 hours, 31 minutes, 40 seconds.";
+  let checked = false;
+  const fixture = create_api();
+  fixture.use("/api", accounts, audience);
+  fixture.use("/api/sessions", create_deck_router(presentation_turn_handler(async context => {
+    expect(context.message).toBe("Which source supports this?");
+    expect(context.presentation?.sentence_index).toBe(0);
+    expect(context.evidence).toEqual([{ id: source.id, source: source.location, passage: source.passage }]);
+    return { kind: "answer", text: answer, support: [{ evidence_id: source.id, excerpt }] };
+  }, async (claims, evidence) => {
+    checked = true;
+    expect(claims).toEqual([{ text: answer, support: [{ evidence_id: source.id, excerpt }] }]);
+    expect(evidence).toEqual([source]);
+    return true;
+  })));
+  fixture.use(api_error);
+  await using http = await serve_api(fixture);
+  let cookie = "";
+  const send = (path: string, body?: unknown, token?: string) => http.request(path, {
+    method: body === undefined ? "GET" : "POST",
+    headers: { ...(token ? { Authorization: "Bearer " + token } : cookie ? { Cookie: cookie } : {}),
+      ...(body !== undefined && { "Content-Type": "application/json" }) },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const read_cookie = (response: Response) => response.headers.get("set-cookie")!.split(";", 1)[0];
+  const credentials = { email: `${crypto.randomUUID()}@example.test`, password: crypto.randomUUID() };
+  cookie = read_cookie(await send("/api/account/register", credentials));
+  const { session_id } = await (await send("/api/projects", { name: "Supplemental source rehearsal" })).json();
+  const db = database();
+  const research_id = crypto.randomUUID();
+  const brief: TResearchBrief = { brief_id: crypto.randomUUID(), summary: "Apollo 11 timings", messages: [], materials: "",
+    source_policy: "public_search", urls: [source.url!], public_queries: [], question: null };
+  db.replace_brief(session_id, undefined, brief);
+  db.save_research(session_id, { research_id, confirmed_brief: brief, brief_id: brief.brief_id, gaps: [],
+    findings: { title: "Apollo 11", sections: [] }, evidence: [] });
+  const { id, origin, location, url } = source;
+  const deck: TDeck = { deck_id: crypto.randomUUID(), research_id, revision: 1, title: "Apollo 11",
+    sources: [{ id, origin, location, url }], slides: [{ slide_id: "duration", layout: "headline", highlights: [],
+      title: "Moonwalk duration", narration: "The moonwalk lasted 2 hours, 31 minutes, 40 seconds.", evidence_ids: [id] }] };
+  db.decks.create(session_id, deck, "supplemental", [source]);
+  const path = `/api/sessions/${session_id}/decks/${deck.deck_id}`;
+  await send("/api/account/logout", {});
+  cookie = "";
+  expect((await send(path)).status).toBe(401);
+  expect((await send(path + "/live")).status).toBe(401);
+  cookie = read_cookie(await send("/api/account/login", credentials));
+  expect(await (await send(path + "?revision=1")).json()).toEqual(deck);
+  const exported = await send(path + "/plan.json");
+  expect(exported.status).toBe(200);
+  expect(await exported.text()).not.toContain(source_only);
+  const live = path + "/live";
+  const { state: open, stage } = await (await send(live + "/start", { revision: 1, approved: true })).json();
+  const shared = await send("/api/audience", undefined, stage.token);
+  expect(shared.status).toBe(200);
+  const public_view = await shared.text();
+  expect(public_view).not.toContain(source_only);
+  expect(public_view).not.toContain(excerpt);
+  expect((await send("/api/audience/paint", { sequence: open.stage_sequence, revision: open.revision,
+    slide_id: open.cursor.slide_id }, stage.token)).status).toBe(204);
+  const ready = await (await send(live)).json();
+  const pinned = await (await send(live + "/commands", { event_id: crypto.randomUUID(), revision: ready.revision,
+    generation: ready.generation, action: { kind: "interrupt", attempt_id: ready.attempt.attempt_id } })).json();
+  expect(pinned.pin.sentence_index).toBe(0);
+  const replied = await (await send(live + "/turns", { turn_id: crypto.randomUUID(), pin_id: pinned.pin.pin_id,
+    message: "Which source supports this?" })).json();
+  expect(checked).toBe(true);
+  expect(replied).toMatchObject({ cursor: pinned.cursor, last_reply: { kind: "answer", text: answer,
+    citations: [{ evidence_id: id, excerpt }] } });
+  expect(JSON.stringify(replied)).not.toContain(source_only);
+  expect(db.research_by_id(session_id, research_id)?.evidence).toEqual([]);
+});
 
 test("signed-in presentation fences stale speech, pins Q&A and publishes only approved edits before advancing", async () => {
   process.env.AI_SESSION_DB = ":memory:";

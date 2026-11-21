@@ -10,7 +10,7 @@ import { database } from "../src/repositories/store";
 import { accounts } from "../src/routes/accounts";
 import { create_deck_router } from "../src/routes/deck";
 import type { TDeck } from "../src/types/deck";
-import type { TResearchBrief, TResearchBundle } from "../src/types/research";
+import type { TEvidence, TResearchBrief, TResearchBundle } from "../src/types/research";
 import { DeckPreparationWorker } from "../src/workers/deck-preparation";
 import { AppError } from "../src/errors/app-error";
 import { decide_presentation_readiness } from "../src/services/presentation-readiness";
@@ -102,7 +102,8 @@ test("count-only preparation returns before the worker, deduplicates, and restor
 });
 
 test("Decisions routes a public coverage gap through research and rechecks before saving ten slides", async () => {
-  const db = new SessionStore(":memory:");
+  const path = tmpdir() + "/deck-prep-" + crypto.randomUUID() + ".sqlite";
+  const db = new SessionStore(path);
   const bundle = research();
   bundle.confirmed_brief.source_policy = "public_search";
   const passage = "The reading cohort included 18 schools in 2025.";
@@ -114,12 +115,20 @@ test("Decisions routes a public coverage gap through research and rechecks befor
   db.save_research("host", bundle);
   const count = 10;
   const events: string[] = [];
+  const public_url = "https://example.org/report";
+  const cited: TEvidence = { id: "P2", origin: "public", location: "Public report", url: public_url + "#results",
+    passage: "The pilot measured 120 completed readings in 2025." };
+  const unused: TEvidence = { ...cited, id: "P3", passage: "The unused record does not belong to the saved presentation." };
   const worker = new DeckPreparationWorker(() => db, async (input, requested, _services, lifecycle) => {
     events.push("prepare");
-    expect(input.evidence.map(item => item.id)).toEqual(["M1", "P2"]);
+    expect(input.evidence.map(item => item.id)).toEqual(["M1", "P2", "P3"]);
     expect(requested).toEqual({ slide_count: count });
     lifecycle?.before_render();
-    return candidate(input.research_id, count);
+    const deck = candidate(input.research_id, count);
+    deck.slides[0].evidence_ids = ["M1", cited.id];
+    const { id, origin, location } = cited;
+    deck.sources = [{ id, origin, location, url: public_url }];
+    return deck;
   }, {
     decide: (input, requested, signal) => decide_presentation_readiness(input, requested, signal,
       { key: "fixture", base_url: "https://example.test/v1" }, async (url, init) => {
@@ -129,7 +138,7 @@ test("Decisions routes a public coverage gap through research and rechecks befor
         expect(body.model).toBe("gpt-6-luna");
         expect(context.slide_count).toBe(count);
         expect(context.findings.sections).toHaveLength(9);
-        const supplemented = context.passages.length === 2;
+        const supplemented = context.passages.length === 3;
         events.push(supplemented ? "recheck" : "decide");
         return Response.json({ model: body.model, answers: [
           { type: "predicate", name: "enough_evidence", probability: supplemented ? 0.96 : 0.1 },
@@ -140,15 +149,24 @@ test("Decisions routes a public coverage gap through research and rechecks befor
       events.push("research");
       expect(requested).toBe(count);
       expect(coverage.gaps[0]).toContain("comparable numbers");
-      return { ...input, evidence: [...input.evidence, { id: "P2", origin: "public", location: "Public report",
-        url: "https://example.test/report", passage: "The pilot measured 120 completed readings." }] };
+      return { ...input, evidence: [...input.evidence, cited, unused] };
     },
   });
   const job = db.deck_preparations.enqueue("host", bundle.research_id, pitch_variant_key({ slide_count: count }), count).job!;
   await worker.tick();
   expect(events).toEqual(["decide", "research", "recheck", "prepare"]);
-  expect(db.deck_preparations.get("host", job.job_id)?.deck?.slides).toHaveLength(count);
-  expect(db.research_by_id("host", bundle.research_id)).toEqual(bundle);
+  const prepared = db.deck_preparations.get("host", job.job_id)!;
+  expect(prepared.status).toBe("completed");
+  const deck = prepared.deck!;
+  expect(deck.slides).toHaveLength(count);
+  const reopened = new SessionStore(path);
+  expect(reopened.decks.get("host", deck.deck_id, 1)).toEqual(deck);
+  const persisted = { ...cited, url: public_url };
+  expect(reopened.decks.supplemental_evidence("host", deck.deck_id)).toEqual([persisted]);
+  expect(reopened.decks.supplemental_evidence("different-project", deck.deck_id)).toEqual([]);
+  expect(reopened.research_for_deck("host", deck)?.evidence).toEqual([...bundle.evidence, persisted]);
+  expect(reopened.research_by_id("host", bundle.research_id)).toEqual(bundle);
+  expect(JSON.stringify(deck)).not.toContain(cited.passage);
 });
 
 test("files-only gaps and provider errors are retryable and a short deck cannot finish", async () => {

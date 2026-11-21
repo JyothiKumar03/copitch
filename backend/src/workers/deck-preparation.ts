@@ -41,6 +41,7 @@ export class DeckPreparationWorker {
       try {
         const bundle = db.research_by_id(lease.session_id, lease.research_id);
         if (!bundle) throw new AppError(404, "The saved research is unavailable.");
+        const original_ids = new Set(bundle.evidence.map(row => row.id));
         const count = lease.slide_count;
         const check_current = () => {
           signal.throwIfAborted();
@@ -55,15 +56,16 @@ export class DeckPreparationWorker {
           phase("checking_evidence");
           return this.coverage_services.decide(evidence, count, signal);
         };
-        const prepare = (evidence: typeof bundle) => {
+        const prepare = async (evidence: typeof bundle) => {
           phase("planning_slides");
-          return this.prepare(evidence, { slide_count: count }, undefined, {
+          const deck = await this.prepare(evidence, { slide_count: count }, undefined, {
             signal,
             before_render: () => {
               phase("reviewing_slides");
               if (!jobs.consume_render_pass(lease)) throw new AppError(503, "The slide preparation lease or review budget expired. Try again.");
             },
           });
+          return { deck, supplemental: evidence.evidence.filter(row => !original_ids.has(row.id)) };
         };
         const evidence_error = (gaps: string[]) => new AppError(422, [
           `There isn’t enough evidence for ${count} slides yet. Add sources and run research again, or choose fewer slides.`,
@@ -98,9 +100,9 @@ export class DeckPreparationWorker {
             return recover({ gaps: error.gaps });
           }
         };
-        const deck = await run();
+        const { deck, supplemental } = await run();
         signal.throwIfAborted();
-        if (jobs.complete(lease, deck)) trace("completed");
+        if (jobs.complete(lease, deck, Date.now(), supplemental)) trace("completed");
       } catch (error) {
         const reason = error instanceof AppError ? error.message : "Slide preparation was interrupted. Try again.";
         const status = error instanceof AppError ? error.status : 503;

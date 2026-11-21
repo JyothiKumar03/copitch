@@ -185,7 +185,7 @@ export const presentation_turn_handler = (model: TLiveModel = classify_live_turn
     const run = db.presentations.begin_turn(session, deck_id, turn);
     if ("complete" in run) return res.json(run.complete);
     const slide = run.deck.slides.find(item => item.slide_id === run.pin.slide_id);
-    const research = db.research_by_id(session, run.deck.research_id);
+    const research = db.research_for_deck(session, run.deck);
     if (!slide || !research) return res.json(db.presentations.finish_turn(session, deck_id, turn, clarify("The slide’s original research is unavailable.")));
     const context = { ...live_context(run.deck, slide, { turn_id: turn.turn_id, base_revision: run.pin.revision, slide_id: run.pin.slide_id, message: turn.message },
       research, db.presentations.recent_turns(session, deck_id, run.pin.revision)), presentation: {

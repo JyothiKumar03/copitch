@@ -13,6 +13,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { ModelMessage } from "ai";
+import type { TDeck } from "../types/deck";
 import type { TResearchBrief, TResearchBundle } from "../types/research";
 import type { TRun, TSessionEvent } from "../types/session";
 
@@ -86,6 +87,16 @@ export class SessionStore {
     const row = this.db.query<{payload: string}, [string,string]>(
       "SELECT payload FROM research_bundles WHERE session=? AND id=?").get(session,id);
     if (row) return JSON.parse(row.payload) as TResearchBundle;
+  }
+  research_for_deck(session: string, deck: TDeck): TResearchBundle | undefined {
+    const research = this.research_by_id(session, deck.research_id);
+    if (!research) return;
+    const archived = this.decks.supplemental_evidence(session, deck.deck_id);
+    if (!archived.length) return research;
+    const used = new Set(deck.slides.flatMap(slide => slide.evidence_ids));
+    const existing = new Set(research.evidence.map(row => row.id));
+    const supplemental = archived.filter(row => used.has(row.id) && !existing.has(row.id));
+    return { ...research, evidence: [...research.evidence, ...supplemental] };
   }
   earlier_artifacts(session: string, current_brief: string) {
     return this.db.query<{ research_id: string; after_turn: number }, [string, string]>(

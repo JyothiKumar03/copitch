@@ -31,7 +31,7 @@ export const live_turn_handler = (model: TLiveModel = classify_live_turn) => {
       if (running.signature !== signature) return res.status(409).json({ error: "Turn ID already in use" });
       return res.json(await running.result);
     }
-    const research = db.research_by_id(session,deck.research_id);
+    const research = db.research_for_deck(session, deck);
     if (!research) return res.status(409).json({ error: "Deck research is unavailable" });
     const context = live_context(deck,slide,input,research,db.decks.recent_turns(session,id,deck.revision));
     const result = model(context,AbortSignal.timeout(30000)).then(decision => db.decks.finish_turn(session,id,input,() => {

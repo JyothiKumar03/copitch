@@ -2,8 +2,10 @@ import type { Database } from "bun:sqlite";
 import { AppError } from "../errors/app-error";
 import type { TDeck, TDeckPlanInput, TEditRequest, TEditProposal } from "../types/deck";
 import type { TLiveReply, TLiveTurnInput, TLiveTurnContext } from "../types/live-turn";
+import type { TEvidence } from "../types/research";
 import { estimate_pitch_seconds } from "../services/pitch";
 import { propose_slide } from "../services/deck";
+import { public_url } from "../services/research";
 
 const pitch_variant_version = 3;
 const context_slides_version = 6;
@@ -23,6 +25,7 @@ export class DeckRepository {
         variant TEXT NOT NULL DEFAULT '', UNIQUE(session, research, variant));
       CREATE TABLE IF NOT EXISTS deck_revisions (
         deck TEXT NOT NULL, revision INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(deck, revision));
+      CREATE TABLE IF NOT EXISTS deck_supplemental_evidence (deck TEXT PRIMARY KEY, payload TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS deck_turns (
         deck TEXT NOT NULL, turn TEXT NOT NULL, revision INTEGER NOT NULL, request TEXT NOT NULL,
         reply TEXT NOT NULL, PRIMARY KEY(deck,turn));
@@ -65,13 +68,25 @@ export class DeckRepository {
     });
   }
 
-  create(session: string, snapshot: TDeck, variant = ""): TDeck {
+  create(session: string, snapshot: TDeck, variant = "", supplemental: readonly TEvidence[] = []): TDeck {
     return this.db.transaction(() => {
       const existing = this.for_research(session, snapshot.research_id, variant);
       if (existing) return existing;
       this.db.query("INSERT INTO decks(id,session,research,revision,variant) VALUES(?,?,?,?,?)")
         .run(snapshot.deck_id, session, snapshot.research_id, snapshot.revision, variant);
       this.save_revision(snapshot);
+      if (supplemental.length) {
+        const cited = new Set(snapshot.slides.flatMap(slide => slide.evidence_ids));
+        const sources = new Map(snapshot.sources?.map(source => [source.id, source]));
+        const used = supplemental.flatMap(row => {
+          const url = row.url && public_url(row.url);
+          const source = sources.get(row.id);
+          return row.origin === "public" && cited.has(row.id) && url && source?.origin === "public" && source.url === url
+            ? [{ ...row, url }] : [];
+        });
+        if (used.length) this.db.query("INSERT INTO deck_supplemental_evidence(deck,payload) VALUES(?,?)")
+          .run(snapshot.deck_id, JSON.stringify(used));
+      }
       return snapshot;
     }).immediate();
   }
@@ -107,6 +122,13 @@ export class DeckRepository {
       SELECT r.payload FROM decks d JOIN deck_revisions r ON r.deck=d.id
       AND r.revision=COALESCE(?,d.revision) WHERE d.id=? AND d.session=?`).get(revision ?? null,deck,session);
     if (row) return JSON.parse(row.payload) as TDeck;
+  }
+
+  supplemental_evidence(session: string, deck: string): TEvidence[] {
+    const row = this.db.query<{ payload: string }, [string, string]>(`
+      SELECT e.payload FROM deck_supplemental_evidence e JOIN decks d ON e.deck=d.id
+      WHERE d.session=? AND d.id=?`).get(session, deck);
+    return row ? JSON.parse(row.payload) as TEvidence[] : [];
   }
 
   cached_turn(session: string, deck: string, input: TLiveTurnInput): TLiveReply | undefined {

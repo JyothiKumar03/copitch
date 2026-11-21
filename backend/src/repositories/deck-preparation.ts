@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import type { DeckRepository } from "./deck";
 import type { TDeck } from "../types/deck";
+import type { TEvidence } from "../types/research";
 import type { TPresentationResearchCheckpoint } from "../services/presentation-research";
 import type { TDeckPreparationPhase } from "../../../shared/presentation";
 import { MAX_DECK_REVIEW_PASSES } from "../../../shared/presentation";
@@ -124,14 +125,14 @@ export class DeckPreparationRepository {
       .run(lease.job_id, lease.lease_token, now, MAX_DECK_REVIEW_PASSES).changes === 1;
   }
 
-  complete(lease: TDeckPreparationLease, candidate: TDeck, now = Date.now()) {
+  complete(lease: TDeckPreparationLease, candidate: TDeck, now = Date.now(), supplemental: readonly TEvidence[] = []) {
     return this.db.transaction(() => {
       if (!this.owns(lease, now)) return false;
       if (candidate.research_id !== lease.research_id || candidate.slides.length !== lease.slide_count ||
           candidate.render_review?.status !== "passed") {
         throw new AppError(422, `Couldn’t finish a reviewed deck with ${lease.slide_count} slides. Try again or add evidence.`);
       }
-      const snapshot = this.decks.create(lease.session_id, candidate, lease.variant);
+      const snapshot = this.decks.create(lease.session_id, candidate, lease.variant, supplemental);
       this.db.query(`UPDATE deck_preparations SET status='completed',deck_id=?,lease_token=NULL,lease_until=NULL,
         phase=NULL,coverage_checkpoint=NULL WHERE job_id=?`)
         .run(snapshot.deck_id, lease.job_id);
