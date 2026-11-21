@@ -27,9 +27,10 @@ const build_input = z.object({
 });
 
 const configured_provider = (purpose: "interview" | "research") => {
-  const [model] = configured_models_for(purpose);
+  const models = configured_models_for(purpose);
+  const [model] = models;
   if (!model || !process.env.OPENAI_API_KEY) throw new AppError(503, "Configure OPENAI_API_KEY and OPENAI_TEXT_MODELS");
-  return research_provider(model);
+  return research_provider(model, undefined, purpose === "research" ? models : []);
 };
 
 export const research_worker = new ResearchWorker(database, () => configured_provider("research"));
@@ -75,11 +76,8 @@ export const research_handlers = (get_provider: (purpose: "interview" | "researc
       const brief = db.current_brief(session);
       if (!brief || brief.brief_id !== input.data.brief_id) return res.status(409).json({ error: "Brief revision is stale" });
       if (brief.question) return res.status(409).json({ error: "Answer the open clarification before confirming research" });
-    const studio = db.studio.snapshot(session);
-    if (studio && studio.revision > 0 && (studio.context.pending || studio.context.reviewable_brief_id !== brief.brief_id ||
-      studio.context.source_policy !== brief.source_policy || studio.context.materials !== brief.materials ||
-      JSON.stringify(studio.context.source_ids) !== JSON.stringify(brief.sources?.map(source => source.source_id) ?? []))) {
-      return res.status(409).json({ error: "Complete the studio scope review before confirming research" });
+    if (brief.studio_version === 2 && !db.research_jobs.for_brief(session, brief.brief_id)) {
+      return res.status(409).json({ error: "Approve the current studio proposal before starting research" });
     }
       const jobs = db.research_jobs;
       // Verify configuration before accepting new work. Already saved reports remain accessible offline.

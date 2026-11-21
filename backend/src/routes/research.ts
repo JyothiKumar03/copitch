@@ -1,4 +1,5 @@
 import { download_pitch } from "../controllers/pitch-markdown";
+import { download_context } from "../controllers/context-markdown";
 import { read_pitch_content } from "../controllers/pitch-content";
 import express, { Router } from "express";
 import { source_calls, source_host, upload_source } from "../controllers/source";
@@ -15,6 +16,7 @@ research.post("/:session_id/research/sources", source_host,
 research.post("/:session_id/research/brief", handlers.review);
 research.post("/:session_id/research", handlers.build);
 research.get("/:session_id/research/:research_id/presentation.md", handlers.download);
+research.get("/:session_id/research/:research_id/context.md", download_context);
 
 research.get("/:session_id/research/jobs/:job_id", handlers.job);
 

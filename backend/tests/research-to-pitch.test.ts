@@ -58,7 +58,7 @@ test("a confirmed buyer brief becomes one persisted, traceable deck through HTTP
   const pitch = await (await http.request(pitch_path, { headers: auth })).json();
   expect(reviewed_pitch_units).toBe(3);
   expect(pitch.format).toBe("script");
-  expect(pitch.passages.map((part: { label: string }) => part.label)).toEqual(["Opening", "Talking point", "Closing ask"]);
+  expect(pitch.passages.map((part: { label: string }) => part.label)).toEqual(["Opening", "Talking point", "Closing"]);
   expect(pitch.passages[1].evidence_ids).toEqual(["M1"]);
   const prepared = await post("/decks", { research_id: one.research_id });
   expect(prepared.status).toBe(201);
