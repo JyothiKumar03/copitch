@@ -1,5 +1,8 @@
 import { brief_history } from "./research-history";
 import { database } from "../repositories/store";
+import { source_summary } from "../repositories/source";
+import type { SessionStore } from "../repositories/session";
+import { spoken_text_limit } from "../types/studio-turn";
 import type { TInterviewBrief, TInterviewWorkspace } from "../types/interview";
 import type { TResearchBrief } from "../types/research";
 
@@ -12,11 +15,11 @@ export const progress_reply = (job: TResearchJob, language: "en" | "hi") => {
   };
   const progress = messages[language][job.status];
   if (job.status !== "running") return progress;
-  return language === "hi" ? `${progress} अब तक ${job.completed_lookups} खोज पूरी हुई हैं।` : `${progress} Completed lookups: ${job.completed_lookups}.`;
+  return language === "hi" ? `${progress} अब तक खोज के ${job.completed_lookups} प्रयास हुए हैं।` : `${progress} Lookup attempts processed: ${job.completed_lookups}.`;
 };
 
 export const interview_greeting = "What are you pitching, and who will be listening?";
-export const max_spoken_length = 1600;
+export const max_spoken_length = spoken_text_limit;
 
 export const spoken_prompt = (brief: TResearchBrief): string => {
   if (brief.question) {
@@ -31,12 +34,12 @@ export const spoken_prompt = (brief: TResearchBrief): string => {
     : hindi ? "कृपया स्क्रीन पर शोध का दायरा देखें। क्या मैं शोध शुरू करूँ?" : "I’ve put the full research scope on screen for you to review. Shall I start researching?";
 };
 
-const studio_history = (brief: TResearchBrief, session?: string) => {
+const studio_history = (brief: TResearchBrief, session?: string, db = database()) => {
   const turns = brief_history(brief);
   if (!session) return turns;
   const restored = [...turns];
   let offset = 0;
-  for (const entry of database().research_jobs.progress_turns(session)) {
+  for (const entry of db.research_jobs.progress_turns(session)) {
     restored.splice(Math.min(turns.length, entry.after_turn) + offset, 0,
       { role: "host", text: entry.question }, { role: "assistant", text: entry.answer });
     offset += 2;
@@ -44,27 +47,38 @@ const studio_history = (brief: TResearchBrief, session?: string) => {
   return restored;
 };
 
-export const interview_brief = (brief: TResearchBrief, session?: string): TInterviewBrief => ({
+export const interview_brief = (brief: TResearchBrief, session?: string, db?: SessionStore): TInterviewBrief => ({
   brief_id: brief.brief_id,
   summary: brief.summary,
   question: brief.question,
   public_queries: brief.public_queries,
   spoken_prompt: spoken_prompt(brief),
-  history: studio_history(brief, session),
+  history: studio_history(brief, session, db),
   sources: brief.sources ?? [],
 });
 
-export const interview_workspace = (session: string): TInterviewWorkspace => {
-  const db = database();
+export const interview_workspace = (session: string, db = database()): TInterviewWorkspace => {
   const brief = db.current_brief(session);
   const capabilities = { source_uploads: true };
-  if (!brief) return { capabilities, job: null, brief: null, research: null };
+  const snapshot = db.studio.snapshot(session);
+  const turns = snapshot ? db.studio.turns(session) : [];
+  const history = snapshot && turns.length ? [...snapshot.prior_history, ...turns.flatMap(turn => {
+    const identity = { turn_id: turn.turn_id, created_at: turn.created_at, intent: turn.intent, answer_to: turn.answer_to, option_id: turn.option_id };
+    return [{ role: "host" as const, text: turn.user_text, ...identity }, { role: "assistant" as const, text: turn.text, ...identity }];
+  })] : brief ? studio_history(brief, session, db) : snapshot?.prior_history ?? [];
+  const conversation = {
+    history, sources: snapshot ? db.sources.selected(session, snapshot.context.source_ids).map(source_summary) : brief?.sources ?? [],
+    activities: turns.flatMap(turn => turn.activity ? [{ turn_id: turn.turn_id, ...turn.activity }] : []),
+    pending_question: snapshot?.context.ask ?? null,
+    ...(snapshot && { context: snapshot.context }),
+  };
+  if (!brief) return { ...conversation, capabilities, job: null, brief: null, research: null };
   const bundle = db.research_by_brief(session, brief.brief_id);
   return {
-    capabilities,
+    ...conversation, capabilities,
     artifacts: db.earlier_artifacts(session, brief.brief_id),
     job: db.research_jobs.for_brief(session,brief.brief_id) ?? null,
-    brief: { ...interview_brief(brief, session), materials: brief.materials, urls: brief.urls, source_policy: brief.source_policy },
+    brief: { ...interview_brief(brief, session, db), history, materials: brief.materials, urls: brief.urls, source_policy: brief.source_policy },
     research: bundle ? { research_id: bundle.research_id, markdown: bundle.markdown, gaps: bundle.gaps } : null,
   };
 };

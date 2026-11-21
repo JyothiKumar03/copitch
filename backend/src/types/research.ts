@@ -1,6 +1,7 @@
 import type { TPitchChartSelection } from "./pitch-artifact";
 import type { TConversionMetric, TCsvObservation, TSourceSummary } from "./source";
 import type { TPitchPassage } from "./pitch-content";
+import type { TStudioIntent } from "./studio-turn";
 
 export type TSourcePolicy = "files_only" | "public_search";
 
@@ -10,7 +11,8 @@ export type TBriefReview = {
   public_queries: string[];
 };
 
-export type TInterviewTurn = { role: "host" | "assistant"; text: string };
+export type TInterviewTurn = { role: "host" | "assistant"; text: string; turn_id?: string; created_at?: number; intent?: TStudioIntent;
+  answer_to?: string; option_id?: string };
 
 export type TResearchBrief = TBriefReview & {
   history?: TInterviewTurn[];

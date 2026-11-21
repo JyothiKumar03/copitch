@@ -1,8 +1,10 @@
 import { AccountRepository } from "./accounts";
 import { SourceRepository } from "./source";
+import { StudioUpdates } from "../services/studio-events";
 import { AudienceRepository } from "./audience";
 import { ResearchJobRepository } from "./research-job";
 import { DeckRepository } from "./deck";
+import { StudioRepository } from "./studio";
 import { ContinuationStore } from "./continuation";
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
@@ -16,13 +18,16 @@ export class SessionStore {
   private db: Database;
   readonly accounts: AccountRepository;
   readonly sources: SourceRepository;
+  readonly updates: StudioUpdates;
   readonly audience: AudienceRepository;
   readonly continuations: ContinuationStore;
   readonly research_jobs: ResearchJobRepository;
   readonly decks: DeckRepository;
+  readonly studio: StudioRepository;
   constructor(path: string) {
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
     this.db = new Database(path, { create: true, strict: true });
+    this.updates = new StudioUpdates(this.db);
     this.accounts = new AccountRepository(this.db);
     this.sources = new SourceRepository(this.db);
     this.audience = new AudienceRepository(this.db);
@@ -30,6 +35,7 @@ export class SessionStore {
     this.continuations.recover();
     this.research_jobs = new ResearchJobRepository(this.db);
     this.decks = new DeckRepository(this.db);
+    this.studio = new StudioRepository(this.db);
     this.db.exec(`
       PRAGMA journal_mode=WAL;
       CREATE TABLE IF NOT EXISTS ai_sessions (id TEXT PRIMARY KEY, token_hash TEXT NOT NULL);
