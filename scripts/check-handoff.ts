@@ -43,6 +43,7 @@ const check_handoff = (text: string, contract?: string): string[] => {
   if (!/^## Current module coverage: Module \d+/m.test(text)) errors.push("handoff: coverage heading must read 'Current module coverage: Module <n>'");
   if (!/^Contract:/m.test(text)) errors.push("handoff: missing 'Contract:' line");
   const rows = read_rows(text);
+  const required = new Map(contract ? read_rows(contract).map(row => [row.cells[0], row.cells[4]]) : []);
   const ids = new Set<string>();
   for (const { cells } of rows) {
     const [id, status, klass, evidence, gap] = cells;
@@ -52,12 +53,13 @@ const check_handoff = (text: string, contract?: string): string[] => {
     if (!CLASSES.includes(klass ?? "")) errors.push(`handoff: ${id} evidence class must be ${CLASSES.join("|")}`);
     const has_evidence = (evidence ?? "") !== "" && evidence !== "—" && evidence !== "-";
     if (status === "verified" && (!has_evidence || klass === "none")) errors.push(`handoff: ${id} verified without evidence`);
+    const expected = required.get(id);
+    if (status === "verified" && expected && klass !== expected) errors.push(`handoff: ${id} requires ${expected} evidence, received ${klass}`);
     if (status !== "verified" && (!gap || gap === "—" || gap === "-")) errors.push(`handoff: ${id} ${status} needs a stated gap`);
   }
   if (contract) {
-    const wanted = read_rows(contract).map((r) => r.cells[0]);
-    for (const id of wanted) if (!ids.has(id)) errors.push(`handoff: contract ${id} not covered`);
-    for (const id of ids) if (!wanted.includes(id)) errors.push(`handoff: ${id} not in contract`);
+    for (const id of required.keys()) if (!ids.has(id)) errors.push(`handoff: contract ${id} not covered`);
+    for (const id of ids) if (!required.has(id)) errors.push(`handoff: ${id} not in contract`);
   }
   return errors;
 };
@@ -66,7 +68,7 @@ const main = () => {
   const args = process.argv.slice(2);
   const flag = args.indexOf("--contract");
   const contract_path = flag >= 0 ? args[flag + 1] : undefined;
-  const target = args.find((a, i) => !a.startsWith("--") && i !== flag + 1);
+  const target = args.find((a, i) => !a.startsWith("--") && (flag === -1 || i !== flag + 1));
   if (!target && !contract_path) {
     console.error("usage: bun scripts/check-handoff.ts [handoff.md] [--contract contract.md]");
     process.exit(2);
