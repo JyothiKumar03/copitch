@@ -49,7 +49,7 @@ export const signOut = async () => {
 export const clearPrivateDrafts = () => {
   try {
     for (const key of Object.keys(sessionStorage)) {
-      if (/^(equal-ai\.|copitch\.)/.test(key)) sessionStorage.removeItem(key);
+      if (/^(equal-ai\.|copitch[.:])/.test(key)) sessionStorage.removeItem(key);
     }
   } catch { /* Storage can be unavailable in private browsing. */ }
 };
