@@ -5,7 +5,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: { default: "copitch — An AI presenter you brief by voice", template: "%s · copitch" },
-  description: "Brief copitch on your audience and message. Prepare a researched pitch, speaking notes, and a deck for your next review or product pitch.",
+  description: "Brief copitch on your topic and goal. Prepare a researched deck for your next presentation.",
 };
 
 const RootLayout = ({ children }: TChildrenProps) => (

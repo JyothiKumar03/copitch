@@ -1,6 +1,5 @@
 export const samplePitch = {
   title: "The case for an enterprise pilot",
-  audience: "Growth team",
   opening: "Let’s give enterprise onboarding a small, focused pilot.",
   evidence: "Four of our twenty enterprise trials converted, compared with ten of a hundred trials overall.",
   closing: "That’s a promising signal from a small group. Can we test a guided onboarding call with the next cohort before we commit to a wider rollout?",

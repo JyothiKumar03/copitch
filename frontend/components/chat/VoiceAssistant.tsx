@@ -123,7 +123,7 @@ export const VoiceAssistant = () => {
           <div className="flex min-h-48 flex-col items-start justify-center gap-4">
             <p className="font-display text-3xl tracking-tight sm:text-4xl">What would you like to rehearse?</p>
             <div className="flex flex-wrap gap-2">
-              {["Help me open my pitch", "Ask me a tough audience question"].map(prompt =>
+              {["Help me open my pitch", "Ask me a tough practice question"].map(prompt =>
                 <Button key={prompt} type="button" variant="outline" onClick={() => void submit(prompt)}>{prompt}</Button>)}
             </div>
           </div>

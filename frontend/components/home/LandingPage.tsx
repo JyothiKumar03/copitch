@@ -11,9 +11,9 @@ import studioMicrophone from "@/public/studio/microphone.webp";
 import { SamplePlayer } from "./SamplePlayer";
 
 const workflow = [
-  { icon: AudioLines, title: "Talk it through", description: "Speak or type your idea. The interviewer listens for your audience, your goal, and the decision you want from the room." },
+  { icon: AudioLines, title: "Talk it through", description: "Speak or type your idea. Tell copitch your goal and what you want people to take away." },
   { icon: ScanSearch, title: "Research the evidence", description: "Review the scope and choose your sources. Approve the search, or keep the research to material you supply." },
-  { icon: FilePenLine, title: "Build and present a deck", description: "Open the verified context, then prepare slides and review the narration before you present." },
+  { icon: FilePenLine, title: "Build and present a deck", description: "Prepare slides from your research and review the narration before you present." },
 ];
 
 const pageWidth = "mx-auto w-full max-w-360 px-5 sm:px-9 lg:px-[5.5%]";
@@ -30,7 +30,7 @@ export const LandingPage = () => (
               An AI presenter<br/><em className="font-normal text-primary">you brief by voice.</em>
             </h1>
             <p className="mt-5 max-w-[42ch] text-[1.08rem] leading-[1.55] text-muted-foreground sm:text-xl">
-              Tell copitch who’s listening and what matters to them. Turn your files, links, and approved research into a deck you can review and present.
+              Tell copitch your topic and goal. Turn your files, links, and approved research into a deck you can review and present.
             </p>
             <div className="mt-7 flex flex-wrap items-center gap-x-6 gap-y-3 sm:mt-9">
               <Button asChild size="lg"><Link href="/research">Start a session <ArrowRight aria-hidden="true" size={17}/></Link></Button>
@@ -93,7 +93,7 @@ export const LandingPage = () => (
       <section aria-labelledby="live-title" className="bg-studio-dark text-studio-light">
         <div className={`${pageWidth} grid gap-4 py-10 sm:grid-cols-2 sm:gap-12 lg:py-14`}>
           <h2 id="live-title" className="font-display text-4xl leading-tight tracking-tight sm:text-5xl">Presenting live</h2>
-          <p className="max-w-prose self-center text-lg leading-relaxed">Open a separate audience screen. Interrupt to ask a question, review a proposed edit, or resume from the same sentence.</p>
+          <p className="max-w-prose self-center text-lg leading-relaxed">Present in the studio. Interrupt to ask a question, review a proposed edit, or resume from the same sentence.</p>
         </div>
       </section>
     </main>
