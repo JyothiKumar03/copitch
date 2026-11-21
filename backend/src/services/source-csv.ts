@@ -4,6 +4,7 @@ import { parse } from "csv-parse/sync";
 import { AppError } from "../errors/app-error";
 import type { TConversionMetric, TSourceContent, TSourceRecord } from "../types/source";
 
+const conversion_scope_version = 1;
 const normalized = (label: string) => label.trim().toLowerCase().replace(/[\s_-]+/g, " ");
 const count = (value: string | undefined) => {
   if (!value || !/^\d+$/.test(value.trim())) return;
@@ -119,7 +120,8 @@ export const read_csv = (bytes: Uint8Array): TSourceContent => {
   const numerator_col = field("conversions","converted","converted trials","conversion count","numerator");
   const denominator_col = field("trials","total trials","trial count","denominator");
   const month_col = field("month","period");
-  const segment_col = field("segment","customer segment");
+  const segment_col = field("segment","customer segment","cohort","group");
+  const unpartitioned = ["cohort", "group"].includes(names[segment_col]);
   const records: TSourceRecord[] = [];
   let invalid_counts = 0;
   let characters = 0;
@@ -133,12 +135,13 @@ export const read_csv = (bytes: Uint8Array): TSourceContent => {
     if (numerator_col >= 0 && denominator_col >= 0) {
       const segment = cells[segment_col]?.trim() || null;
       const month = cells[month_col]?.trim() || null;
-      const footer = [segment,month].some(value => value && /^(all|overall|total|subtotal|grand total)$/i.test(value));
-      if (!footer) {
+      const summary_period = month && /^(all|overall|total|subtotal|grand total)$/i.test(month);
+      if (!summary_period && !/^subtotal$/i.test(segment ?? "")) {
         const numerator = count(cells[numerator_col]);
         const denominator = count(cells[denominator_col]);
         if (numerator !== undefined && denominator !== undefined && numerator <= denominator) {
-          metric = { month,segment,numerator,denominator,ratio: denominator ? numerator / denominator : null };
+          metric = { month,segment,numerator,denominator,ratio: denominator ? numerator / denominator : null,
+            ...(unpartitioned && { unpartitioned: true }) };
         } else invalid_counts++;
       }
     }
@@ -148,5 +151,5 @@ export const read_csv = (bytes: Uint8Array): TSourceContent => {
   if (invalid_counts) for (const row of records) delete row.metric;
   attach_observations(header,names,data,records);
   const gaps = invalid_counts ? [`Conversion totals withheld because ${invalid_counts} row(s) have invalid trial counts.`] : [];
-  return { records, gaps };
+  return { records, gaps, ...(numerator_col >= 0 && denominator_col >= 0 && { conversion_scope_version }) };
 };

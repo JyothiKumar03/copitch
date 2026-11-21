@@ -14,10 +14,11 @@ export type TParserCall = {
 export type TSourceSummary = { source_id: string; filename: string; kind: TSourceKind; locations: number };
 export type TConversionMetric = {
   month: string | null; segment: string | null; numerator: number; denominator: number; ratio: number | null;
+  unpartitioned?: true;
 };
 export type TCsvObservation = {
   column: number; measure: string; axis: string; label: string; date: number | null; value: number; unit: string;
 };
 export type TSourceRecord = { number: number; text: string; metric?: TConversionMetric; numeric_series?: TCsvObservation[] };
-export type TSourceContent = { records: TSourceRecord[]; gaps: string[] };
+export type TSourceContent = { records: TSourceRecord[]; gaps: string[]; conversion_scope_version?: number };
 export type TUploadedSource = TSourceSummary & TSourceContent;

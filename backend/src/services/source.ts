@@ -57,8 +57,13 @@ export const parse_source = async (filename: string, bytes: Buffer, limits: TSou
 export const source_evidence = (source: TUploadedSource): TEvidence[] => {
   const prefix = parseInt(createHash("sha256").update(source.source_id).digest("hex").slice(0,12),16);
   const unit = source_formats[source.kind].location;
+  // Older records did not retain a reported total as a measurement or identify cohort/group rows.
+  // Keep their quoted cells usable, but withhold derived conversion metrics until the input is parsed again.
+  const ambiguous_legacy_counts = source.kind === "csv" && !source.conversion_scope_version && source.records.some(row =>
+    /(?:^|; )(?:(?:cohort|group): |(?:segment|customer segment): (?:overall|all|total|grand total)(?:;|$))/iu.test(row.text));
   return source.records.map(row => ({
     id: "F" + prefix + String(row.number).padStart(5,"0"), source_id: source.source_id, origin:"material",
-    location: `${source.filename}, ${unit} ${row.number}`, passage:row.text, ...(row.numeric_series && {numeric_series:row.numeric_series}), ...(row.metric && { metric:row.metric }),
+    location: `${source.filename}, ${unit} ${row.number}`, passage:row.text, ...(row.numeric_series && {numeric_series:row.numeric_series}),
+    ...(row.metric && !ambiguous_legacy_counts && { metric:row.metric }),
   }));
 };

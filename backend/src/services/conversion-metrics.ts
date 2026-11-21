@@ -2,36 +2,42 @@ import { createHash } from "node:crypto";
 import type { TEvidence } from "../types/research";
 import type { TConversionChart } from "../types/deck";
 
-type TCountGroup = { source_id: string; month: string | null; segment: string | null; rows: TEvidence[] };
+type TCountGroup = { source_id: string; month: string | null; segment: string | null; rows: TEvidence[]; reported: TEvidence[] };
 
 export const conversion_evidence = (evidence: TEvidence[]): TEvidence[] => {
   const groups = new Map<string, TCountGroup>();
   for (const row of evidence) {
     const metric = row.metric;
     if (!row.source_id || !metric || row.derived_from || row.origin !== "material") continue;
-    if (metric.segment && /^(overall|all|total|grand total)$/i.test(metric.segment.trim())) continue;
-    for (const segment of new Set([null, metric.segment])) {
+    if (metric.unpartitioned && !metric.segment) continue;
+    if (/^subtotal$/i.test(metric.segment?.trim() ?? "")) continue;
+    const reported = /^(overall|all|total|grand total)$/i.test(metric.segment?.trim() ?? "");
+    const segments = reported ? [null] : metric.unpartitioned ? [metric.segment] : new Set([null, metric.segment]);
+    for (const segment of segments) {
       const key = JSON.stringify([row.source_id, metric.month, segment?.toLowerCase() ?? null]);
-      const group = groups.get(key) ?? { source_id: row.source_id, month: metric.month, segment, rows: [] };
-      group.rows.push(row);
+      const group = groups.get(key) ?? { source_id: row.source_id, month: metric.month, segment, rows: [], reported: [] };
+      (reported || metric.unpartitioned ? group.reported : group.rows).push(row);
       groups.set(key, group);
     }
   }
   const totals: TEvidence[] = [];
   for (const [key, group] of groups) {
-    const numerator = group.rows.reduce((sum, row) => sum + row.metric!.numerator, 0);
-    const denominator = group.rows.reduce((sum, row) => sum + row.metric!.denominator, 0);
+    const explicit = group.reported[0]?.metric;
+    if (explicit && group.reported.some(row => row.metric!.numerator !== explicit.numerator || row.metric!.denominator !== explicit.denominator)) continue;
+    const rows = explicit ? [group.reported[0]] : group.rows;
+    const numerator = rows.reduce((sum, row) => sum + row.metric!.numerator, 0);
+    const denominator = rows.reduce((sum, row) => sum + row.metric!.denominator, 0);
     if (!Number.isSafeInteger(numerator) || !Number.isSafeInteger(denominator)) continue;
     const ratio = denominator > 0 ? numerator / denominator : null;
     const rate = ratio === null ? "unavailable (zero trials)" : new Intl.NumberFormat("en", { style: "percent", maximumFractionDigits: 2 }).format(ratio);
-    const first = group.rows[0].location;
-    const last = group.rows.at(-1)!.location;
+    const first = rows[0].location;
+    const last = rows.at(-1)!.location;
     totals.push({ id: "C" + parseInt(createHash("sha256").update(key).digest("hex").slice(0, 12), 16),
       origin: "material", source_id: group.source_id,
-      location: group.rows.length === 1 ? first : `${group.rows.length} contributing rows from ${first} through ${last}`,
+      location: rows.length === 1 ? first : `${rows.length} contributing rows from ${first} through ${last}`,
       passage: `${group.segment ?? "Overall"}${group.month ? " in " + group.month : ""}: ${numerator} conversions from ${denominator} trials. Conversion rate: ${rate}.`,
       metric: { month: group.month, segment: group.segment, numerator, denominator, ratio },
-      derived_from: group.rows.map(row => row.id) });
+      derived_from: rows.map(row => row.id) });
   }
   return totals;
 };

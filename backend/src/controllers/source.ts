@@ -30,7 +30,9 @@ export const upload_source: RequestHandler = async (req,res) => {
   const call = sources.start_call(session, filename, source_kind(filename));
   try {
     const source = await parse_source(filename,bytes);
-    const digest = createHash("sha256").update(filename).update("\0").update(bytes).digest("hex");
+    const fingerprint = createHash("sha256").update(filename).update("\0").update(bytes);
+    if (source.conversion_scope_version) fingerprint.update(`\0conversion-scope:${source.conversion_scope_version}`);
+    const digest = fingerprint.digest("hex");
     res.status(201).json(sources.save(session, digest, source, call));
   } catch (error) {
     sources.fail_call(session, call, error instanceof AppError ? error.message : "Document processing failed. Attach it again.");
