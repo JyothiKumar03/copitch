@@ -138,7 +138,7 @@ export const build_research = async (
   const studio = brief.studio_version === 2;
   const model_step = studio ? provider.collect_step : undefined;
   // A pending pre-agent job can be rebuilt from its confirmed inputs. Published bundles are unaffected.
-  if (model_step && previous?.collection?.version !== 2 && previous?.collection?.version !== 3) previous = undefined;
+  if (model_step && ![2, 3, 4].includes(previous?.collection?.version ?? 0)) previous = undefined;
   let evidence = previous?.evidence ?? evidence_from_brief(brief,sources);
   const gaps = new Set(previous?.gaps ?? sources.flatMap(s => s.gaps.map(gap => s.filename + ": " + gap)));
   if (studio && !evidence.length && (brief.source_policy === "files_only" || (!brief.urls.length && !brief.public_queries.length))) {

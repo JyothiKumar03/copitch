@@ -6,6 +6,7 @@ import type { TRecordActivity } from "./research-job";
 type TResearchTarget = {
   id: string;
   kind: "read" | "search";
+  item_id?: string;
   value: string;
   label: string;
   seed?: boolean;
@@ -16,43 +17,51 @@ type TResearchTarget = {
   discovered_ids?: string[];
 };
 
-export type TResearchContinuation = {
-  gap: string;
-  reason: string;
-  target_id: string;
-  tool: "read_url" | "web_search";
+// One question the finished brief must answer. It is covered only by a verbatim excerpt from a read source.
+export type TCoverageItem = {
+  id: string;
+  question: string;
+  needs: "number" | "fact";
+  status: "open" | "covered" | "unavailable";
+  lookups: number;
+  answer?: string;
+  // A short slide-style heading that states the answer, written with it.
+  heading?: string;
+  evidence_id?: string;
+  excerpt?: string;
+  reason?: string;
 };
 
 export type TResearchAgentState = {
-  version: 3;
+  version: 4;
   brief_id: string;
   started_at: number;
   steps: number;
-  pass: 1 | 2;
-  pass_steps: number;
+  // Rounds of public search, shown to the host as research passes.
+  pass: number;
   lookup_attempts: number;
   completed_lookups: number;
   read_pages?: number;
   model_attempts: TAttempt[];
   messages: ModelMessage[];
   targets: TResearchTarget[];
+  checklist: TCoverageItem[];
   evidence: TEvidence[];
   gaps: string[];
   research_notes?: string;
-  continuation?: TResearchContinuation;
   stop_reason?: "finished" | "budget";
 };
 
-type TResearchAgentStateV2 = Omit<TResearchAgentState, "version" | "pass" | "pass_steps" | "continuation"> & { version: 2 };
+type TLegacyResearchState = Omit<TResearchAgentState, "version" | "pass" | "checklist"> & { version: 2 | 3; pass?: number };
 export type TResearchCollectionCheckpoint =
   | Omit<TResearchAgentState, "evidence" | "gaps" | "completed_lookups">
-  | Omit<TResearchAgentStateV2, "evidence" | "gaps" | "completed_lookups">;
+  | Omit<TLegacyResearchState, "evidence" | "gaps" | "completed_lookups">;
 
 export type TCollectResearch = {
   brief: TResearchBrief;
   evidence: TEvidence[];
   gaps: string[];
-  previous?: TResearchAgentState | TResearchAgentStateV2;
+  previous?: TResearchAgentState | TLegacyResearchState;
   checkpoint?: (state: TResearchAgentState) => void;
   model_step: TModelStep;
   lookup: (input: {

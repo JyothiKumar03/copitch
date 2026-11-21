@@ -24,11 +24,9 @@ const answer = (delta: string) => ({
     { type: "finish" as const, usage, finishReason: { unified: "stop" as const, raw: "stop" } },
   ]),
 });
-const assessment = (notes: string) => answer(JSON.stringify({ decision: "complete", notes }));
-const request_pass = (target_id: string, tool = "read_url") => answer(JSON.stringify({
-  decision: "continue", target_id, tool, notes: "The reporting date remains unsupported.",
-  gap: "The reporting period for the participant count.", reason: "The unused source contains the dated report.",
-}));
+const plan = (...questions: [string, "number" | "fact"][]) =>
+  ["plan_coverage", { items: questions.map(([question, needs]) => ({ question, needs })) }] as [string, Record<string, unknown>];
+const done = (note = "P1 states the participant count.") => answer(note);
 const fixture_model_step = (...steps: ReturnType<typeof call>[]) => {
   const model = new MockLanguageModelV4({ doStream: steps });
   const step = create_model_step([{ model: "fixture", provider: "openai", tool_providers: ["session"], max_output_tokens: 512 }],
@@ -47,176 +45,169 @@ const test_input = (options: Partial<TCollectResearch>): TCollectResearch => ({
   ...options,
 });
 
-test("the model chooses two tools from the research goal, follows a result and returns notes", async () => {
-  const { model, step } = fixture_model_step(
-    call(["web_search", { query_id: "S1" }]),
-    call(["read_url", { source_id: "S2" }]),
-    assessment("P1 covers the project reach. The date remains unknown."),
-  );
-  const requested: string[] = [];
-  const checkpoints: TResearchAgentState[] = [];
-  const state = await collect_research(test_input({
-    brief: { ...brief, urls: [] },
-    model_step: step,
-    checkpoint: snapshot => checkpoints.push(snapshot),
-    lookup: async ({ kind, target, known_links }) => {
-      expect(checkpoints.at(-1)?.lookup_attempts).toBe(requested.length + 1);
-      requested.push(target);
-      if (kind === "search") return {
-        links: [{ url: "https://company.example/growth", title: "Growth project" }],
-        hits: [{ url: "https://company.example/growth", title: "Untrusted generated search excerpt", passage: "The project had a billion participants." }],
-      };
-      expect(known_links).toContain("https://company.example/growth");
-      return { url: "https://www.company.example/growth", hits: [
-        { url: "https://www.company.example/growth", title: "Growth project", passage: "The project had 30,000 participants." },
-      ] };
-    },
-  }));
-  expect(requested).toEqual([brief.public_queries[0], "https://company.example/growth"]);
-  expect(model.doStreamCalls[0].tools?.map(tool => tool.name).sort()).toEqual(["read_url", "web_search"]);
-  expect(model.doStreamCalls[0].providerOptions?.openai).toEqual({ parallelToolCalls: false, store: false });
-  expect(JSON.stringify(model.doStreamCalls[1].prompt)).toContain("https://company.example/growth");
-  expect(JSON.stringify(model.doStreamCalls[2].prompt)).toContain("https://www.company.example/growth");
-  expect(state.evidence).toMatchObject([{ id: "P1", passage: "The project had 30,000 participants." }]);
-  expect(state.lookup_attempts).toBe(2);
-  expect(state.read_pages).toBe(1);
-  expect(state.research_notes).toBe("P1 covers the project reach. The date remains unknown.");
-  expect(state.stop_reason).toBe("finished");
-});
 
-test("the model cannot finish an approved public brief with zero lookups and an unread explicit source", async () => {
-  const { model, step } = fixture_model_step(
-    assessment("The source has enough information."),
-    call(["read_url", { source_id: "S1" }]),
-    assessment("Cite the opening date from P1."),
-  );
-  const state = await collect_research(test_input({ model_step: step, lookup: async ({ target }) => ({
-    url: target, hits: [{ url: target, title: "Company", passage: "The project opened in 2025." }],
-  }) }));
-  expect(JSON.stringify(model.doStreamCalls[1].prompt)).toContain("Attempt the outstanding host-approved reads before finishing: S1.");
-  expect(state.read_pages).toBe(1);
-  expect(state.stop_reason).toBe("finished");
-});
+const participants = "How many participants did the growth project have?";
+const opened = "When did the growth project open, by year?";
 
-test("each pass permits ten lookup attempts, including errors, and a third pass is refused", async () => {
-  const urls = Array.from({ length: 21 }, (_, index) => "https://company.example/" + (index + 1));
-  const batch = (offset: number) => Array.from({ length: 10 }, (_, index) =>
-    call(["read_url", { source_id: "S" + (offset + index + 1) }], ["read_url", { source_id: "S21" }]));
-  const { model, step } = fixture_model_step(...batch(0), request_pass("S11"), ...batch(10), request_pass("S21"));
+test("the agent plans a checklist, searches and reads in parallel, and records quoted answers", async () => {
+  const { model, step } = fixture_model_step(
+    call(plan([participants, "number"], [opened, "number"])),
+    call(["web_search", { searches: [
+      { item_id: "C1", query: "growth project participants 2025" },
+      { item_id: "C2", query: "growth project opening year" },
+    ] }]),
+    call(["read_url", { source_ids: ["S3", "S4"], item_id: "C1" }]),
+    call(["record_answers", { answers: [
+      { item_id: "C1", evidence_id: "P1", excerpt: "had 30,000 participants", answer: "30,000 participants" },
+      { item_id: "C2", evidence_id: "P2", excerpt: "opened in 2025", answer: "2025" },
+    ] }]),
+    done(),
+  );
   const dispatched: string[] = [];
   const state = await collect_research(test_input({
-    brief: { ...brief, urls, public_queries: [] },
-    model_step: step,
-    lookup: async ({ target }) => { dispatched.push(target); throw new Error("Lookup did not respond"); },
+    brief: { ...brief, urls: [] }, model_step: step,
+    lookup: async ({ kind, target }) => {
+      dispatched.push(kind + ":" + target);
+      if (kind === "search") return { hits: [], links: [{ url: "https://company.example/" + (target.includes("opening") ? "history" : "growth"), title: target }] };
+      return { url: target, hits: [{ url: target, title: "Page", passage: target.endsWith("growth")
+        ? "The project had 30,000 participants." : "The project opened in 2025 in Pune." }] };
+    },
   }));
-  expect(dispatched).toEqual(urls.slice(0, 20));
-  expect(model.doStreamCalls).toHaveLength(22);
-  expect(model.doStreamCalls[10].tools ?? []).toHaveLength(0);
-  expect(model.doStreamCalls[21].tools ?? []).toHaveLength(0);
-  expect(state.completed_lookups).toBe(20);
-  expect(state.lookup_attempts).toBe(20);
-  expect(state.read_pages).toBe(0);
-  expect(state.pass).toBe(2);
+  expect(dispatched.slice(0, 2).sort()).toEqual(["search:growth project opening year", "search:growth project participants 2025"]);
+  expect(dispatched.slice(2).sort()).toEqual(["read:https://company.example/growth", "read:https://company.example/history"]);
+  expect(model.doStreamCalls[0].providerOptions?.openai).toEqual({ parallelToolCalls: true, store: false });
+  expect(state.checklist.map(item => [item.id, item.status, item.answer])).toEqual([["C1", "covered", "30,000 participants"], ["C2", "covered", "2025"]]);
+  expect(state.lookup_attempts).toBe(4);
+  expect(state.read_pages).toBe(2);
+  expect(state.pass).toBe(1);
+  expect(state.stop_reason).toBe("finished");
+});
+
+test("search is refused before the checklist exists, and stopping without one is sent back", async () => {
+  const { model, step } = fixture_model_step(
+    call(["web_search", { searches: [{ item_id: "C1", query: "growth project" }] }]),
+    done("Nothing to do."),
+    call(plan([participants, "number"])),
+    call(["web_search", { searches: [{ item_id: "C1", query: "growth project participants" }] }]),
+    call(["read_url", { source_ids: ["S2"] }]),
+    call(["record_answers", { answers: [{ item_id: "C1", evidence_id: "P1", excerpt: "30,000 participants", answer: "30,000" }] }]),
+    done(),
+  );
+  const state = await collect_research(test_input({ brief: { ...brief, urls: [] }, model_step: step, lookup: async ({ kind, target }) => kind === "search"
+    ? { hits: [], links: [{ url: "https://company.example/growth", title: "Growth" }] }
+    : { hits: [{ url: target, title: "Growth", passage: "The project had 30,000 participants." }] } }));
+  expect(JSON.stringify(model.doStreamCalls[1].prompt)).toContain("Call plan_coverage before searching.");
+  expect(JSON.stringify(model.doStreamCalls[2].prompt)).toContain("Call plan_coverage first");
+  expect(state.lookup_attempts).toBe(2);
+  expect(state.stop_reason).toBe("finished");
+});
+
+test("answers need a verbatim excerpt, and number items need the number", async () => {
+  const { step } = fixture_model_step(
+    call(plan([participants, "number"], ["Who runs the project?", "fact"])),
+    call(["read_url", { source_ids: ["S1"] }]),
+    call(["record_answers", { answers: [
+      { item_id: "C1", evidence_id: "P1", excerpt: "a billion participants", answer: "1 billion" },
+      { item_id: "C1", evidence_id: "P1", excerpt: "The project had", answer: "many" },
+      { item_id: "C2", evidence_id: "P1", excerpt: "run by  the  Growth Office", answer: "The Growth Office" },
+    ] }]),
+    done(), done(), done(), done(),
+  );
+  const checkpoints: string[] = [];
+  const state = await collect_research(test_input({
+    brief: { ...brief, public_queries: [] }, model_step: step,
+    checkpoint: snapshot => checkpoints.push(JSON.stringify(snapshot.checklist)),
+    lookup: async ({ target }) => ({ hits: [{ url: target, title: "Home", passage: "The project had 30,000 participants, run by the Growth Office." }] }),
+  }));
+  expect(state.checklist.map(item => item.status)).toEqual(["open", "covered"]);
+  expect(state.gaps).toContain("Not found within the research budget: " + participants);
   expect(state.stop_reason).toBe("budget");
 });
 
-test("worker interruption preserves a successful read and its eligible links for restart", async () => {
+test("an open item is sent back for a rewritten query and can be marked unavailable only after two tries", async () => {
+  const { model, step } = fixture_model_step(
+    call(plan([participants, "number"])),
+    call(["web_search", { searches: [{ item_id: "C1", query: "growth project data portal" }] }]),
+    call(["mark_unavailable", { item_id: "C1", reason: "Only a data portal was found." }]),
+    done("Could not find it."),
+    call(["web_search", { searches: [
+      { item_id: "C1", query: "growth project data portal" },
+      { item_id: "C1", query: "growth project participants annual report 2025" },
+    ] }]),
+    call(["mark_unavailable", { item_id: "C1", reason: "Two searches found only catalog pages." }]),
+    done("The participant count is not published."),
+  );
+  const searched: string[] = [];
+  const state = await collect_research(test_input({
+    brief: { ...brief, urls: [] }, model_step: step,
+    lookup: async ({ target }) => { searched.push(target); return { hits: [] }; },
+  }));
+  expect(JSON.stringify(model.doStreamCalls[3].prompt)).toContain("Try at least two differently worded searches");
+  expect(JSON.stringify(model.doStreamCalls[4].prompt)).toContain("These checklist items are still open: C1");
+  expect(JSON.stringify(model.doStreamCalls[5].prompt)).toContain("This query already ran. Rewrite it");
+  expect(searched).toEqual(["growth project data portal", "growth project participants annual report 2025"]);
+  expect(state.checklist[0]).toMatchObject({ status: "unavailable", lookups: 2 });
+  expect(state.gaps[0]).toContain("Not established: " + participants);
+  expect(state.stop_reason).toBe("finished");
+});
+
+test("a host's own site is read in focused mode: no web search and a 12-lookup cap, including failures", async () => {
+  const urls = Array.from({ length: 40 }, (_, index) => "https://company.example/" + (index + 1));
+  const reads = (offset: number) => call(
+    ["read_url", { source_ids: urls.slice(offset, offset + 4).map((_, index) => "S" + (offset + index + 1)) }],
+    ["read_url", { source_ids: urls.slice(offset + 4, offset + 8).map((_, index) => "S" + (offset + index + 5)) }],
+    ["read_url", { source_ids: ["S" + (offset + 9)] }],
+  );
+  const { model, step } = fixture_model_step(
+    call(plan([participants, "number"])), ...Array.from({ length: 5 }, (_, index) => reads(index * 8)), done(), done(), done(), done(),
+  );
+  const dispatched: string[] = [];
+  const state = await collect_research(test_input({
+    brief: { ...brief, urls, public_queries: [] }, model_step: step,
+    lookup: async ({ target }) => { dispatched.push(target); throw new Error("Lookup did not respond"); },
+  }));
+  expect(dispatched).toHaveLength(12);
+  expect(state.lookup_attempts).toBe(12);
+  expect(new Set(dispatched).size).toBe(12);
+  expect((model.doStreamCalls[0].tools ?? []).map(tool => tool.name)).not.toContain("web_search");
+  expect(state.stop_reason).toBe("budget");
+});
+
+test("worker interruption keeps the checklist and evidence for restart", async () => {
   let previous: TResearchAgentState | undefined;
-  const checkpoint = (state: TResearchAgentState) => { previous = state; };
-  const initial = fixture_model_step(call(["read_url", { source_id: "S1" }]));
-  const seen: string[] = [];
-  const lookup: TCollectResearch["lookup"] = async ({ target }) => {
-    seen.push(target);
-    return target === brief.urls[0] ? {
-      hits: [{ url: target, title: "Home", passage: "A project page gives the counts." }],
-      links: [{ url: "https://company.example/metrics", title: "Project metrics" }],
-    } : { hits: [{ url: target, title: "Project metrics", passage: "The project had 30,000 participants." }] };
-  };
+  const initial = fixture_model_step(call(plan([participants, "number"]), ["read_url", { source_ids: ["S1"] }]));
+  const lookup: TCollectResearch["lookup"] = async ({ target }) => ({ hits: [{ url: target, title: "Home", passage: "The project had 30,000 participants." }] });
   await expect(collect_research(test_input({
-    lookup, checkpoint,
-    model_step: async request => {
-      await initial.step(request);
-      throw new Error("Worker stopped");
-    },
+    lookup, checkpoint: state => { previous = state; },
+    model_step: async request => { await initial.step(request); throw new Error("Worker stopped"); },
   }))).rejects.toThrow("Worker stopped");
+  expect(previous?.checklist).toHaveLength(1);
   expect(previous?.evidence[0].id).toBe("P1");
-
-  const resumed = fixture_model_step(call(["read_url", { source_id: "S3" }]), assessment("Cite P2 for reach."));
-  const state = await collect_research(test_input({ lookup, previous, checkpoint, model_step: resumed.step }));
-  expect(seen).toEqual([brief.urls[0], "https://company.example/metrics"]);
-  expect(state.lookup_attempts).toBe(2);
-  expect(state.model_attempts).toHaveLength(3);
-  expect(state.evidence.map(item => item.id)).toEqual(["P1", "P2"]);
-});
-
-test("a model continuation survives restart and resumes with its outstanding gap", async () => {
-  let previous: TResearchAgentState | undefined;
-  const first = fixture_model_step(call(["read_url", { source_id: "S1" }]), request_pass("S3"));
-  const read: string[] = [];
-  const lookup: TCollectResearch["lookup"] = async ({ target }) => {
-    read.push(target);
-    return target === brief.urls[0] ? {
-      hits: [{ url: target, title: "Home", passage: "The project had 30,000 participants." }],
-      links: [{ url: "https://company.example/dated-report", title: "Dated report" }],
-    } : { hits: [{ url: target, title: "Dated report", passage: "The project counted participants during 2025." }] };
-  };
-  await expect(collect_research(test_input({
-    lookup, model_step: first.step,
-    checkpoint: snapshot => {
-      previous = snapshot;
-      if (snapshot.pass === 2) throw new Error("Worker stopped after saving continuation");
-    },
-  }))).rejects.toThrow("Worker stopped");
-  expect(previous?.pass).toBe(2);
-  expect(previous?.pass_steps).toBe(0);
-  expect(previous?.continuation?.target_id).toBe("S3");
-  const second = fixture_model_step(call(["read_url", { source_id: "S3" }]), assessment("P1 supports the count. P2 supports 2025."));
-  const state = await collect_research(test_input({ previous, lookup, model_step: second.step }));
-  expect(JSON.stringify(second.model.doStreamCalls[0].prompt)).toContain("The unused source contains the dated report.");
-  expect(read).toEqual([brief.urls[0], "https://company.example/dated-report"]);
-  expect(state.research_notes).toBe("P1 supports the count. P2 supports 2025.");
+  const resumed = fixture_model_step(
+    call(["record_answers", { answers: [{ item_id: "C1", evidence_id: "P1", excerpt: "30,000 participants", answer: "30,000" }] }]), done(),
+  );
+  const state = await collect_research(test_input({ lookup, previous, model_step: resumed.step }));
+  expect(state.lookup_attempts).toBe(1);
+  expect(state.checklist[0].status).toBe("covered");
   expect(state.stop_reason).toBe("finished");
 });
 
-test.each([
-  ["an unapproved target", request_pass("S999")],
-  ["an already used target", request_pass("S1")],
-  ["the wrong tool for an approved target", request_pass("S2")],
-  ["malformed assessment", answer("Continue with S2")],
-])("%s cannot start a second pass", async (_name, terminal) => {
-  const { model, step } = fixture_model_step(call(["read_url", { source_id: "S1" }]), terminal);
-  const state = await collect_research(test_input({
-    model_step: step, lookup: async () => ({ hits: [] }),
-  }));
-  expect(model.doStreamCalls).toHaveLength(2);
-  expect(state.pass).toBe(1);
-  expect(state.stop_reason).toBe("finished");
-});
-
-test("a v2 checkpoint restores remaining lookup capacity and retained evidence", async () => {
-  const evidence = [{ id: "P1", location: "Home", origin: "public" as const, passage: "A participant count was recorded." }];
+test("a v3 checkpoint keeps its evidence and lookup count and starts a checklist", async () => {
+  const evidence = [{ id: "P1", location: "Home", origin: "public" as const, url: brief.urls[0], passage: "The project had 30,000 participants." }];
   const previous: TCollectResearch["previous"] = {
-    version: 2, brief_id: brief.brief_id, started_at: Date.now(), steps: 9, lookup_attempts: 9,
-    completed_lookups: 9, model_attempts: [], evidence, gaps: [], research_notes: "Discard obsolete note",
-    messages: [{ role: "assistant", content: "Discard obsolete tool history" }],
-    targets: [
-      { id: "S1", kind: "read", value: brief.urls[0], label: "Home", seed: true, status: "read", evidence_ids: ["P1"] },
-      { id: "S2", kind: "search", value: brief.public_queries[0], label: "Query" },
-    ],
+    version: 3, brief_id: brief.brief_id, started_at: Date.now(), steps: 4, pass: 1, lookup_attempts: 4,
+    completed_lookups: 4, model_attempts: [], evidence, gaps: [], messages: [{ role: "assistant", content: "Discard obsolete tool history" }],
+    targets: [{ id: "S1", kind: "read", value: brief.urls[0], label: "Home", seed: true, status: "read", evidence_ids: ["P1"] }],
   };
-  const { model, step } = fixture_model_step(call(["web_search", { query_id: "S2" }]), assessment("Cite P1."));
-  const state = await collect_research(test_input({
-    evidence, previous, model_step: step, lookup: async ({ target }) => {
-      expect(target).toBe(brief.public_queries[0]);
-      return { hits: [] };
-    },
-  }));
-  expect(model.doStreamCalls[1].tools ?? []).toHaveLength(0);
+  const { model, step } = fixture_model_step(
+    call(plan([participants, "number"]), ["record_answers", { answers: [{ item_id: "C1", evidence_id: "P1", excerpt: "30,000 participants", answer: "30,000" }] }]),
+    done(),
+  );
+  const state = await collect_research(test_input({ evidence, previous, model_step: step }));
   expect(JSON.stringify(model.doStreamCalls[0].prompt)).not.toContain("Discard obsolete");
-  expect(state.lookup_attempts).toBe(10);
-  expect(state.evidence).toEqual(evidence);
-  expect(state.version).toBe(3);
-  expect(state.pass).toBe(1);
+  expect(state.version).toBe(4);
+  expect(state.lookup_attempts).toBe(4);
+  expect(state.checklist[0].status).toBe("covered");
 });
 
 test("files-only research keeps selected material without a network or discovery model call", async () => {
@@ -228,4 +219,29 @@ test("files-only research keeps selected material without a network or discovery
   expect(state.read_pages).toBe(0);
   expect(state.stop_reason).toBe("finished");
   expect(state.evidence).toEqual(selected);
+});
+
+test("a long report keeps the passages that answer the question, not its front matter", async () => {
+  const front = Array.from({ length: 40 }, (_, index) => ({ url: brief.urls[0], title: "Report, page " + (index + 1), passage: "Foreword and acknowledgements section " + index }));
+  const answer_page = { url: brief.urls[0], title: "Report, page 212", passage: "Participants in the growth project reached 30,000 in 2025." };
+  const { step } = fixture_model_step(
+    call(plan([participants, "number"])),
+    call(["read_url", { source_ids: ["S1"] }]),
+    call(["record_answers", { answers: [{ item_id: "C1", evidence_id: "P1", excerpt: "reached 30,000 in 2025", answer: "30,000" }] }]),
+    done(),
+  );
+  const state = await collect_research(test_input({ model_step: step, lookup: async () => ({ hits: [...front, answer_page] }) }));
+  expect(state.evidence[0]).toMatchObject({ id: "P1", location: "Report, page 212" });
+  expect(state.evidence).toHaveLength(20);
+  expect(state.checklist[0].status).toBe("covered");
+});
+
+test("host files with no links are used as supplied, and no link or file means a broad web hunt", async () => {
+  const selected = [{ id: "M1", location: "Supplied material", origin: "material" as const, passage: "42 completed pilots." }];
+  const focused = await collect_research(test_input({ brief: { ...brief, urls: [] }, evidence: selected }));
+  expect(focused.steps).toBe(0);
+  expect(focused.stop_reason).toBe("finished");
+  const { model, step } = fixture_model_step(call(plan([participants, "number"])), done(), done(), done(), done());
+  await collect_research(test_input({ brief: { ...brief, urls: [] }, model_step: step }));
+  expect((model.doStreamCalls[0].tools ?? []).map(tool => tool.name).sort()).toEqual(["mark_unavailable", "plan_coverage", "read_url", "record_answers", "web_search"]);
 });
