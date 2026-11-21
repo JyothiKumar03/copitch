@@ -110,3 +110,33 @@ test("approved crawl depth is measured by link hops and checks relevant routes f
     expect(result.attempts.map(({ depth }) => depth)).toEqual(result.pages.map(({ depth }) => depth));
   }
 });
+
+test("learning and download goals prioritize useful visible links over paths that only repeat the site name", async () => {
+  const origin = "https://www.python.org";
+  const root = origin + "/about/";
+  const links = [
+    { url: origin + "/events/python-user-group/2251/", label: "Django & FastAPI meetup" },
+    { url: origin + "/events/python-events/2184/", label: "Python E-Commerce Forum" },
+    { url: origin + "/events/python-workshops/2248/", label: "Python Camp Workshop" },
+    { url: origin + "/events/python-events/2257/", label: "PyCon mini" },
+    { url: origin + "/psf-landing/", label: "Learn more about the Python Software Foundation" },
+    { url: origin + "/about/gettingstarted/", label: "Getting Started" },
+    { url: origin + "/doc/", label: "Documentation" },
+    { url: origin + "/downloads/", label: "Downloads" },
+    { url: origin + "/start/", label: "Beginner’s Guide" },
+    { url: "https://other.example.com/downloads/", label: "Download a supported version" },
+  ];
+  const run = async (goal: string) => (await capture_website(root, AbortSignal.timeout(1000), undefined, {
+    resolve: async () => [ipv4],
+    read: async url => ({ url: url.href, status: 200, content_type: "text/html", body: Buffer.from("fixture") }),
+    launch: async () => ({
+      close: async () => {},
+      capture: async document => ({ url: document.url, title: "Public fixture", facts: ["Visible text."],
+        screenshot: Buffer.from("image"), links: document.url === root ? links : [] }),
+    }),
+  }, { max_depth: 1, goal })).pages.map(page => page.url);
+  expect(await run("Learn the basics of Python and download a supported version.")).toEqual([
+    root, origin + "/downloads/", origin + "/about/gettingstarted/", origin + "/start/", origin + "/doc/",
+  ]);
+  expect(await run("Walk through Python")).toEqual([root, ...links.slice(0, 4).map(link => link.url)]);
+});

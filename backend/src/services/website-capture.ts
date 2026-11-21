@@ -15,7 +15,8 @@ export type TWebsiteCaptureScope = { max_depth: number; goal: string };
 type TWebsiteResponse = {
   url: string; status: number; location?: string; content_type: string; content_security_policy?: string; body: Buffer;
 };
-type TInspectedPage = Omit<TWebsiteCapturedPage, "url"> & { links: string[]; url: string };
+type TWebsiteLink = { url: string; label: string };
+type TInspectedPage = Omit<TWebsiteCapturedPage, "url"> & { links: (TWebsiteLink | string)[]; url: string };
 type TBrowserElement = {
   href: string;
   innerText: string;
@@ -73,6 +74,34 @@ const discover_url = (from: URL, value: string) => {
   const target = website_capture_url(value);
   if (!target || !same_destination(from, target) || target.search || file_suffix.test(target.pathname)) return;
   return safe_path(target) ? target : undefined;
+};
+
+const navigation_intents = [
+  { goal: /\b(?:learn(?:ing)?|basics?|beginners?|intro(?:duction)?|get(?:ting)? started|tutorials?)\b/iu,
+    direct: /\b(?:get(?:ting)?[\s/-]*started|beginners?|tutorials?|intro(?:duction)?|learn(?:ing)?)\b/iu,
+    related: /\b(?:about|overview|doc(?:s|umentation)?|guides?)\b/iu },
+  { goal: /\b(?:downloads?|install(?:ation)?|releases?|supported versions?)\b/iu,
+    direct: /\b(?:downloads?|install(?:ation)?|releases?|supported versions?)\b/iu,
+    related: /\b(?:versions?|availability|distribution)\b/iu },
+];
+const rank_words = (value: string) => [...new Set(value.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? [])]
+  .map(word => /^[a-z]{4,}s$/u.test(word) && !/(?:ss|us|is)$/u.test(word) ? word.slice(0, -1) : word);
+const common_goal_words = new Set("and are for from has how into its our that the their there these this those through via was were what where which while who will with you your".split(" "));
+
+const link_relevance = (goal: string, host: string) => {
+  const generic = new Set(rank_words(host));
+  const wanted = new Set(rank_words(goal).filter(word => !generic.has(word) && !common_goal_words.has(word)));
+  const intents = navigation_intents.filter(intent => intent.goal.test(goal));
+  const matches = (value: string) => rank_words(value).filter(word => wanted.has(word)).length;
+  return (url: URL, label: string) => {
+    const path = decodeURIComponent(url.pathname);
+    const leaf = path.split("/").filter(Boolean).at(-1)?.replace(/[-_]/gu, " ") ?? "";
+    const purpose_label = label.replace(/\b(?:learn|read|find out) more(?: about)?\b/giu, " ");
+    const purpose = intents.reduce((score, intent) => score +
+      (intent.direct.test(purpose_label) || intent.direct.test(leaf) ? 4 :
+        intent.related.test(purpose_label) || intent.related.test(leaf) ? 2 : 0), 0);
+    return purpose + matches(purpose_label) * 2 + matches(path);
+  };
 };
 
 const resolve_ipv4: TWebsiteCaptureServices["resolve"] = async host =>
@@ -185,7 +214,7 @@ const launch_browser = async (): Promise<TWebsiteBrowser> => {
           }
           const links = [...document.querySelectorAll("a[href]:not([download])")]
             .filter(node => visible(node) && !node.closest("form") && !!(clean(node.innerText) || node.getAttribute("aria-label")))
-            .slice(0, 80).map(node => node.href);
+            .slice(0, 80).map(node => ({ url: node.href, label: clean(node.innerText || node.getAttribute("aria-label") || "").slice(0, 160) }));
           return { title: clean(document.title || facts[0] || "").slice(0, 160), facts, links,
             requires_login: [...document.querySelectorAll("input[type=password]")].some(visible) };
         });
@@ -229,11 +258,7 @@ export const capture_website = async (value: string, signal: AbortSignal, observ
   if (!WEBSITE_WALKTHROUGH_DEPTHS.some(allowed => allowed === max_depth)) {
     throw new AppError(422, `Choose a crawl depth from 0 to ${WEBSITE_WALKTHROUGH_DEPTHS.at(-1)}.`);
   }
-  const goal_terms = new Set(goal.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? []);
-  const relevance = (url: URL) => {
-    const path_terms = decodeURIComponent(url.pathname).toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? [];
-    return [...new Set(path_terms)].filter(word => goal_terms.has(word)).length;
-  };
+  const relevance = link_relevance(goal, root.hostname);
   const result: TWebsiteCaptureResult = { pages: [], attempts: [] };
   const record = (attempt: TWebsiteCaptureAttempt) => { result.attempts.push(attempt); observe?.(attempt); };
   const failure = (error: unknown, default_message: string) => error instanceof WebsiteCaptureError ? error.message : default_message;
@@ -307,8 +332,11 @@ export const capture_website = async (value: string, signal: AbortSignal, observ
         result.pages.push({ url: captured.url, title: captured.title || observed.hostname, facts: captured.facts, screenshot: captured.screenshot, depth });
         attempt = { url: current.href, observed_url, status: "captured", depth };
         if (depth < max_depth) {
-          const children = captured.links.map(link => discover_url(observed, link)).filter((link): link is URL => !!link)
-            .map(link => ({ link, score: relevance(link) })).sort((first, second) => second.score - first.score);
+          const children = captured.links.flatMap(candidate => {
+            const { url, label } = typeof candidate === "string" ? { url: candidate, label: "" } : candidate;
+            const link = discover_url(observed, url);
+            return link ? [{ link, score: relevance(link, label) }] : [];
+          }).sort((first, second) => second.score - first.score);
           for (const { link } of children) {
             if (queued.has(link.href)) continue;
             if (queue.length >= capture_limits.attempts) break;
