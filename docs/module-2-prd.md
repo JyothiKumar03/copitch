@@ -3,21 +3,24 @@
 Status: implementation reference · Date: 2026-11-21
 Read this with the [HTML presentation plan](module-2-html-presentation.md), which specifies review authority and the paint gate for accepting and advancing after a live edit.
 
+
+The [current presentation flow and diagrams](presentation-flow.md) define preparation, visual review, and host-screen delivery.
+
 ## 1. Problem and outcome
 
-The host finishes Module 1 with a researched `context.md` with verified findings and citations. Module 2 turns that into a deck and lets an agent present it to a live audience by voice. The agent narrates slide by slide, stops the moment someone speaks, answers questions from the evidence, proposes slide changes only with the host's approval, and resumes exactly where it stopped.
+The host approves a research scope and chooses a maximum slide count. The agent checks the saved evidence, plans the deck, and reviews a Playwright render before the host sees it.
 
-**Done means:** a host opens a saved pitch, reviews a deck and its narration, presses Present, and the audience sees the slides on a second screen and hears them narrated. A question mid-sentence gets a cited answer and the talk resumes at the interrupted sentence. A spoken correction becomes a reviewed before/after change that only the host can apply. Anyone can open the HTML, PDF or PPTX export afterwards.
+**Done means** the host can review and approve a checked deck, start narration on the current screen, interrupt with a cited question, and resume at the same sentence. A slide correction stays in private review until approved. The deck can be opened offline as standalone HTML.
 
-## 2. Users and surfaces
+## 2. Host surfaces
 
-| Surface | Who | Sees | Can do |
-|---|---|---|---|
-| Host console | Host (signed in, owns the project) | Slides, private narration, Q&A with sources, pending changes, controls | Approve the deck, present, pause, resume, next, back, skip, approve or reject a change, export |
-| Audience stage | Audience (link with a scoped token, read-only) | The current approved slide only | Nothing; it reports what it painted |
-| Voice | Host and room microphone | — | Ask questions, request changes, give commands |
+| Surface | What the host can do |
+|---|---|
+| Deck review | Inspect slides, private narration, and evidence, then approve or export the HTML |
+| Live presentation | Pause, resume, go next or back, skip, and privately apply or reject a change |
+| Voice | Interrupt narration, ask a question, request a change, or give a navigation command |
 
-Private narration, research traces, pending changes and the host conversation never reach the audience stage or exports.
+Private narration, research traces, pending changes, and host conversation stay out of the HTML export.
 
 ## 3. Inputs (dependency on Module 1)
 
@@ -60,25 +63,25 @@ The deck is only as good as the brief. Module 2 consumes the verified research b
 | Approving an amendment appends the instruction text to the narration | `presenter-agent-service.ts:487-497` | R4.5: a change is a typed patch to fields, never raw instruction text |
 | Thresholds for barge-in tuned on nothing; no evals | `PROGRESS.md:274-276` | R6: measured rehearsal and model evals |
 
-**What copitch already has** (reuse, do not rebuild): deck types and revisions (`backend/src/types/deck.ts`, `repositories/deck.ts`), deck compilation from findings (`services/deck.ts`), story planner with time budget (`services/pitch.ts`), live Q&A and edit turn (`services/live-turn.ts`), the continuation reducer with attempts, paint and skip/revisit (`services/continuation.ts`, `types/continuation.ts`), the audience projection with a token (`controllers/audience.ts`, `frontend/components/deck/AudienceStage.tsx`), HTML export (`frontend/lib/export-deck.ts`), and the Live voice session from Module 1 (`services/live-session.ts`, `live-interviewer.ts`).
+**What copitch already has** (reuse, do not rebuild): deck types and revisions (`backend/src/types/deck.ts`, `repositories/deck.ts`), deck compilation from findings (`services/deck.ts`), story planner with time budget (`services/pitch.ts`), live Q&A and edit turn (`services/live-turn.ts`), the continuation reducer with attempts, paint and skip/revisit (`services/continuation.ts`, `types/continuation.ts`), the audience projection with a token (`controllers/audience.ts`, `frontend/components/deck/LiveDeck.tsx`), HTML export (`frontend/lib/export-deck.ts`), and the Live voice session from Module 1 (`services/live-session.ts`, `live-interviewer.ts`).
 
 ## 5. Requirements
 
 ### R1 · Deck planning
 
-- **R1.1** The host starts from a saved, approved pitch revision. The planner receives the brief sections, talk track, evidence, intent, audience, time budget and optional slide count.
+- **R1.1** The host starts from a saved, verified research revision and chooses a slide count. The planner receives the verified findings, linked evidence, available charts and the requested ceiling. Interview transcripts, prior scripts and instructions stay outside this content boundary.
 - **R1.2** The planner returns beats. Each beat has narration split into sentences, one slide, the evidence IDs it uses, and an estimated speaking time (135 words per minute + 3 s per slide, as in `services/pitch.ts`).
 - **R1.3** Slides use the adopted layout set: TitleCard, BulletSlide, MetricGrid, Timeline, Quote, Comparison, BarChart, LineChart, DonutChart. Image layouts are out of scope until an image source exists.
 - **R1.4** Every visible fact cites evidence. Every number, date and name on a slide must appear in a cited record, using the shared `quotes()` comparison (`services/excerpt.ts`); charts additionally require each plotted value to be stated. Failing beats are dropped or re-planned, never published.
-- **R1.5** For a person: title card, who they are, education, journey (timeline), key projects with numbers (metrics), how they work, what's next or the ask. For a company or product: problem, product, proof points, team, ask. The plan follows the talk track order.
+- **R1.5** Group the saved findings by what the subject and evidence support. Choose points, a chart, or both per slide. Use the full count when the material supports distinct beats.
 - **R1.6** The planner prompt lives in `backend/src/services/prompts.ts` with role, goal, outcome, methodology and guardrails.
-- **R1.7** The host reviews the deck: slide preview, private narration per beat, total time against budget, and sources per slide. Approving saves a deck revision; only an approved revision can be presented.
+- **R1.7** The host reviews the slides, private narration, estimated speaking time and sources. Only an explicitly approved revision can be presented.
 
 ### R2 · Rendering and export
 
-- **R2.1** One public view model per slide feeds the host preview, the audience stage and every export, so they show the same words and numbers for the same revision.
-- **R2.2** The audience stage is a separate page opened with a scoped token. It renders only the current approved slide, reports a paint acknowledgement (`continuation` `paint` action) and never receives narration or pending changes.
-- **R2.3** Export to HTML (existing), PPTX with narration as speaker notes, and PDF, ported from `live-slides` exporters. Exports need no headless browser or network and contain no private data.
+- **R2.1** One public view model feeds host review, the live stage, Playwright, and offline HTML. All surfaces show the same slide words and numbers.
+- **R2.2** Present on the host's screen by default. The stage acknowledges the current approved slide paint before speech proceeds. Any existing separate stage uses a scoped token and receives the public slide only.
+- **R2.3** The release format is standalone HTML with public slides and no private data. PPTX and PDF remain follow-up formats.
 - **R2.4** Layout checks: no text overflow at 1280×720 or on a phone; overflow sends the beat back to the planner to shorten or split.
 
 ### R3 · Narration and playback
@@ -86,12 +89,12 @@ The deck is only as good as the brief. Module 2 consumes the verified research b
 - **R3.1** Narration is spoken word for word, as approved. Each sentence is synthesised once per text, language and voice and cached.
 - **R3.2** The controller schedules one sentence at a time with an attempt ID. The host player reports start, natural end and interruption for that attempt; stale attempts are ignored (the `continuation` reducer's existing rule).
 - **R3.3** The checkpoint is `{deck_revision, beat_id, sentence_index}`. Resume restarts the interrupted sentence, not the beat.
-- **R3.4** Pause, resume, next, back, skip and go-to-slide move the controller's cursor. The audience stage follows the controller, not the host's local preview.
-- **R3.5** The audience slide advances only after the next beat's slide is painted on the stage; narration for that beat starts after the paint acknowledgement.
+- **R3.4** Pause, resume, next, back, and skip move the controller's cursor. The live stage follows the acknowledged cursor.
+- **R3.5** Narration for the next beat starts after its stage paint acknowledgement.
 
 ### R4 · Interruption, questions and changes
 
-- **R4.1** When anyone speaks, narration stops at once and the current sentence is marked unfinished. The approved slide stays on the stage.
+- **R4.1** Approval can request microphone permission. With room capture enabled, speech onset stops the browser player and the current sentence is marked unfinished. The approved slide stays visible. The host can ask privately in text when the microphone is unavailable.
 - **R4.2** Each finished utterance is classified once: question, change request, navigation command, approval or rejection of a pending change, backchannel or noise. Classification sees the current slide, its narration, the pending change if any and the utterance. Ambiguous references ("that number") get one clarifying question.
 - **R4.3** A question is answered from the deck, its evidence and permitted calculations. The answer cites evidence IDs with verbatim excerpts, checked with `quotes()`. When the evidence does not cover it, the agent says so and offers a scoped lookup. After the answer the talk resumes at the checkpoint.
 - **R4.4** A change request produces a typed patch against the current slide (title, bullets, metrics, chart data, narration) at a base revision, with source or host attribution. The host sees before and after; the audience does not.
@@ -144,8 +147,8 @@ TQuestionAnswer  { turn_id, question, answer, citations: { evidence_id, excerpt 
 
 | ID | Check | Evidence |
 |---|---|---|
-| M2-1 | Plan the jk-ai.in pitch for two audiences (new team, hiring manager) | Different emphasis and layouts; every number on every slide found in a cited record; time within budget |
-| M2-2 | Host preview, audience stage on a second device, HTML, PPTX and PDF of one revision | Same words and numbers on all five; no narration or pending change on the stage or in exports; no overflow at 1280×720 or on a phone |
+| M2-1 | Plan the same saved context at two slide limits | Group verified findings into each limit; verify chart values and slide copy against cited records |
+| M2-2 | Host preview, same-screen live stage, and HTML export of one revision | Same words and numbers across surfaces. Confirm the public slide and export exclude private content and fit at 1280×720 and on a phone. |
 | M2-3 | Ask "where did he study?" mid-sentence | Narration stops; answer cites the KMIT record; the talk resumes at the interrupted sentence |
 | M2-4 | Say "add that he processed 30k+ calls" on the projects slide | One proposal with before/after and its source; stage unchanged until Apply; after Apply the stage paints, the new sentence is spoken, then the talk continues; a repeated Apply creates no second revision |
 | M2-5 | Reject a proposal, say "go back to education", disconnect the stage | Revision unchanged; cursor moves to the education beat; reconnect restores the last approved slide, paused, with any pending review intact |
@@ -155,17 +158,15 @@ TQuestionAnswer  { turn_id, question, answer, citations: { evidence_id, excerpt 
 ## 9. Build order
 
 1. **Deck v2 and planner** (R1, R2.1, R2.4): `TSlideV2`, planner prompt, number check, review screen. Verified by M2-1.
-2. **Shared renderer and exports** (R2): public view model, audience stage parity, PPTX and PDF ported from live-slides. Verified by M2-2.
+2. **Shared renderer and HTML export** (R2). Reuse the public slide projection across review, stage, and offline HTML. Verify with M2-2.
 3. **Narration runtime** (R3, R5): sentence attempts on the existing continuation reducer, persisted cursor, serial commands, paint-gated advance. Verified by M2-5 (navigation and reconnect parts).
 4. **Interruption, Q&A and changes** (R4): utterance routing, cited answers, typed patches with review. Verified by M2-3, M2-4, M2-6.
 5. **Rehearsal and evals** (R6). Verified by M2-7.
 
-## 10. Owner decisions
+## 10. Runtime choices and follow-ups
 
-1. **Who speaks the narration.** Recommendation: sentence-level TTS (`gpt-4o-mini-tts`, voice `marin` or `cedar`) for approved narration, because it is word-for-word, cacheable and checkpointable per sentence; the Live session (`gpt-live-1.1`) listens to the room and speaks answers. Alternative: the Live model reads the narration itself, which is simpler but cannot guarantee exact wording or sentence checkpoints.
-2. **How utterances are classified.** Recommendation: the Decisions API (`gpt-6-luna`), which returned calibrated probabilities in 0.1–0.9 s in the Module 1 test, with a threshold per class; below threshold the agent asks one clarifying question.
-3. **Export formats for the first release:** HTML only, or HTML + PPTX + PDF.
-4. **Audience link lifetime** and whether the audience can see slide sources.
+1. Module 2 uses browser capture and speech onset, the private Python adapter for STT and sentence TTS, and a purpose-scoped OpenAI text model for proposals. Express validates each proposal against the pinned slide and evidence.
+2. Hosted rehearsal and additional export formats remain follow-ups. The release flow uses the host screen and standalone HTML.
 
 ## 11. Out of scope
 

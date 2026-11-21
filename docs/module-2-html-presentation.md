@@ -10,7 +10,7 @@ The [detailed Module 2 PRD](module-2-prd.md#4-reference-analysis-live-slides) re
 
 ## Plan the story before rendering
 
-Pass the saved research revision, verified evidence, audience, purpose and time budget to the planner. Ask it for a sequence of slide proposals. Each proposal specifies a takeaway, the visible content, why it belongs at that point, cited evidence and narration beats with a time estimate. Narration can explain what a number means or qualify a claim. The host reviews it separately from the projected slide. Save the accepted plan as a deck revision before starting delivery.
+Pass the saved research revision, verified evidence, supported charts, and the requested maximum slide count to the planner. Use the purpose already established in the brief. Ask it for a sequence of slide proposals. Each proposal specifies a takeaway, the visible content, why it belongs at that point, cited evidence and narration beats with a time estimate. Narration can explain what a number means or qualify a claim. The host reviews it separately from the projected slide. Save the accepted plan as a deck revision before starting delivery. The host screen is the default stage. [The presentation flow and diagrams](presentation-flow.md) describe microphone permission and the interruption sequence.
 
 | Template | Visible on stage | Narration job |
 |---|---|---|
@@ -41,8 +41,8 @@ Slide 3 shows “12 teams joined the pilot.” During narration, the host says, 
 
 | Exit check | Evidence to capture |
 |---|---|
-| M2-1 · Plan from saved context | Use the same research context for two audiences. Inspect changes in emphasis, layout choices and what the agent plans to say. Verify the plan fits the time budget and every factual claim traces to its evidence. |
-| M2-2 · Render one approved revision across surfaces | Open host preview, second-device stage and offline HTML. Compare visible content, chart units and source references. Test keyboard navigation, narrow phone and projector-size rendering. Verify the audience receives no private narration or draft text. |
+| M2-1 · Plan from saved context | Use the same research context with two slide limits. Inspect the grouping, chart and layout choices and the separate narration. Verify the plan stays within the requested slide ceiling and every factual claim traces to evidence. |
+| M2-2 · Render one approved revision across surfaces | Compare host preview, host live stage and offline HTML. Check chart units, source references, keyboard navigation, phone and projector sizes, and privacy of exported content. |
 | M2-3 · Interrupt during speech | Capture speech onset-to-cutoff and the continuation cursor in a physical laptop rehearsal. Answer a question without proposing an edit. Repeat with a useful new point and confirm the audience stays on the approved slide during review. |
 | M2-4 · Accept or reject the exact diff | Accept once, see the added point on the stage, then see the next slide only after the accepted update paints. Repeat with Reject and confirm that the old revision remains and the stage stays in place. Repeat an approval and replay a stale one to verify that neither creates another revision. |
 | M2-5 · Recover from ambiguous speech and disconnect | Interrupt twice, refer to an ambiguous slide, and disconnect during review. Verify old audio stops, ambiguous intent asks for clarification, and reconnect restores the last approved view and pending review privately. |

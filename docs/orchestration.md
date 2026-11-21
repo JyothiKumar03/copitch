@@ -5,7 +5,7 @@ The product agent describes the host or audience action, the evidence it needs, 
 | Build order | UI ownership | API and worker ownership | What the user can do |
 |---|---|---|---|
 | 1. Private pitch studio | Signed-in projects, center chat and files, right-side agent, continuous multilingual conversation, selectable context artifact | Account-scoped project access, durable session and artifact revisions, OpenAI Realtime voice, leased research jobs and validated source-backed chart JSON | Brief the agent, approve research, ask for progress while it runs, open and download the cited context, then reopen the same revision after signing in again. |
-| 2. Live presentation | Host controls, audience screen, hold/resume, Q&A and private edit approval | Session controller, choice and referent tracking, playback and stage events | Interrupt, ask a grounded question, approve a correction and continue from the right point. |
+| 2. Live presentation | Slide count, same-screen presentation, host controls, Q&A and private edit approval | Session controller, choice and referent tracking, playback and stage events | Review a grounded deck, interrupt, ask a question, approve a correction and continue from the right point. |
 | 3. Guided walkthrough | Approve a site and goal, switch between agent presenter and agent audience, return to the deck | Restricted browser worker, target mapping, observed frames and conditional agenda updates | Guide a live page by voice, see the result and hand control back. |
 
 ## Module 1 build order and acceptance

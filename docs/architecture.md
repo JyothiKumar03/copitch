@@ -44,7 +44,7 @@ The [AWS operations guide](aws-operations.md) covers image digests, gateway rout
 
 ## Stack and trust boundaries
 
-The [Module 2 HTML presentation plan](module-2-html-presentation.md) specifies slide templates, private narration, interruption handling and the host's revision decision.
+The [presentation flow and architecture diagrams](presentation-flow.md) describe the research handoff, slide planner, single-screen delivery, and interruption sequence. The [Module 2 HTML presentation plan](module-2-html-presentation.md) specifies slide templates and the host’s revision decision.
 
 | Component | Selected implementation | Authority |
 |---|---|---|
@@ -65,9 +65,9 @@ flowchart TD
   Worker <-->|eligible URL reads| Sources["Public page and PDF extractor"]
   Worker -->|atomic publish| Bundle["Saved context.md + verified findings + evidence IDs"]
   Bundle -->|authorized Markdown or SSE| Viewer["Private Markdown and Recharts viewer"]
-  Bundle -->|same project and research ID| Plan["Audience and duration → slide and narration planner"]
+  Bundle -->|same project and research ID| Plan["Verified findings and slide count → deck planner"]
   Plan -->|private review and explicit approval| Runtime["Live deck revision and sentence cursor"]
-  Runtime -->|slide-only public projection| Stage["Host stage and separate audience page"]
+  Runtime -->|slide-only public projection| Stage["Host stage · optional separate audience page"]
   Stage -->|matching paint and heartbeat| Runtime
   Runtime <-->|transcribe final turn / synthesize approved attempt| Voice["Private Python voice adapter"]
   Runtime <-->|playout and interruption events / approve diff| Host
@@ -85,14 +85,14 @@ Express 5 owns the public HTTP boundary on Bun. Feature routers mount at `/api` 
 3. Ingest material with a locator, including the character range for pasted material, page for text PDFs, slide for PPTX and row range for CSV. The studio research worker uses `SessionRunner` and the shared Vercel AI SDK adapter. The agent chooses its next action from the approved goal and returned evidence. Its tools are native OpenAI web search for approved queries and URL reading for approved or discovered links. Search returns candidate links; only a successful source read adds public evidence. Files-only research skips network tools, and private material stays out of public queries.
 4. Checkpoint each tool result, source and runner state in the leased job. A tool call and its result count as one step, including failed calls. Each pass permits up to 10 steps. The model may request one extra pass by naming a material gap, why it matters, and an unused eligible lookup that could resolve it. The server validates that request within the original approval and the job budget. Resume from the last committed result after a worker restart. The writer cites stored records and states material gaps. A separate fact-check reviews each claim against its cited evidence before publication.
 5. Publish the immutable `context.md` and verified findings under the same research ID. The viewer replays verified text from the authenticated SSE endpoint, parses complete graph blocks and lets the host download the same Markdown revision. Internal host-note provenance remains in the private bundle. The research preview ends here and stays usable independently of a deck.
-6. The host chooses **Prepare slides** in the same project. Express loads the verified bundle by research ID. The planner uses the audience, duration, findings and evidence to choose the slide order, templates, concise visible content and private narration. Independent review can keep a consecutive supported sequence or request one repair if all proposed beats fail. The controller assigns slide, beat and sentence IDs and persists a draft. The host sees the actual HTML, narration and sources in review, then explicitly approves the revision to present.
+6. The host chooses **Prepare slides** in the same project. Express loads the verified bundle by research ID. The host supplies a slide count. The planner uses verified findings, evidence, and supported charts to choose the slide order, templates, concise visible content, and private narration. Independent review can keep a consecutive supported sequence or request one repair if all proposed beats fail. The controller assigns slide, beat and sentence IDs and persists a draft. The host sees the actual HTML, narration and sources in review, then explicitly approves the revision to present.
 
 ## 2. Presentation and intervention
 
 | Moment | Immediate behavior | Durable effect |
 |---|---|---|
 | Start | Select an approved revision, create a host playback generation, render the first visual and obtain paint confirmation. Authorize one speech attempt with specific claim, text, asset and revision. | Save cursor and attempt. Public content is a projection. Private narration and transcripts stay with the host. |
-| Host begins speaking | Duck or stop locally, pin the visible target and hold advancement. Capture continues. Talk provides an explicit ownership signal in a noisy room. | Record cutoff and whether playback was partial, complete or uncertain. Silence or a partial transcript cannot commit an edit. |
+| Host begins speaking | Duck or stop locally, pin the visible target and hold advancement. Capture continues. The host can type a turn when microphone permission or room conditions prevent automatic capture. | Record cutoff and whether playback was partial, complete or uncertain. Silence or a partial transcript cannot commit an edit. |
 | Final turn arrives | Resolve a pending choice first, then interpret referents against the pinned slide, metric, filter, page or parked agenda item. Use one small-model proposal for natural language; explicit UI commands bypass inference. | Check host authority, expected revisions, generation and idempotency. A stale “yes” cannot approve a different proposal. |
 | “Why did that number change?” | Retrieve the current and previous populations. Explain that four of twenty enterprise trials is 20%, while ten of one hundred overall is 10%. Cite the source and acknowledge unknown causes. | A completed answer returns to listening. Its playback never marks the interrupted slide complete. |
 | “Actually fix that” | Ask what “that” refers to when ambiguous. For a specific correction show a private before/after of the affected visible highlight and narration. Keep the previous revision playable. | Approve once against the base revision, invalidate changed audio, repaint, then resume. Reject keeps the prior revision. Retain completed credit only for unchanged claims. |
