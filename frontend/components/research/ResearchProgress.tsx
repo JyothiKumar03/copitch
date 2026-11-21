@@ -1,7 +1,7 @@
 import { Check, ChevronDown, CircleAlert, FileText, LoaderCircle, Workflow } from "lucide-react";
 import type { TResearchJob, TSourceCall, TTurnActivity } from "@/types/research";
 
-const failedKinds = new Set(["failed", "lookup_failed", "fallback", "superseded"]);
+const failedKinds = new Set(["failed", "needs_input", "lookup_failed", "fallback", "superseded"]);
 const parseNames = {parse_pdf: "Read PDF", parse_ppt: "Read PowerPoint", parse_pptx: "Read PowerPoint", parse_csv: "Read spreadsheet"};
 
 export const SourceExecution = ({ call }: { call: TSourceCall }) => {
@@ -27,15 +27,28 @@ export const TurnExecution = ({ activity }: { activity: TTurnActivity }) => <div
 export const ResearchProgress = ({ job }: { job: TResearchJob }) => {
   const activity = job.activity ?? [];
   const active = job.status === "queued" || job.status === "running";
-  return <details className="job-events" aria-label="Research activity">
+  const needsInput = job.status === "needs_input";
+  const failed = job.status === "failed";
+  const recordedWork = [
+    typeof job.tool_steps === "number" ? `${job.tool_steps} tool ${job.tool_steps === 1 ? "step" : "steps"}` : null,
+    typeof job.read_pages === "number" ? `${job.read_pages} ${job.read_pages === 1 ? "page" : "pages"} read` : null,
+    typeof job.research_passes === "number" ? `${job.research_passes} research ${job.research_passes === 1 ? "pass" : "passes"}` : null,
+  ].filter(Boolean).join(" · ");
+  return <div>
+    {(needsInput || failed) && <div className="research-outcome" role="status">
+      <h3>{needsInput ? "More evidence needed" : "Research could not finish"}</h3>
+      <p>{job.error || (needsInput ? "Attach evidence or add details in the conversation to revise the plan." : "Ask copitch to try again or revise the plan.")}</p>
+    </div>}
+    <details className="job-events" aria-label="Research activity">
     <summary>
       <span className="tool-icon">{active ? <LoaderCircle size={15} className="animate-spin" /> : <Workflow size={15} />}</span>
       <span className="min-w-0 flex-1"><strong>Research activity</strong>
-        <span className="tool-detail">{job.error ?? activity.at(-1)?.label ?? job.status}</span></span>
-      <span className="tool-status">{job.status}</span><ChevronDown size={14} />
+        {recordedWork && <span className="tool-detail">{recordedWork}</span>}
+        <span className="tool-detail">{activity.at(-1)?.label ?? "Research job details"}</span></span>
+      <span className="tool-status">{needsInput ? "Needs input" : job.status}</span><ChevronDown size={14} />
     </summary>
     <ol aria-label="Executed research steps">{activity.map(event => <li key={event.sequence} className={failedKinds.has(event.kind) ? "tool-error" : ""}>
       {failedKinds.has(event.kind) ? <CircleAlert size={13} /> : <Check size={13} />}<span>{event.label}</span>
     </li>)}</ol>
-  </details>;
+  </details></div>;
 };

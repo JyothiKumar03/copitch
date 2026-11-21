@@ -1,37 +1,32 @@
-import { Check, CornerDownLeft, MessageCircleQuestion, Mic } from "lucide-react";
-import type { TInterviewMessage, TSavedBrief, TStudioQuestion } from "@/types/research";
+import { ArrowRight, Globe2, ListChecks, Paperclip } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import type { TProposalChoice, TResearchProposal } from "@/types/research";
 
-type TQuestionProps = {
-  question: TStudioQuestion;
-  pendingId?: string;
-  scope: TSavedBrief | null;
+type TProposalProps = {
+  proposal: TResearchProposal;
+  filenames: string[];
   busy: boolean;
-  history: TInterviewMessage[];
-  onChoose: (question: TStudioQuestion, id: string, label: string) => void;
-  onCompose: (question: TStudioQuestion, spoken: boolean) => void;
+  changed: boolean;
+  onChoose: (choice: TProposalChoice, label: string) => void;
 };
 
-export const StudioQuestion = ({ question, pendingId, scope, busy, history, onChoose, onCompose }: TQuestionProps) => {
-  const open = question.request_id === pendingId;
-  const answer = history.find(turn => turn.role === "host" && turn.answer_to === question.request_id);
-  return (
-  <section className={"studio-question" + (open ? "" : " resolved")} aria-labelledby={"ask-" + question.request_id}>
-    <div className="question-state"><MessageCircleQuestion size={15} /><span>{open ? "Your input" : answer ? "Answered" : "Closed"}</span></div>
-    <h3 id={"ask-" + question.request_id}>{question.question}</h3>
-    {open && question.kind === "approval" && scope && <div className="approval-sources">
-      <p>{scope.source_policy === "files_only" ? "Only your materials will be used." : "Public research is included."}</p>
-      <ul>{[...(scope.sources ?? []).map(file => file.filename), ...scope.urls, ...scope.public_queries].map((item, index) => <li key={index}>{item}</li>)}</ul>
+export const StudioQuestion = ({ proposal, filenames, busy, changed, onChoose }: TProposalProps) => (
+  <section className="studio-proposal" aria-label="Research plan">
+    <h3><ListChecks size={16} aria-hidden="true" />Research plan</h3>
+    <p className="proposal-summary">{proposal.summary}</p>
+    {proposal.source_policy === "public_search" && proposal.queries.length > 0 && <div className="proposal-details">
+      <h4>Searches</h4><ul>{proposal.queries.map(query => <li key={query}>{query}</li>)}</ul>
     </div>}
-    {question.options.length > 0 && <div className="question-options" role="group" aria-label="Suggested answers">
-      {question.options.map(option => <button type="button" key={option.id} disabled={!open || busy}
-        aria-pressed={answer?.option_id === option.id} onClick={() => onChoose(question, option.id, option.label)}>
-        {answer?.option_id === option.id && <Check size={13} />}{option.label}
-      </button>)}
+    {(filenames.length > 0 || proposal.urls.length > 0) && <div className="proposal-details">
+      <h4>Sources</h4><ul className="proposal-sources">
+        {filenames.map(name => <li key={name}><Paperclip size={13} />{name}</li>)}
+        {proposal.urls.map(url => <li key={url}><Globe2 size={13} />{url}</li>)}
+      </ul>
     </div>}
-    {open && question.allow_free_text && <div className="question-reply">
-      <button type="button" disabled={busy} onClick={() => onCompose(question, false)}><CornerDownLeft size={14} />Type an answer</button>
-      <button type="button" disabled={busy} onClick={() => onCompose(question, true)}><Mic size={14} />Speak an answer</button>
-    </div>}
+    {proposal.source_policy === "files_only" && <p className="tool-detail">Using only your materials.</p>}
+    <div className="proposal-actions">
+      <Button size="sm" disabled={busy || changed} onClick={() => onChoose("approve", "Start research")}>Start research <ArrowRight size={14} /></Button>
+      <Button size="sm" variant="outline" disabled={busy} onClick={() => onChoose("edit", "Change something")}>Change something</Button>
+    </div>
   </section>
-  );
-};
+);
