@@ -1,3 +1,4 @@
+import asyncio
 import json
 import unittest
 from unittest.mock import patch
@@ -71,3 +72,37 @@ class InterviewVoiceTest(unittest.TestCase):
             reply = client.post("/speech", headers=self.auth, json={"text": "Question"})
             self.assertEqual(reply.status_code, 429)
             self.assertNotIn("private", reply.text)
+
+    def test_early_disconnect_cancels_upstream_speech_before_headers(self):
+        async def rehearse():
+            started = asyncio.Event()
+            stopped = asyncio.Event()
+
+            async def synthesize(_request):
+                started.set()
+                try:
+                    await asyncio.Future()
+                finally:
+                    stopped.set()
+
+            app = create_app(httpx.MockTransport(synthesize))
+            received_body = False
+
+            async def receive():
+                nonlocal received_body
+                if not received_body:
+                    received_body = True
+                    return {"type": "http.request", "body": b'{"text":"Hello"}', "more_body": False}
+                await started.wait()
+                return {"type": "http.disconnect"}
+
+            async def send(_message):
+                pass
+
+            scope = {"type": "http", "asgi": {"version": "3.0"}, "method": "POST", "path": "/speech",
+                     "query_string": b"", "headers": [(b"authorization", b"Bearer fixture-worker")]}
+            async with app.router.lifespan_context(app):
+                await asyncio.wait_for(app(scope, receive, send), 2)
+            self.assertTrue(stopped.is_set())
+
+        asyncio.run(rehearse())

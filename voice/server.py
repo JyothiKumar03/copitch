@@ -1,5 +1,6 @@
 """Private OpenAI adapter for host-controlled interview audio."""
 
+import asyncio
 import json
 import os
 import secrets
@@ -156,6 +157,25 @@ async def speech(request: Request) -> Response:
     text = payload.get("text") if isinstance(payload, dict) else None
     if not isinstance(text, str) or not 1 <= len(text.strip()) <= 1600:
         return error_response("Invalid question", 400)
+    preparing = asyncio.create_task(prepare_speech(request, text))
+
+    async def wait_for_disconnect():
+        while (await request.receive())["type"] != "http.disconnect":
+            pass
+
+    disconnected = asyncio.create_task(wait_for_disconnect())
+    try:
+        done, _ = await asyncio.wait((preparing, disconnected), return_when=asyncio.FIRST_COMPLETED)
+        if preparing in done:
+            return await preparing
+        return error_response("Playback ended", 499)
+    finally:
+        disconnected.cancel()
+        preparing.cancel()
+        await asyncio.gather(disconnected, preparing, return_exceptions=True)
+
+
+async def prepare_speech(request: Request, text: str) -> Response:
     client = request.app.state.provider
     upstream = client.build_request(
         "POST", "audio/speech", headers={"Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}"}, json={
@@ -179,6 +199,9 @@ async def speech(request: Request) -> Response:
     chunks = result.aiter_bytes()
     try:
         first = await anext(chunks, b"")
+    except asyncio.CancelledError:
+        await result.aclose()
+        raise
     except httpx.RequestError:
         first = b""
     if not first or len(first) > MAX_AUDIO_BYTES:
