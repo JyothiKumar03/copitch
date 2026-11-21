@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { createOpenAI } from "@ai-sdk/openai";
 import { estimate_pitch_seconds, prepare_pitch } from "../src/services/pitch";
+import { slide_speaking_seconds } from "../src/services/deck";
 import { PresentationCoverageError, presentation_plan_provider, presentation_plan_review, template_supported } from "../src/services/presentation-planner";
 import type { TPlanPresentation } from "../src/services/presentation-planner";
 import { research_provider } from "../src/services/research-provider";
@@ -141,7 +142,7 @@ test("unsupported numeric narration is rejected and invalid plotted points are w
     throw new Error("The numeric gate should reject before review");
   });
   expect(invalid.pitch?.rationale).toContain("saved, verified talk track");
-  expect(JSON.stringify(invalid)).not.toContain("999");
+  expect(JSON.stringify(invalid.slides)).not.toContain("999");
 });
 
 test("independent review rejects unsupported paraphrases and uses distinct verified fallback headings", async () => {
@@ -394,9 +395,35 @@ test("completion retains nine reviewed slides and verifies only one new slide fr
     return true;
   });
   expect(deck.slides).toHaveLength(10);
-  expect(review_sizes).toEqual([9, 9, 1]);
+  expect(review_sizes).toEqual([9, 1]);
   expect(deck.slides[9]).toMatchObject({ narration: additional, evidence_ids: ["S10"], layout: "takeaway" });
   expect(deck.sources?.some(record => record.id === "S10")).toBe(true);
+});
+
+test("an overlong completion skips invalid and repeated additions before bounding the independent review", async () => {
+  const [alpha, beta, lead] = three_distinct_beats;
+  const alternative = { ...beta, title: "Another supported beta detail", highlights: ["Beta's pilot count was 51."],
+    sentences: [spoken("Beta's pilot count was 51.", "P1")] };
+  const later = { ...beta, title: "A later alternative", highlights: ["Beta's reported total was 51 pilots."],
+    sentences: [spoken("Beta's reported total was 51 pilots.", "P1")] };
+  const review_titles: string[][] = [];
+  const deck = await prepare_pitch(saved, { slide_count: 3 }, async context => {
+    if (context.completion) {
+      expect(context.completion.candidate_limit).toBe(2);
+      return { readiness: ready, rationale: "Compare the pilots, then introduce the lead.", additions: [
+        { ...alpha, title: "A repeated Alpha slide" },
+        { ...beta, title: "Beta recorded 999 pilots" },
+        alternative, beta, later,
+      ].map(beat => ({ after_slide_id: "slide-1", beat })) };
+    }
+    return { readiness: ready, rationale: "Introduce the pilots and their lead.", beats: [alpha, lead] };
+  }, async slides => {
+    review_titles.push(slides.map(slide => slide.title));
+    if (review_titles.length === 1) return true;
+    return { verified_slide_ids: slides.filter(slide => slide.title === beta.title).map(slide => slide.slide_id), feedback: [] };
+  });
+  expect(review_titles).toEqual([[alpha.title, lead.title], [alternative.title, beta.title]]);
+  expect(deck.slides.map(slide => slide.title)).toEqual([alpha.title, beta.title, lead.title]);
 });
 
 test("repair targets the requested count after partial verification even when there are fewer research paragraphs", async () => {
@@ -501,9 +528,14 @@ test("layout repair sends the prior visible slides and replaces them only with a
 test("repair replaces a computed figure before independent review without losing the requested count", async () => {
   const deck = await prepare_pitch(saved, { slide_count: 3 }, async context => {
     const [alpha, beta, lead] = three_distinct_beats;
-    if (context.review_feedback) expect(context.review_feedback.join(" ")).toContain("unsupported_number_on_slide");
+    if (context.completion) {
+      expect(context.review_feedback?.join(" ")).toContain("unsupported_number_on_slide");
+      expect(context.completion.retained.map(({ beat }) => beat.title)).toEqual([alpha.title, lead.title]);
+      return { readiness: ready, rationale: "Results, then the lead.",
+        additions: [{ after_slide_id: context.completion.retained[0].slide_id, beat: beta }] };
+    }
     return { readiness: ready, rationale: "Results, then the lead.", beats: [
-      alpha, context.review_feedback ? beta : {
+      alpha, {
         title: "Beta ran 9 more pilots than Alpha", highlights: ["A gap of 9 pilots."], evidence_ids: ["P1"],
         sentences: [spoken("That is 9 more pilots.", "P1")], template: { type: "bullet_slide" },
       }, lead,
@@ -514,6 +546,247 @@ test("repair replaces a computed figure before independent review without losing
   });
   expect(deck.slides.map(slide => slide.title)).toEqual(three_distinct_beats.map(beat => beat.title));
   expect(deck.slides.map(slide => slide.layout)).toEqual(["headline", "evidence", "takeaway"]);
+});
+
+const pilot_csv = [
+  ["F1", "Pilot enrollment", "24", "customers", "All May pilot customers"],
+  ["F2", "Onboarding completed within seven days", "18", "customers", "All 24 May pilot customers"],
+  ["F3", "Median completion time", "12", "minutes", "18 May customers who completed onboarding"],
+  ["F4", "Authentication help requests", "8", "requests", "All May pilot customers"],
+].map(([id, label, value, unit, population]) => ({ id, origin: "material" as const, location: "pilot-results.csv",
+  passage: `Metric: ${label}; Value: ${value}; Unit: ${unit}; Period: May 2026; Population: ${population}` }));
+const enrollment = "The May 2026 pilot enrolled 24 customers.";
+const comparison = "Of the 24 customers enrolled in the May 2026 pilot, 18 completed onboarding within seven days.";
+const median_time = "Median completion time was 12 minutes for the 18 customers who finished onboarding in May 2026.";
+const pilot_project: TResearchBundle = { ...saved, evidence: pilot_csv,
+  gaps: ["The source does not report a completion percentage; it can be calculated as 75%."],
+  confirmed_brief: { ...saved.confirmed_brief, source_policy: "files_only",
+    intent: { ...saved.confirmed_brief.intent!, outcome: "Compare enrollment and completion and explain how much time onboarding took." } },
+  findings: { title: "May onboarding pilot", sections: [
+    { heading: "Enrollment and completion", paragraphs: [{
+      prose: `${enrollment} ${comparison} This equates to 75%, with 6 customers or 25% remaining.`,
+      support: pilot_csv.slice(0, 2).map(({ id, passage }) => ({ evidence_id: id, excerpt: passage })),
+    }] },
+    { heading: "Time to complete", paragraphs: [{ prose: median_time, support: support("F3", pilot_csv[2].passage) }] },
+  ] },
+  verified_graphs: [{ graph_id: "graph-1", evidence_ids: ["F1", "F2"],
+    graph: { name: "May pilot counts", description: "Enrollment and seven-day completion in May 2026.", type: "bar", data: [
+      { label: "Pilot enrollment", value: 24, unit: "customers", period: "May 2026", evidence_id: "F1" },
+      { label: "Onboarding completed within seven days", value: 18, unit: "customers", period: "May 2026", evidence_id: "F2" },
+    ] } }],
+};
+const comparison_beat = { title: "24 enrolled and 18 completed onboarding within seven days", highlights: [],
+  evidence_ids: ["F1", "F2"], sentences: [spoken(comparison, "F1", "F2")],
+  template: { type: "saved_graph" as const, graph_id: "graph-1" } };
+const time_beat = { title: "Median onboarding time was 12 minutes", highlights: [median_time],
+  evidence_ids: ["F3"], sentences: [spoken(median_time, "F3")], template: { type: "bullet_slide" as const } };
+const calculated_beat = { ...comparison_beat, title: "75% completed onboarding",
+  sentences: [spoken("75% completed onboarding.", "F1", "F2")] };
+const objective_findings = [{ finding: comparison, evidence_ids: ["F1", "F2"] }, { finding: median_time, evidence_ids: ["F3"] }];
+const opener_beat = { title: "The May pilot enrolled 24 customers", highlights: [enrollment], evidence_ids: ["F1"],
+  sentences: [spoken(enrollment, "F1")], template: { type: "title_card" as const } };
+
+test("count-only CSV planning keeps independently reviewed onboarding time and fills the missing comparison", async () => {
+  const reviewed: string[][] = [];
+  const deck = await prepare_pitch(pilot_project, { slide_count: 2 }, async context => {
+    expect(context.findings.map(finding => finding.text)).toEqual([`${enrollment} ${comparison}`, median_time]);
+    expect(context.context_assessment?.known_gaps).toEqual(["The source does not report a completion percentage"]);
+    expect(context.evidence.map(record => record.passage)).toEqual(pilot_csv.map(record => record.passage));
+    if (context.completion) {
+      expect(context.completion).toMatchObject({ missing: 1, retained: [{ slide_id: "slide-2", beat: time_beat }] });
+      return { readiness: ready, rationale: "Show enrollment and completion ahead of the onboarding time.", additions: [
+        { after_slide_id: null, beat: { ...time_beat, title: "A second take on onboarding time" } },
+        { after_slide_id: null, beat: comparison_beat },
+      ] };
+    }
+    expect(context.review_feedback).toBeUndefined();
+    return { readiness: ready, objective_findings, rationale: "Show enrollment and completion ahead of the onboarding time.", beats: [
+      { ...comparison_beat, sentences: [spoken(`${comparison} The pilot moved customers through onboarding well.`, "F1", "F2")] },
+      time_beat, calculated_beat,
+    ] };
+  }, async slides => {
+    reviewed.push(slides.map(slide => slide.title));
+    return reviewed.length === 1 ? { verified_slide_ids: ["slide-2"], feedback: ["Use the stated counts only."] } : true;
+  });
+  expect(reviewed).toEqual([[comparison_beat.title, time_beat.title], [comparison_beat.title]]);
+  expect(deck.slides).toMatchObject([
+    { title: comparison_beat.title, chart_period: "May 2026", narration: comparison, evidence_ids: ["F1", "F2"],
+      template: { type: "bar_chart", unit: "customers", points: [
+        { label: "Pilot enrollment", value: 24 }, { label: "Onboarding completed within seven days", value: 18 },
+      ] } },
+    { slide_id: "slide-2", title: time_beat.title, narration: median_time, evidence_ids: ["F3"] },
+  ]);
+  expect(JSON.stringify(deck.slides)).not.toContain("75%");
+});
+
+test("count-only review trims unsupported optional narration while keeping visible verdicts and cited speech mandatory", async () => {
+  const unsupported = "That shows the onboarding flow was unusually quick for customers on every participating team.";
+  const provider = research_provider(config);
+  let reviews = 0;
+  provider.verify = async review => {
+    reviews++;
+    const verdicts = review.units.map(unit => ({ id: unit.id, decision: reviews === 1 && (unit.text === unsupported ||
+      (unit.id.startsWith("paragraph-0-") && unit.text.includes('"type":"bar_chart"')))
+      ? "unsupported" as const : "supported" as const }));
+    return review.coverage ? { verdicts, omissions: [] } : verdicts;
+  };
+  const deck = await prepare_pitch(pilot_project, { slide_count: 2 }, async context => {
+    if (context.completion) {
+      expect(context.completion.retained).toEqual([{ slide_id: "slide-2", beat: time_beat }]);
+      return { readiness: ready, rationale: "Add the supported comparison.",
+        additions: [{ after_slide_id: null, beat: comparison_beat }] };
+    }
+    return { readiness: ready, rationale: "Explain comparison and onboarding time.", beats: [comparison_beat,
+      { ...time_beat, sentences: [...time_beat.sentences, spoken(unsupported, "F4")] },
+      { ...opener_beat, sentences: [spoken("Next, the results."), spoken(unsupported, "F4")] },
+    ] };
+  }, presentation_plan_review(provider));
+  expect(reviews).toBe(2);
+  expect(deck.slides.map(slide => slide.narration)).toEqual([comparison, median_time]);
+  expect(deck.slides[0].slide_id).toBe("slide-3");
+  expect(deck.slides[1]).toMatchObject({ slide_id: "slide-2", evidence_ids: ["F3"],
+    estimated_seconds: slide_speaking_seconds(median_time), sentences: [{ text: median_time, evidence_ids: ["F3"] }] });
+  expect(deck.sources?.some(source => source.id === "F4")).toBe(false);
+});
+
+test("an independently unverified full retry can still recover two grounded CSV slides", async () => {
+  const review_sizes: number[] = [];
+  const deck = await prepare_pitch(pilot_project, { slide_count: 2 }, async context => {
+    if (context.completion) {
+      expect(context.completion).toMatchObject({ missing: 2, candidate_limit: 3, retained: [] });
+      expect(context.review_feedback?.join(" ")).toContain("No original slide passed review");
+      return { readiness: ready, rationale: "Compare enrollment and completion, then show the median.", additions: [
+        { after_slide_id: null, beat: comparison_beat }, { after_slide_id: null, beat: time_beat },
+      ] };
+    }
+    return { readiness: ready, rationale: "Compare enrollment and completion, then show the median.", beats: [
+      comparison_beat, time_beat, opener_beat,
+    ] };
+  }, async slides => {
+    review_sizes.push(slides.length);
+    return review_sizes.length === 3 ? true : { verified_slide_ids: [], feedback: ["Draft these measures from the CSV rows."] };
+  });
+  expect(review_sizes).toEqual([3, 3, 2]);
+  expect(deck.slides.map(slide => slide.narration)).toEqual([comparison, median_time]);
+  expect(deck.slides.map(slide => slide.layout)).toEqual(["headline", "takeaway"]);
+});
+
+test("two exact slots cover the requested comparison and time rather than a verified but overlapping opener", async () => {
+  const deck = await prepare_pitch(pilot_project, { slide_count: 2 }, async context => {
+    expect(context.completion).toBeUndefined();
+    expect(context.review_feedback).toBeUndefined();
+    return { readiness: ready, objective_findings, rationale: "Compare the counts and show typical onboarding time.",
+      beats: [opener_beat, comparison_beat, time_beat] };
+  }, async slides => {
+    expect(slides.map(slide => slide.title)).toEqual([opener_beat.title, comparison_beat.title, time_beat.title]);
+    return true;
+  });
+  expect(deck.slides.map(slide => slide.narration)).toEqual([comparison, median_time]);
+  expect(deck.slides[0].template).toMatchObject({ type: "bar_chart" });
+});
+
+test("an exact but incomplete first plan frees its redundant slide and sends the missed measure to completion", async () => {
+  const reviewed: string[][] = [];
+  const deck = await prepare_pitch(pilot_project, { slide_count: 2 }, async context => {
+    const rationale = "Compare the counts and show typical onboarding time.";
+    if (context.completion) {
+      expect(context.completion).toMatchObject({ missing: 1, retained: [{ slide_id: "slide-2", beat: comparison_beat }] });
+      expect(context.objective_findings).toEqual([objective_findings[1]]);
+      expect(context.review_feedback?.[0]).toContain(median_time);
+      return { readiness: ready, rationale, additions: [{ after_slide_id: "slide-2", beat: time_beat }] };
+    }
+    const padded_opener = { ...opener_beat, evidence_ids: ["F1", "F3"] };
+    return { readiness: ready, objective_findings, rationale, beats: [padded_opener, comparison_beat] };
+  }, async slides => {
+    reviewed.push(slides.map(slide => slide.title));
+    return reviewed.length === 1 ? { verified_slide_ids: slides.map(slide => slide.slide_id), feedback: [],
+      omissions: [objective_findings[1]] } : true;
+  });
+  expect(reviewed).toEqual([[opener_beat.title, comparison_beat.title], [time_beat.title]]);
+  expect(deck.slides.map(slide => slide.narration)).toEqual([comparison, median_time]);
+});
+
+test("independent deck review can recover an omitted approved measure while incidental CSV facts stay optional", async () => {
+  let reviews = 0;
+  const openai = createOpenAI({ apiKey: "fixture", fetch: async (_url, request) => {
+    reviews++;
+    const wire = JSON.parse(request!.body as string);
+    const input = JSON.parse(wire.input.find((turn: { role: string }) => turn.role === "user").content[0].text);
+    if (reviews === 1) {
+      expect(input.purpose).toBe("deck_presentation");
+      expect(input.coverage.brief.intent.outcome).toBe(pilot_project.confirmed_brief.intent?.outcome);
+      expect(input.coverage.brief.messages).toEqual([]);
+      expect(input.coverage.evidence.some((record: { id: string }) => record.id === "F4")).toBe(true);
+      expect(JSON.stringify(wire)).toContain("Never report incidental observations");
+    } else {
+      expect(input.coverage).toBeUndefined();
+    }
+    const verdicts = input.units.map((unit: { id: string }) => ({ id: unit.id, decision: "supported", reason: null }));
+    const output = { verdicts, ...(reviews === 1 && { omissions: [
+      { ...objective_findings[1], objective_excerpt: "how much time onboarding took", reason: "The objective asks for the time." },
+      { finding: "There were 8 authentication help requests in May 2026.", objective_excerpt: "support requests",
+        evidence_ids: ["F4"], reason: "The source reports support requests." },
+    ] }) };
+    return Response.json({ id: "fixture", model: "fake", status: "completed", created_at: 1,
+      output: [{ type: "message", role: "assistant", id: "reply", status: "completed",
+        content: [{ type: "output_text", text: JSON.stringify(output), annotations: [] }] }],
+      usage: { input_tokens: 300, output_tokens: 90 },
+    });
+  } });
+  const deck = await prepare_pitch(pilot_project, { slide_count: 2 }, async context => {
+    const rationale = "Compare the counts and show typical onboarding time.";
+    if (context.completion) {
+      expect(context.objective_findings).toEqual([objective_findings[1]]);
+      return { readiness: ready, rationale, additions: [{ after_slide_id: "slide-2", beat: time_beat }] };
+    }
+    return { readiness: ready, objective_findings: [objective_findings[0]], rationale, beats: [opener_beat, comparison_beat] };
+  }, presentation_plan_review(research_provider(config, openai, [])));
+  expect(reviews).toBe(2);
+  expect(deck.slides.map(slide => slide.narration)).toEqual([comparison, median_time]);
+  expect(deck.slides.flatMap(slide => slide.evidence_ids)).not.toContain("F4");
+});
+
+test("the configured planner gets a one-sentence instruction when repairing a requested finding", async () => {
+  let calls = 0;
+  const openai = createOpenAI({ apiKey: "fixture", fetch: async (_url, request) => {
+    const wire = JSON.parse(request!.body as string);
+    const input = JSON.parse(wire.input.find((turn: { role: string }) => turn.role === "user").content[0].text);
+    const rationale = "Compare the counts and show typical time.";
+    const output = ++calls === 1 ? { readiness: ready, rationale, objective_findings: [objective_findings[0]],
+      beats: [opener_beat, comparison_beat] } : { readiness: ready, rationale,
+      additions: [{ after_slide_id: "slide-2", beat: time_beat }] };
+    if (calls === 2) {
+      expect(input.objective_findings).toEqual([objective_findings[1]]);
+      expect(input.completion.missing).toBe(1);
+      expect(JSON.stringify(wire)).toContain("Use one complete, fully cited factual sentence per such addition");
+      expect(JSON.stringify(wire)).toContain("Do not add an interpretation, evaluation, transition or repeated opener");
+    }
+    return Response.json({ id: "fixture", model: "fake", status: "completed", created_at: 1,
+      output: [{ type: "message", role: "assistant", id: "reply", status: "completed",
+        content: [{ type: "output_text", text: JSON.stringify(output), annotations: [] }] }],
+      usage: { input_tokens: 300, output_tokens: 90 },
+    });
+  } });
+  const deck = await prepare_pitch(pilot_project, { slide_count: 2 }, presentation_plan_provider(config, openai), async slides => {
+    return { verified_slide_ids: slides.map(slide => slide.slide_id), feedback: [],
+      ...(calls === 1 && { omissions: [objective_findings[1]] }) };
+  });
+  expect(calls).toBe(2);
+  expect(deck.slides.map(slide => slide.narration)).toEqual([comparison, median_time]);
+});
+
+test("a broad summary keeps its exact set of verified slides without requiring all planner preferences", async () => {
+  const project = { ...pilot_project, confirmed_brief: { ...pilot_project.confirmed_brief,
+    intent: { ...pilot_project.confirmed_brief.intent!, outcome: "Summarize the key supported facts" } } };
+  let attempts = 0;
+  const deck = await prepare_pitch(project, { slide_count: 2 }, async () => {
+    attempts++;
+    return { readiness: ready, objective_findings: [
+      ...objective_findings, { finding: "There were 8 authentication help requests in May 2026.", evidence_ids: ["F4"] },
+    ], rationale: "Summarize key pilot findings.", beats: [comparison_beat, time_beat] };
+  }, verified);
+  expect(attempts).toBe(1);
+  expect(deck.slides.map(slide => slide.narration)).toEqual([comparison, median_time]);
 });
 
 test("charts are supported by real multi-figure sentences and table rows, and a swapped label is refused", () => {

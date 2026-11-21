@@ -62,9 +62,9 @@ export type TGroundingCoverage = {
   previous_findings?: string;
 };
 export type TGroundingReview = { units: TGroundingUnit[]; evidence: TEvidence[]; gaps: string[]; coverage?: TGroundingCoverage;
-  purpose?: "live_presentation" };
+  purpose?: "live_presentation" | "deck_presentation" };
 export type TGroundingVerdict = { id: string; decision: "supported" | "unsupported" | "missing_qualification"; reason?: string };
-export type TGroundingOmission = { finding: string; reason: string; evidence_ids: string[] };
+export type TGroundingOmission = { finding: string; reason: string; evidence_ids: string[]; objective_excerpt?: string };
 export type TGroundingReviewResult = TGroundingVerdict[] | { verdicts: TGroundingVerdict[]; omissions?: TGroundingOmission[] };
 export type TVerifiedResearchGraph = { graph_id: string; graph: TResearchGraph; evidence_ids: string[] };
 export type TResearchBundle = {

@@ -130,7 +130,7 @@ export const research_provider = (config: TModelCandidate, openai = createOpenAI
       const request = {
         // A deep brief has dozens of units; a verdict list cut off at the default output cap fails to parse and withholds everything.
         ...settings, maxOutputTokens: Math.max(config.max_output_tokens, 16_000), abortSignal: signal,
-        instructions: research_checker(!!review.coverage, review.purpose === "live_presentation"),
+        instructions: research_checker(!!review.coverage, review.purpose === "live_presentation", review.purpose === "deck_presentation"),
         prompt: JSON.stringify(review),
       };
       if (!review.coverage) {
@@ -141,10 +141,16 @@ export const research_provider = (config: TModelCandidate, openai = createOpenAI
         on_attempt?.(make_attempt(config, "completed", totalUsage));
         return output.verdicts.map(({ id, decision, reason }) => ({ id, decision, reason: reason ?? undefined }));
       }
-      const schema = verdict_schema.extend({ omissions: z.array(z.object({
+      const omission_schema = z.object({
         finding: z.string(), reason: z.string(), evidence_ids: z.array(z.string()),
-      })) });
-      const { output } = await generateText({ ...request, output: Output.object({ schema }) });
+      });
+      const schema = verdict_schema.extend({ omissions: z.array(review.purpose === "deck_presentation"
+        ? omission_schema.extend({ objective_excerpt: z.string() }) : omission_schema) });
+      const { output, totalUsage } = await generateText({ ...request, output: Output.object({ schema }) }).catch(error => {
+        on_attempt?.(make_attempt(config, "failed"));
+        throw error;
+      });
+      on_attempt?.(make_attempt(config, "completed", totalUsage));
       return { verdicts: output.verdicts.map(({ id, decision, reason }) => ({ id, decision, reason: reason ?? undefined })),
         omissions: output.omissions };
     },

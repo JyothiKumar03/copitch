@@ -5,7 +5,7 @@ import { AppError } from "../errors/app-error";
 import type { TModelCandidate } from "../types/ai";
 import { MAX_PRESENTATION_SLIDES } from "../types/deck";
 import type { TDeck, TDeckLayoutIssue, TDeckLayoutRepair, TDeckPlanInput, TDeckSentence, TPresentationReadiness, TSlide, TSlideTemplate } from "../types/deck";
-import type { TEvidence, TResearchBundle, TResearchProvider } from "../types/research";
+import type { TEvidence, TGroundingCoverageBrief, TGroundingOmission, TResearchBundle, TResearchProvider } from "../types/research";
 import { deck_sources, slide_speaking_seconds, slide_template_schema } from "./deck";
 import { numeric_tokens, quotes } from "./excerpt";
 import { configured_models_for } from "./model-config";
@@ -37,14 +37,20 @@ const readiness_schema = z.strictObject({
   status: z.enum(["ready", "limited", "insufficient"]),
   reason: short_text(300), gaps: z.array(short_text(180)).max(6),
 });
+const objective_finding_schema = z.strictObject({
+  finding: short_text(240), evidence_ids: z.array(z.string()).min(1).max(12),
+});
 const assessed_output = planner_output.extend({
   readiness: readiness_schema, beats: z.array(planned_beat).max(MAX_PRESENTATION_SLIDES),
+  objective_findings: z.array(objective_finding_schema).max(8).optional(),
 });
-const completion_output = assessed_output.omit({ beats: true }).extend({
+const assessed_provider_output = assessed_output.required({ objective_findings: true });
+const completion_output = assessed_output.omit({ beats: true, objective_findings: true }).extend({
   additions: z.array(z.strictObject({ after_slide_id: z.string().max(32).nullable(), beat: planned_beat }))
     .max(MAX_PRESENTATION_SLIDES),
 });
 type TAssessment = z.infer<typeof readiness_schema>;
+type TObjectiveFinding = z.infer<typeof objective_finding_schema>;
 
 type TPlanBeat = z.infer<typeof planned_beat>;
 type TBeatVisual = Pick<TPlanBeat, "title" | "highlights" | "evidence_ids"> & Pick<TSlide, "template" | "chart_period">;
@@ -63,6 +69,7 @@ type TPlanContext = {
   available_graphs?: TSavedGraph[];
   review_feedback?: string[];
   verified_beats?: TPlanBeat[];
+  objective_findings?: TObjectiveFinding[];
   completion?: { missing: number; candidate_limit: number; retained: { slide_id: string; beat: TPlanBeat }[] };
   context_assessment?: { title: string; objective?: string; audience?: string; known_gaps: string[] };
   layout_repair?: {
@@ -71,18 +78,21 @@ type TPlanContext = {
   };
 };
 export type TPlanPresentation = (context: TPlanContext, research_id: string, signal?: AbortSignal) => Promise<unknown>;
-type TPresentationPlanReview = { verified_slide_ids: string[]; feedback: string[]; unavailable?: boolean };
+type TPresentationPlanReview = { verified_slide_ids: string[]; feedback: string[]; unavailable?: boolean;
+  omissions?: TObjectiveFinding[]; revised_narration?: Record<string, string[]> };
+type TPlanReviewOptions = { coverage_brief?: TGroundingCoverageBrief; visible_evidence: ReadonlyMap<string, string[]> };
 type TPlanAttempt = {
   slides: TSlide[];
   verified_beats: TPlanBeat[];
   feedback: string[];
+  objectives: TObjectiveFinding[];
   rationale?: string;
   assessment?: TAssessment;
   unavailable?: boolean;
   anchors?: Map<string, string | null>;
 };
-export type TVerifyPresentationPlan = (slides: TSlide[], evidence: TEvidence[], research_id: string, signal?: AbortSignal) =>
-  Promise<boolean | TPresentationPlanReview>;
+export type TVerifyPresentationPlan = (slides: TSlide[], evidence: TEvidence[], research_id: string, signal?: AbortSignal,
+  options?: TPlanReviewOptions) => Promise<boolean | TPresentationPlanReview>;
 
 export class PresentationCoverageError extends AppError {
   constructor(readonly requested: number, readonly verified: number, readonly gaps: string[], reason: string) {
@@ -270,37 +280,66 @@ const bounded_signal = (milliseconds: number, parent?: AbortSignal) => {
   return parent ? AbortSignal.any([parent, deadline]) : deadline;
 };
 
-export const presentation_plan_review = (provider: TResearchProvider): TVerifyPresentationPlan => async (slides, evidence, research_id, signal) => {
+const objective_planning_instructions = `
+For a count-only deck, map the explicit presentation objective to objective_findings before drafting beats. Include each requested part that the passages can answer. Each entry is a short factual statement that would answer that part, with any requested figures in the source's own units and the minimum original evidence IDs needed to support it. Keep a requested comparison together with both measures. Do not list an opening, incidental context, or repeated measures as separate requirements. If objective_findings is supplied in the input, preserve it. For completion with unmet objective_findings, write the missing requested findings before considering any alternative. Use one complete, fully cited factual sentence per such addition, even when a regular slide would have more. Say the finding's exact figures, units and qualifications together. Keep the narration to the measured finding. Do not add an interpretation, evaluation, transition or repeated opener. An opening that repeats part of a comparison does not count as a separate takeaway.`;
+
+export const presentation_plan_review = (provider: TResearchProvider): TVerifyPresentationPlan => async (slides, evidence, research_id, signal, options) => {
   const call = provider.verify;
-  const traced_provider: TResearchProvider = { ...provider, verify: call && ((review, signal) => call(review, signal, attempt => {
-    if (process.env.TRACE_LOGS === "1") console.log(JSON.stringify({ operation: "presentation.plan_review", research_id, ...attempt }));
-  })) };
+  const coverage_brief = options?.coverage_brief;
+  let omissions: TGroundingOmission[] | undefined;
+  const traced_provider: TResearchProvider = { ...provider, verify: call && (async (review, signal) => {
+    const result = await call({ ...review, ...(coverage_brief && { purpose: "deck_presentation" as const }) }, signal, attempt => {
+      if (process.env.TRACE_LOGS === "1") console.log(JSON.stringify({ operation: "presentation.plan_review", research_id, ...attempt }));
+    });
+    omissions = review.coverage && !Array.isArray(result) ? result.omissions : undefined;
+    return result;
+  }) };
   const records = new Map(evidence.map(record => [record.id, record]));
   const support = (ids: string[]) => ids.map(evidence_id => ({ evidence_id, excerpt: records.get(evidence_id)?.passage ?? "" }));
-  const sections = slides.map(slide => ({ heading: slide.title, paragraphs: [
-      ...(slide.highlights.length ? [{ prose: slide.highlights.join("\n"), support: support(slide.evidence_ids) }] : []),
+  const sections = slides.map(slide => {
+    const visible_support = support(options?.visible_evidence.get(slide.slide_id) ?? slide.evidence_ids);
+    return { heading: slide.title, paragraphs: [
+      ...(slide.highlights.length ? [{ prose: slide.highlights.join("\n"), support: visible_support }] : []),
       ...(slide.template && !["title_card", "bullet_slide"].includes(slide.template.type)
-        ? [{ prose: JSON.stringify(slide.template), support: support(slide.evidence_ids) }] : []),
+        ? [{ prose: JSON.stringify(slide.template), support: visible_support }] : []),
       ...(slide.sentences ?? []).map(sentence => ({ prose: sentence.text, support: support(sentence.evidence_ids) })),
-    ] }));
+    ] };
+  });
   const result = await verify_draft({ title: "Presentation review", gaps: [], sections },
     evidence, [], traced_provider, bounded_signal(20_000, signal), undefined,
-    () => trace_plan(research_id, "independent_check_unavailable"));
+    () => trace_plan(research_id, "independent_check_unavailable"), coverage_brief);
   signal?.throwIfAborted();
-  const verified_slide_ids = slides.flatMap((slide, index) => {
-    const supported = (id: string) => result.decisions?.get(id) === "supported";
-    return supported("section-" + index) &&
-      sections[index].paragraphs.every((_, part) => supported(`paragraph-${index}-${part}`)) ? [slide.slide_id] : [];
-  });
+  const revised_narration = new Map<string, string[]>();
+  const supported = (id: string) => result.decisions?.get(id) === "supported";
+  const verified_slide_ids = slides.filter((slide, index) => {
+    const spoken = slide.sentences ?? [];
+    const first_sentence = sections[index].paragraphs.length - spoken.length;
+    const approved_paragraphs = sections[index].paragraphs.map((_, part) => supported(`paragraph-${index}-${part}`));
+    if (!supported(`section-${index}`) || !approved_paragraphs.slice(0, first_sentence).every(Boolean)) return false;
+    if (approved_paragraphs.every(Boolean)) return true;
+    if (!options) return false;
+    const kept = spoken.filter((_, part) => approved_paragraphs[first_sentence + part]);
+    if (!kept.some(sentence => sentence.evidence_ids.length > 0)) return false;
+    revised_narration.set(slide.slide_id, kept.map(sentence => sentence.sentence_id));
+    return true;
+  }).map(slide => slide.slide_id);
+  if (revised_narration.size) trace_plan(research_id, "trimmed_unverified_narration");
   trace_plan(research_id, verified_slide_ids.length === slides.length ? "independently_verified" :
     verified_slide_ids.length ? "independent_check_partial" : "independent_check_rejected");
-  return { verified_slide_ids, feedback: result.feedback ?? [], ...(!result.decisions && { unavailable: true }) };
+  const missing = result.coverage_feedback?.length && Array.isArray(omissions) ? omissions.flatMap(omission => {
+    if (!omission.objective_excerpt || !coverage_brief?.intent?.outcome.includes(omission.objective_excerpt)) return [];
+    const parsed = objective_finding_schema.safeParse({ finding: omission?.finding, evidence_ids: omission?.evidence_ids });
+    return parsed.success ? [parsed.data] : [];
+  }).slice(0, 8) : [];
+  return { verified_slide_ids, feedback: result.feedback ?? [], ...(missing.length && { omissions: missing }),
+    ...(revised_narration.size && { revised_narration: Object.fromEntries(revised_narration) }),
+    ...(!result.decisions && { unavailable: true }) };
 };
 
-export const verify_presentation_plan: TVerifyPresentationPlan = async (slides, evidence, research_id, signal) => {
+export const verify_presentation_plan: TVerifyPresentationPlan = async (slides, evidence, research_id, signal, options) => {
   const [model] = configured_models_for("planning");
   return model && process.env.OPENAI_API_KEY
-    ? presentation_plan_review(research_provider(model, undefined, []))(slides, evidence, research_id, signal)
+    ? presentation_plan_review(research_provider(model, undefined, []))(slides, evidence, research_id, signal, options)
     : { verified_slide_ids: [], feedback: [], unavailable: true };
 };
 
@@ -312,9 +351,10 @@ export const presentation_plan_provider = (config: TModelCandidate, openai = cre
     const reply = await generateText({
       model: openai.responses(config.model), maxOutputTokens: Math.min(config.max_output_tokens, 5200),
       temperature: config.temperature, maxRetries: 0, abortSignal: bounded_signal(25_000, signal),
-      providerOptions: { openai: { store: false } }, instructions: presentation_planner,
+      providerOptions: { openai: { store: false } }, instructions: context.context_assessment
+        ? presentation_planner + objective_planning_instructions : presentation_planner,
       output: Output.object({ schema: context.completion ? completion_output :
-        context.context_assessment ? assessed_output : planner_output }), prompt: JSON.stringify(context),
+        context.context_assessment ? assessed_provider_output : planner_output }), prompt: JSON.stringify(context),
     });
     outcome = "completed";
     usage = reply.usage;
@@ -332,14 +372,61 @@ export const request_presentation_plan: TPlanPresentation = async (context, rese
   if (config && process.env.OPENAI_API_KEY) return presentation_plan_provider(config)(context, research_id, signal);
 };
 
+const slide_layouts = (slides: TSlide[]): TSlide[] => slides.map((slide, index) => ({ ...slide,
+  layout: index === 0 ? "headline" : index === slides.length - 1 ? "takeaway" : "evidence",
+}));
+
 // Every slide stands on its own, so each verified slide is kept even when a neighbour failed review.
-const verified_slides = (slides: TSlide[], review: boolean | TPresentationPlanReview) => {
+const verified_slides = (slides: TSlide[], review: boolean | TPresentationPlanReview, visible_evidence: ReadonlyMap<string, string[]>) => {
   if (typeof review === "boolean") return review ? slides : [];
   const verified = new Set(review.verified_slide_ids);
-  const kept = slides.filter(slide => verified.has(slide.slide_id));
-  if (kept.length === slides.length) return slides;
-  return kept.map((slide, index): TSlide => ({ ...slide,
-    layout: index === 0 ? "headline" : index === kept.length - 1 ? "takeaway" : "evidence" }));
+  const kept = slides.filter(slide => verified.has(slide.slide_id)).map(slide => {
+    const retained = review.revised_narration?.[slide.slide_id];
+    if (!retained) return slide;
+    const sentences = slide.sentences?.filter(sentence => retained.includes(sentence.sentence_id)) ?? [];
+    const narration = sentences.map(sentence => sentence.text).join(" ");
+    const evidence_ids = [...new Set([...(visible_evidence.get(slide.slide_id) ?? []), ...sentences.flatMap(sentence => sentence.evidence_ids)])];
+    return { ...slide, sentences, narration, evidence_ids, estimated_seconds: slide_speaking_seconds(narration) };
+  });
+  return kept.length === slides.length ? kept : slide_layouts(kept);
+};
+
+const covered_objectives = (slide: TSlide, objectives: TObjectiveFinding[]) => {
+  const facts = numeric_tokens([slide.title, ...slide.highlights, slide.narration,
+    slide.chart_period, slide.template ? JSON.stringify(slide.template) : undefined].join(" "));
+  return objectives.filter(({ finding, evidence_ids }) => evidence_ids.every(id => slide.evidence_ids.includes(id)) &&
+    numeric_tokens(finding).every(value => facts.includes(value)));
+};
+
+const uncovered_objectives = (slides: TSlide[], objectives: TObjectiveFinding[]) => {
+  const covered = new Set(slides.flatMap(slide => covered_objectives(slide, objectives)));
+  return objectives.filter(finding => !covered.has(finding));
+};
+
+const select_verified_slides = (verified: TSlide[], maximum: number, objectives: TObjectiveFinding[], preferences: TObjectiveFinding[]) => {
+  const selected = new Set<TSlide>();
+  let remaining = objectives;
+  const prioritize = (findings: TObjectiveFinding[], limit: number) => {
+    const candidates = verified.map(slide => ({ slide, covers: covered_objectives(slide, findings) }));
+    while (findings.length && selected.size < limit) {
+      const next = candidates.filter(({ slide }) => !selected.has(slide))
+        .map(({ slide, covers }) => ({ slide, new_findings: covers.filter(finding => findings.includes(finding)) }))
+        .sort((left, right) => right.new_findings.length - left.new_findings.length).find(item => item.new_findings.length);
+      if (!next) break;
+      selected.add(next.slide);
+      findings = findings.filter(finding => !next.new_findings.includes(finding));
+    }
+    return findings;
+  };
+  remaining = prioritize(remaining, maximum);
+  const limit = maximum - remaining.length;
+  prioritize(uncovered_objectives([...selected], preferences), limit);
+  // Keep room for uncovered parts of the objective before adding optional slides.
+  for (const slide of verified) {
+    if (selected.size >= limit) break;
+    selected.add(slide);
+  }
+  return slide_layouts(verified.filter(slide => selected.has(slide)));
 };
 
 const graph_visual = ({ graph }: TSavedGraph): { template: TSlideTemplate; chart_period?: string } => ({
@@ -453,12 +540,34 @@ export const plan_verified_pitch = async (bundle: TResearchBundle, pitch: TDeckP
     evidence_ids.every(id => eligible.has(id)) && speakable(graph.name) &&
     speakable(graph.description) && graph.data.every(point => speakable(point.label)));
   const by_graph_id = new Map(graphs.map(item => [item.graph_id, item]));
+  const evidence_numbers = new Map([...eligible].map(([id, entry]) => [id, numeric_tokens(entry.passage)]));
+  const supported_numbers = (text: string, ids: string[]) => numeric_tokens(text).every(value =>
+    ids.some(id => evidence_numbers.get(id)?.includes(value)));
+  const literal_findings = settings ? [] : findings.flatMap(item => {
+    const evidence_ids = item.evidence_ids.filter(id => eligible.has(id));
+    const text = [...sentences.segment(item.text)].map(part => part.segment.trim())
+      .filter(sentence => sentence && supported_numbers(sentence, evidence_ids)).join(" ");
+    return text && evidence_ids.length ? [{ ...item, text, evidence_ids }] : [];
+  });
+  const all_evidence_ids = [...eligible.keys()];
+  const grounded_objectives = (findings: TObjectiveFinding[]) => [...new Map(findings
+    .filter(({ finding, evidence_ids }) => evidence_ids.every(id => eligible.has(id)) && supported_numbers(finding, evidence_ids))
+    .map(finding => [finding.finding.toLowerCase(), finding])).values()];
+  const calculation_note = /\b(?:calculat\w*|comput\w*|implied|derived)\b/iu;
+  const known_gaps = settings ? [] : bundle.gaps.filter(speakable).slice(0, 30).map(gap => gap
+    .split(/;\s*/u).filter(clause => !calculation_note.test(clause) || supported_numbers(clause, all_evidence_ids))
+    .join("; ").slice(0, 500)).filter(Boolean);
   // Each rejected rule is traced by name, so a refused plan says why instead of silently falling back.
   // A slide that breaks a rule is dropped with its reason traced; the rest of the plan survives. Dropping the whole
   // plan for one unsupported figure used to send the deck to the research-wording fallback.
   const reject = (reason: string) => { trace_plan(bundle.research_id, "rejected_constraints:" + reason); return undefined; };
   const build = (beats: TPlanBeat[], feedback: string[], completion?: TPlanContext["completion"]) => {
-    if (!beats.length || beats.length > (completion?.candidate_limit ?? count)) return reject("beat_count");
+    const candidate_limit = completion?.candidate_limit ?? (settings || layout_repair ? count : Math.min(MAX_PRESENTATION_SLIDES, count + 1));
+    if (!beats.length || (!completion && beats.length > candidate_limit)) {
+      feedback.push(`Return ${count} requested slides. A draft may contain at most ${candidate_limit} candidates for review.`);
+      return reject("beat_count");
+    }
+    if (completion && beats.length > candidate_limit) trace_plan(bundle.research_id, "bounded_completion_candidates");
     const slides: TSlide[] = [];
     const retained = completion?.retained.map(({ beat }) => beat) ?? [];
     const fact_key = (beat: TPlanBeat) => JSON.stringify([[...beat.highlights].sort(), beat.sentences.map(sentence => sentence.text)])
@@ -469,14 +578,14 @@ export const plan_verified_pitch = async (bundle: TResearchBundle, pitch: TDeckP
     const reserved_ids = new Set(completion?.retained.map(item => item.slide_id));
     let next_id = completion ? count : 0;
     const proposed_by_slide_id = new Map<string, TPlanBeat>();
+    const visible_evidence = new Map<string, string[]>();
     const skip = (reason: string, title: string) => {
       trace_plan(bundle.research_id, "dropped_beat:" + reason);
       feedback.push(`Slide "${title}" was flagged (${reason}).`);
     };
     const has_evidence = (id: string) => settings ? cited_records.has(id) : eligible.has(id);
-    const supported_numbers = (text: string, ids: string[]) => numeric_tokens(text).every(value =>
-      ids.some(id => numeric_tokens(eligible.get(id)?.passage ?? "").includes(value)));
     for (const beat of beats) {
+      if (slides.length === candidate_limit) break;
       const title_key = beat.title.toLowerCase();
       if (titles.has(title_key)) { skip("duplicate_title", beat.title); continue; }
       if (!beat.evidence_ids.length || !beat.evidence_ids.every(has_evidence)) {
@@ -513,14 +622,14 @@ export const plan_verified_pitch = async (bundle: TResearchBundle, pitch: TDeckP
         .map((sentence, index) => ({ ...sentence, sentence_id: `beat-${id_index + 1}-sentence-${index + 1}` }));
       const slide = compile_beat(visual, script, script.map(sentence => sentence.text).join(" "), id_index, beats.length);
       slides.push(slide);
+      visible_evidence.set(slide.slide_id, visual.evidence_ids);
       proposed_by_slide_id.set(slide.slide_id, { ...beat, template: beat.template.type === "saved_graph"
         ? beat.template : visual.template! });
     }
     if (!slides.length) return reject("no_usable_beats");
-    const kept = slides.map((slide, index): TSlide => ({ ...slide,
-      layout: index === 0 ? "headline" : index === slides.length - 1 ? "takeaway" : "evidence" }));
+    const kept = slide_layouts(slides);
     return kept.reduce((total, slide) => total + slide.estimated_seconds!, 0) <= duration
-      ? { slides: kept, proposed_by_slide_id } : reject("over_duration");
+      ? { slides: kept, proposed_by_slide_id, visible_evidence } : reject("over_duration");
   };
   const context: TPlanContext = {
     ...(settings && {
@@ -533,14 +642,14 @@ export const plan_verified_pitch = async (bundle: TResearchBundle, pitch: TDeckP
     ...(pitch.slide_count && { slide_count: count }),
     ...(graphs.length && { available_graphs: graphs }),
     headings: [...approved_headings.keys()].slice(0, 100),
-    findings: settings ? findings.slice(0, 55).map(item => ({ ...item, text: item.text.slice(0, 480) })) : findings,
+    findings: settings ? findings.slice(0, 55).map(item => ({ ...item, text: item.text.slice(0, 480) })) : literal_findings,
     ...(!settings && { context_assessment: {
       title: deck_title,
       ...(bundle.confirmed_brief.intent?.outcome && speakable(bundle.confirmed_brief.intent.outcome) &&
         { objective: bundle.confirmed_brief.intent.outcome }),
       ...(bundle.confirmed_brief.intent?.audience && speakable(bundle.confirmed_brief.intent.audience) &&
         { audience: bundle.confirmed_brief.intent.audience }),
-      known_gaps: bundle.gaps.filter(gap => speakable(gap)).slice(0, 30).map(gap => gap.slice(0, 500)),
+      known_gaps,
     } }),
     ...(layout_repair && { layout_repair: {
       slides: layout_repair.deck.slides.map(({ slide_id, title, highlights, template, evidence_ids, chart_period }) =>
@@ -551,9 +660,13 @@ export const plan_verified_pitch = async (bundle: TResearchBundle, pitch: TDeckP
     evidence: context_records,
   };
   if (context.layout_repair && !context.layout_repair.issues.length) throw new AppError(422, "The layout report needs valid slide IDs.");
+  const brief = bundle.confirmed_brief;
+  const coverage_brief: TGroundingCoverageBrief | undefined = context.context_assessment?.objective && brief.intent ? {
+    summary: speakable(brief.summary) ? brief.summary : deck_title, intent: brief.intent, messages: [],
+  } : undefined;
   const propose = async (request: TPlanContext): Promise<TPlanAttempt> => {
     signal?.throwIfAborted();
-    const attempt: TPlanAttempt = { slides: [], verified_beats: [], feedback: [] };
+    const attempt: TPlanAttempt = { slides: [], verified_beats: [], feedback: [], objectives: request.objective_findings ?? [] };
     try {
       const model_output = await plan(request, bundle.research_id, signal);
       signal?.throwIfAborted();
@@ -566,6 +679,8 @@ export const plan_verified_pitch = async (bundle: TResearchBundle, pitch: TDeckP
       const readiness = "readiness" in data ? data.readiness : undefined;
       attempt.assessment = readiness;
       attempt.rationale = data.rationale;
+      const preferences = "objective_findings" in data && Array.isArray(data.objective_findings)
+        ? grounded_objectives(data.objective_findings) : [];
       if (readiness?.status === "insufficient") return attempt;
       const anchors = new Map<string, string | null>();
       const retained_ids = new Set(request.completion?.retained.map(({ slide_id }) => slide_id));
@@ -576,19 +691,31 @@ export const plan_verified_pitch = async (bundle: TResearchBundle, pitch: TDeckP
       });
       const proposed = build(beats, attempt.feedback, request.completion);
       if (!proposed) return attempt;
-      const review = await verify(proposed.slides, settings ? bundle.evidence : context_records, bundle.research_id, signal);
+      const review = await verify(proposed.slides, settings ? bundle.evidence : context_records, bundle.research_id, signal, settings
+        ? undefined : { visible_evidence: proposed.visible_evidence, coverage_brief: request.completion ? undefined : coverage_brief });
       signal?.throwIfAborted();
       if (typeof review === "object") {
         attempt.feedback.unshift(...review.feedback);
         attempt.unavailable = review.unavailable;
+        if (review.omissions?.length) attempt.objectives = grounded_objectives([...attempt.objectives, ...review.omissions]);
       }
-      attempt.slides = verified_slides(proposed.slides, review);
-      attempt.verified_beats = attempt.slides.map(slide => proposed.proposed_by_slide_id.get(slide.slide_id)!);
+      const verified = verified_slides(proposed.slides, review, proposed.visible_evidence);
+      attempt.slides = settings ? verified : select_verified_slides(verified, request.completion?.missing ?? count, attempt.objectives, preferences);
+      attempt.verified_beats = attempt.slides.map(slide => {
+        const beat = proposed.proposed_by_slide_id.get(slide.slide_id)!;
+        if (typeof review === "boolean" || !review.revised_narration?.[slide.slide_id]) return beat;
+        return { ...beat, sentences: slide.sentences!.map(({ text, evidence_ids }) => ({ text, evidence_ids })) };
+      });
       if (request.completion) attempt.anchors = new Map(attempt.slides.map(slide => [slide.slide_id, anchors.get(slide.title)!]));
-      trace_plan(bundle.research_id, attempt.slides.length === proposed.slides.length ? "accepted" :
-        attempt.slides.length ? "accepted_verified_subset" : "rejected_verification",
-        { requested: count, generated: beats.length, eligible: proposed.slides.length, verified: attempt.slides.length });
-      if (attempt.slides.length < proposed.slides.length) attempt.rationale += " The deck retains the slides with checked content.";
+      trace_plan(bundle.research_id, verified.length === proposed.slides.length ? "accepted" :
+        verified.length ? "accepted_verified_subset" : "rejected_verification",
+        { requested: count, generated: beats.length, eligible: proposed.slides.length, verified: verified.length });
+      const missing = uncovered_objectives(attempt.slides, attempt.objectives);
+      if (missing.length) {
+        trace_plan(bundle.research_id, "objective_findings_missing");
+        attempt.feedback.unshift(...missing.map(({ finding }) => `Still needed for the presentation objective: ${finding}`));
+      }
+      if (verified.length < proposed.slides.length) attempt.rationale += " The deck retains the slides with checked content.";
       return attempt;
     } catch {
       signal?.throwIfAborted();
@@ -610,7 +737,8 @@ export const plan_verified_pitch = async (bundle: TResearchBundle, pitch: TDeckP
   }
   let repaired: TPlanAttempt | undefined;
   const needs_count_repair = !settings && verified_count < count;
-  if (!layout_repair && (needs_count_repair || (!verified_count && first.feedback.length))) {
+  const can_complete = needs_count_repair && verified_count > 0 && first.assessment?.status === "ready" && !first.unavailable;
+  if (!layout_repair && ((needs_count_repair && !can_complete) || (!verified_count && first.feedback.length))) {
     trace_plan(bundle.research_id, "repair_requested");
     const count_feedback = needs_count_repair ? [
       `The first plan retained ${verified_count} of ${count} requested slides. Return the entire ordered deck and reach ${count} distinct slides. Keep the verified beats and replace or fill in the missing ones. Mine the actual passages for specific independent takeaways, including ones from the same passage. Use a short text slide when the evidence does not bind a visual precisely. Keep every reporting period, estimate and qualifier. Name genuinely missing evidence in readiness.gaps.`,
@@ -618,19 +746,25 @@ export const plan_verified_pitch = async (bundle: TResearchBundle, pitch: TDeckP
     repaired = await propose({
       ...context, review_feedback: [...count_feedback, ...first.feedback].slice(0, 10),
       ...(needs_count_repair && verified_count > 0 && { verified_beats: first.verified_beats }),
+      ...(first.objectives.length > 0 && { objective_findings: first.objectives }),
     });
   }
   let selected = repaired && repaired.slides.length >= verified_count && !repaired.unavailable ? repaired : first;
   let added: TPlanAttempt | undefined;
-  for (let round = 0; !settings && !layout_repair && selected.slides.length > 0 &&
+  for (let round = 0; !settings && !layout_repair &&
       selected.slides.length < count && selected.assessment?.status === "ready" && round < max_completion_rounds; round++) {
     const missing = count - selected.slides.length;
+    const objective_findings = uncovered_objectives(selected.slides, selected.objectives);
     trace_plan(bundle.research_id, "complete_verified_deck");
     added = await propose({
       ...context, completion: { missing, candidate_limit: Math.min(MAX_PRESENTATION_SLIDES, missing + 1),
         retained: selected.slides.map(({ slide_id }, index) =>
         ({ slide_id, beat: selected.verified_beats[index] })) },
-      review_feedback: [...new Set([...(added?.feedback ?? []), ...selected.feedback])].slice(0, 8),
+      ...(objective_findings.length > 0 && { objective_findings }),
+      review_feedback: [...new Set([
+        ...(!selected.slides.length ? [`No original slide passed review. Draft ${missing} separate, substantive slides directly from the cited passages. Use a null anchor for each. Do not repeat the same measurement as a title or summary slide.`] : []),
+        ...(added?.feedback ?? []), ...selected.feedback,
+      ])].slice(0, 8),
     });
     if (added.anchors?.size && added.slides.length) {
       const places = new Map<string | null, TSlide[]>();
@@ -644,14 +778,14 @@ export const plan_verified_pitch = async (bundle: TResearchBundle, pitch: TDeckP
       }
       const ordered = [...(places.get(null) ?? []),
         ...selected.slides.flatMap(slide => [slide, ...(places.get(slide.slide_id) ?? [])])];
-      selected = { ...selected, slides: ordered.map((slide, index): TSlide => ({ ...slide,
-        layout: index === 0 ? "headline" : index === ordered.length - 1 ? "takeaway" : "evidence" })),
+      selected = { ...selected, slides: slide_layouts(ordered),
       verified_beats: ordered.map(slide => verified_by_id.get(slide.slide_id)!),
       rationale: added.rationale ?? selected.rationale, assessment: added.assessment ?? selected.assessment };
     }
     if (added.unavailable || added.assessment?.status === "insufficient") break;
   }
-  if (!settings && selected.slides.length !== count) {
+  const unfulfilled = uncovered_objectives(selected.slides, selected.objectives);
+  if (!settings && (selected.slides.length !== count || unfulfilled.length)) {
     trace_plan(bundle.research_id, "requested_count_not_met", {
       requested: count, generated: selected.slides.length, eligible: selected.slides.length, verified: selected.slides.length,
     });
@@ -662,6 +796,7 @@ export const plan_verified_pitch = async (bundle: TResearchBundle, pitch: TDeckP
     const coverage_failure = [added, repaired, first].flatMap(attempt => attempt ?
       missing_evidence(attempt, selected.slides.length) ?? [] : [])[0];
     if (coverage_failure) throw coverage_failure;
+    if (unfulfilled.length) throw new AppError(422, "The reviewed slides did not cover every part of the presentation objective. Try generating the deck again.");
     throw new AppError(422,
       `Only ${selected.slides.length} of ${count} requested slides passed review. Try generating the deck again or choose fewer slides.`);
   }
