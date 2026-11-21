@@ -1,5 +1,4 @@
 import { pitch_markdown } from "./pitch-markdown";
-import { context_markdown } from "./context-markdown";
 import { verify_graph_document } from "./research-graphs";
 import { selected_chart } from "./pitch-chart";
 import { source_evidence } from "./source";
@@ -86,14 +85,10 @@ const with_verified_additions = (base: TResearchDraft, revision: TResearchDraft)
   return { ...base, sections, graph_xml: base.graph_xml ?? revision.graph_xml, gaps: [...new Set([...base.gaps, ...revision.gaps])] };
 };
 
-const render_report = (brief: TResearchBrief, draft: TResearchDraft, evidence: TEvidence[], gaps: Set<string>) => {
+const supported_findings = (draft: TResearchDraft, evidence: TEvidence[], gaps: Set<string>): TResearchBundle["findings"] => {
   const by_id = new Map(evidence.map(item => [item.id, item]));
-  const used = new Map<string, Set<string>>();
-  const lines = ["# " + safe_text(draft.title || "Research report"), "", "## Confirmed scope", "", safe_text(brief.summary), ""];
-  const sections: TResearchDraft["sections"] = [];
   const published = new Set<string>();
-  for (const section of draft.sections) {
-    const paragraphs: string[] = [];
+  const sections = draft.sections.flatMap(section => {
     const supported: typeof section.paragraphs = [];
     for (const paragraph of section.paragraphs) {
       const valid = paragraph.prose.trim() && paragraph.support.length && paragraph.support.every(ref =>
@@ -105,30 +100,75 @@ const render_report = (brief: TResearchBrief, draft: TResearchDraft, evidence: T
       const key = paragraph_key(paragraph.prose);
       if (published.has(key)) continue;
       published.add(key);
+      supported.push(paragraph);
+    }
+    return supported.length ? [{ heading: section.heading, paragraphs: supported }] : [];
+  });
+  if (!sections.length) gaps.add("No supported narrative findings were available for this scope.");
+  return { title: draft.title || "Research report", sections };
+};
+
+export const research_report = ({ confirmed_brief, findings, evidence, gaps }: TResearchBundle) => {
+  const by_id = new Map(evidence.map(item => [item.id, item]));
+  const used = new Map<string, Set<string>>();
+  const lines = ["# " + safe_text(findings.title), "", "## Confirmed scope", "", safe_text(confirmed_brief.summary), ""];
+  for (const section of findings.sections) {
+    const paragraphs = section.paragraphs.flatMap(paragraph => {
       const ids = new Set<string>();
       for (const ref of paragraph.support) {
+        if (!by_id.has(ref.evidence_id)) continue;
         ids.add(ref.evidence_id);
         const excerpts = used.get(ref.evidence_id) ?? new Set<string>();
         excerpts.add(ref.excerpt);
         used.set(ref.evidence_id, excerpts);
       }
-      paragraphs.push(safe_text(paragraph.prose) + " " + [...ids].map(id => `[^${id}]`).join(""), "");
-      supported.push(paragraph);
-    }
-    if (supported.length) {
-      sections.push({ heading: section.heading, paragraphs: supported });
-      lines.push("## " + safe_text(section.heading), "", ...paragraphs);
-    }
+      return [safe_text(paragraph.prose) + " " + [...ids].map(id => `[^${id}]`).join(""), ""];
+    });
+    lines.push("## " + safe_text(section.heading), "", ...paragraphs);
   }
-  if (!sections.length) gaps.add("No supported narrative findings were available for this scope.");
-  if (gaps.size) lines.push("## Unresolved questions and retrieval gaps", "", ...[...gaps].map(gap => "- " + safe_text(gap)), "");
+  if (gaps.length) lines.push("## Unresolved questions and retrieval gaps", "", ...gaps.map(gap => "- " + safe_text(gap)), "");
   if (used.size) lines.push("## Evidence", "");
   for (const [id, excerpts] of used) {
     const item = by_id.get(id)!;
     const source = item.url ? `[${safe_text(item.location)}](<${item.url.replace(/[<>]/g, encodeURIComponent)}>)` : safe_text(item.location);
     lines.push(`[^${id}]: ${source} (${item.origin}). ${[...excerpts].map(value => "“" + safe_text(value) + "”").join(" ")}`, "");
   }
-  return { markdown: lines.join("\n"), findings: { title: draft.title || "Research report", sections } };
+  return lines.join("\n");
+};
+
+// The writer needs the records behind the checked answers, then the rest up to a budget. Sending every passage from
+// several long reports buries the answers in unrelated pages and overflows the writer.
+const writer_evidence_chars = 90_000;
+const writer_evidence = (evidence: TEvidence[], collection?: TResearchCheckpoint["collection"]) => {
+  const answered = new Set(collection && "checklist" in collection ? collection.checklist.flatMap(item => item.evidence_id ?? []) : []);
+  const ordered = [...evidence.filter(item => answered.has(item.id) || item.origin !== "public"),
+    ...evidence.filter(item => !answered.has(item.id) && item.origin === "public")];
+  const selected: TEvidence[] = [];
+  let size = 0;
+  for (const item of ordered) {
+    size += item.passage.length + item.location.length;
+    if (size > writer_evidence_chars && selected.length) break;
+    selected.push(item);
+  }
+  return selected;
+};
+
+// One section per checked answer: the heading states the finding, the point is the answer, and its support is the
+// verbatim excerpt the server already checked. Unanswered questions become listed gaps. No long-form writer call.
+const min_checked_sections = 3;
+const checklist_draft = (brief: TResearchBrief, collection?: TResearchCheckpoint["collection"]): TResearchDraft | undefined => {
+  if (!collection || !("checklist" in collection)) return;
+  const covered = collection.checklist.filter(item => item.status === "covered" && item.answer && item.evidence_id && item.excerpt);
+  if (covered.length < min_checked_sections) return;
+  return {
+    title: brief.intent?.subject ? `${brief.intent.subject}: ${brief.intent.outcome ?? "key findings"}`.slice(0, 160) : "Key findings",
+    sections: covered.map(item => ({
+      heading: (item.heading ?? item.question).slice(0, 160),
+      paragraphs: [{ prose: item.answer!, support: [{ evidence_id: item.evidence_id!, excerpt: item.excerpt! }] }],
+    })),
+    // Unanswered questions are already recorded as research gaps when collection finishes.
+    gaps: [],
+  };
 };
 
 export const build_research = async (
@@ -226,6 +266,7 @@ export const build_research = async (
   let draft_attempts = previous?.draft_attempts ?? (draft ? 1 : 0);
   let draft_feedback = previous?.draft_feedback ?? [];
   let verified_candidate = previous?.verified_candidate;
+  let built_from_checklist = false;
   const draft_limit = studio ? 2 : 1;
   const save_draft = () => checkpoint?.({ completed_lookups, evidence, gaps: [...gaps], collection, draft, grounding, draft_attempts, draft_feedback, verified_candidate });
   const restore_candidate = () => {
@@ -238,12 +279,25 @@ export const build_research = async (
   while (!grounding) {
     const previous_findings = verified_candidate?.draft.sections.flatMap(section =>
       section.paragraphs.map(paragraph => section.heading + "\n" + paragraph.prose)).join("\n\n").slice(0, 10_000);
-    if (!draft && draft_attempts < draft_limit) {
+    // A resolved checklist is the brief. The long-form writer remains for briefs without one, or to repair a rejected draft.
+    const answered = studio && !draft && draft_attempts === 0 && !verified_candidate ? checklist_draft(brief, collection) : undefined;
+    if (answered) {
+      built_from_checklist = true;
+      draft = answered;
+      draft_attempts = 1;
+      activity?.("draft_started", `Built the brief from ${answered.sections.length} checked answers.`);
+      save_draft();
+    } else if (!draft && draft_attempts < draft_limit) {
       const repairing = draft_attempts > 0;
       // The writer needs the whole brief: what to research, the pitch intent, and what the host actually said.
       const request = JSON.stringify({ summary: brief.summary, intent: brief.intent ?? null, host_said: brief.messages.slice(-12),
         as_of: collection && new Date(collection.started_at).toISOString().slice(0, 10),
         collection: collection && { notes: collection.research_notes, stop_reason: collection.stop_reason },
+        // Checked answers to the research checklist. The writer must carry each covered answer into the brief.
+        ...(collection && "checklist" in collection && collection.checklist.length && { coverage: collection.checklist.map(item => ({
+          question: item.question, status: item.status,
+          ...(item.status === "covered" ? { answer: item.answer, evidence_id: item.evidence_id, excerpt: item.excerpt } : { reason: item.reason }),
+        })) }),
         ...(previous_findings && { already_verified: previous_findings }),
         ...(repairing && { draft_feedback }) });
       const prompt = verified_candidate
@@ -254,7 +308,7 @@ export const build_research = async (
       activity?.("draft_started", repairing ? "Requested a grounded revision of the research context." :
         "Requested a draft using the collected material.");
       try {
-        draft = await provider.draft(prompt, evidence, [...gaps], signal, studio ? "context" : undefined);
+        draft = await provider.draft(prompt, studio ? writer_evidence(evidence, collection) : evidence, [...gaps], signal, studio ? "context" : undefined);
       } catch {
         check_current();
         signal.throwIfAborted();
@@ -275,7 +329,7 @@ export const build_research = async (
         });
         draft = { ...draft, sections: draft.sections.map(section => ({ ...section, paragraphs: section.paragraphs.map(bind_records) })) };
       }
-      const { findings } = render_report(brief, draft, evidence, gaps);
+      const findings = supported_findings(draft, evidence, gaps);
       const pitch_script = draft.pitch_script ?? [];
       const complete_script = !studio && pitch_script.length >= 3 && pitch_script.length <= 6 &&
         pitch_script[0].purpose === "opening" && pitch_script.at(-1)?.purpose === "close" &&
@@ -325,7 +379,9 @@ export const build_research = async (
     if (draft) draft.pitch_chart = approved_chart;
     const checked: TGrounding = { version:1, mode:accepted ? "verified" : "source_extracts",
       ...(selection ? {chart:approved_chart ? "verified" : "withheld"} : {}) };
-    if (studio && usable && draft && verdict?.coverage_feedback?.length && draft_attempts < draft_limit) {
+    // A checklist-built brief already covers the questions the agent planned; open questions are listed gaps.
+    // Appending long-form writer paragraphs here costs a call and brings back process text, so it is skipped.
+    if (studio && usable && draft && !built_from_checklist && verdict?.coverage_feedback?.length && draft_attempts < draft_limit) {
       verified_candidate = { draft, grounding: checked };
       draft_feedback = [...verdict.coverage_feedback, ...verdict.feedback ?? []];
       draft = undefined;
@@ -341,20 +397,18 @@ export const build_research = async (
   check_current();
   if (!draft || !grounding) throw new Error("Missing grounded research draft");
   for (const gap of draft.gaps) if (gap.trim()) gaps.add(gap);
-  const { markdown, findings } = render_report(brief, draft, evidence, gaps);
+  const findings = supported_findings(draft, evidence, gaps);
   if (studio && (grounding.mode !== "verified" || !findings.sections.length)) {
     throw new AppError(422, needs_more_evidence);
   }
   const bundle: TResearchBundle = { research_id: crypto.randomUUID(), brief_id: brief.brief_id, confirmed_brief: brief,
-    markdown, findings, pitch_chart: draft.pitch_chart ?? null, pitch_script: studio ? undefined : draft.pitch_script,
-    grounding, evidence, gaps: [...gaps] };
+    findings, grounding, evidence, gaps: [...gaps] };
   if (studio) {
-    const graphs = draft.graph_xml && await verify_graph_document(draft.graph_xml, evidence, provider.verify, signal, provider.repair_graph,
-      () => activity?.("verification_started", "Checking a new chart with comparable source values."));
+    const checked_graphs = draft.graph_xml ? await verify_graph_document(draft.graph_xml, evidence, provider.verify, signal, provider.repair_graph,
+      () => activity?.("verification_started", "Checking a new chart with comparable source values.")) : undefined;
     check_current();
-    bundle.context_markdown = context_markdown(bundle, graphs || undefined);
-    if (!bundle.context_markdown) throw new AppError(422, needs_more_evidence);
+    return { ...bundle, verified_graphs: checked_graphs?.graphs ?? [] };
   }
-  bundle.pitch_markdown = pitch_markdown(bundle);
-  return bundle;
+  const legacy = { ...bundle, pitch_chart: draft.pitch_chart ?? null, pitch_script: draft.pitch_script };
+  return { ...legacy, markdown: research_report(legacy), pitch_markdown: pitch_markdown(legacy) };
 };

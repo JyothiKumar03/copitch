@@ -1,7 +1,6 @@
 import type { TResearchBundle } from "../types/research";
 import { quotes } from "./excerpt";
-
-type TVerifiedGraphs = { markdown: string; evidence_ids: string[] };
+import { serialize_research_graphs } from "./research-graphs";
 
 const plain = (value: string) => value.replace(/\s+/gu, " ").trim()
   .replace(/([\\`*_{}[\]#!|~])/g, "\\$1")
@@ -21,7 +20,7 @@ const source_label = (location: string, value?: string) => {
   return label;
 };
 
-export const context_markdown = (bundle: TResearchBundle, graphs?: TVerifiedGraphs): string | undefined => {
+export const context_markdown = (bundle: TResearchBundle): string | undefined => {
   if (!bundle.grounding || !bundle.findings?.sections) return;
   const evidence = new Map((bundle.evidence ?? []).filter(row => /^[A-Z]\d+$/.test(row.id)).map(row => [row.id, row]));
   const used = new Set<string>();
@@ -38,7 +37,8 @@ export const context_markdown = (bundle: TResearchBundle, graphs?: TVerifiedGrap
   });
   if (!body.length) return;
   const lines = ["# " + plain(bundle.findings.title || "Research context"), "", ...body];
-  if (graphs?.markdown.trim() && graphs.evidence_ids.length &&
+  const graphs = serialize_research_graphs(bundle);
+  if (graphs.graph_count && graphs.evidence_ids.length &&
       graphs.evidence_ids.every(id => evidence.has(id) && evidence.get(id)?.origin !== "host")) {
     lines.push(graphs.markdown.trim(), "");
     for (const id of graphs.evidence_ids) used.add(id);

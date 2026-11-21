@@ -61,7 +61,8 @@ export type TGroundingCoverage = {
   evidence: Pick<TEvidence, "id" | "origin" | "location" | "passage" | "url">[];
   previous_findings?: string;
 };
-export type TGroundingReview = { units: TGroundingUnit[]; evidence: TEvidence[]; gaps: string[]; coverage?: TGroundingCoverage };
+export type TGroundingReview = { units: TGroundingUnit[]; evidence: TEvidence[]; gaps: string[]; coverage?: TGroundingCoverage;
+  purpose?: "live_presentation" };
 export type TGroundingVerdict = { id: string; decision: "supported" | "unsupported" | "missing_qualification"; reason?: string };
 export type TGroundingOmission = { finding: string; reason: string; evidence_ids: string[] };
 export type TGroundingReviewResult = TGroundingVerdict[] | { verdicts: TGroundingVerdict[]; omissions?: TGroundingOmission[] };
@@ -75,7 +76,7 @@ export type TResearchBundle = {
   grounding?: TGrounding;
   research_id: string;
   brief_id: string;
-  markdown: string;
+  markdown?: string;
   confirmed_brief: TResearchBrief;
   findings: Pick<TResearchDraft, "title" | "sections">;
   evidence: TEvidence[];

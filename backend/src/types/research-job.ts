@@ -39,6 +39,6 @@ export type TResearchJob = {
   tool_steps?: number;
   research_passes?: number;
   read_pages?: number;
-  result?: { research_id: string; markdown: string; gaps: string[] };
+  result?: { research_id: string; markdown?: string; gaps: string[] };
   error?: string;
 };

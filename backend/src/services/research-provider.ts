@@ -128,7 +128,9 @@ export const research_provider = (config: TModelCandidate, openai = createOpenAI
         id: z.string(), decision: z.enum(["supported", "unsupported", "missing_qualification"]), reason: z.string().nullable(),
       })) });
       const request = {
-        ...settings, abortSignal: signal, instructions: research_checker(!!review.coverage),
+        // A deep brief has dozens of units; a verdict list cut off at the default output cap fails to parse and withholds everything.
+        ...settings, maxOutputTokens: Math.max(config.max_output_tokens, 16_000), abortSignal: signal,
+        instructions: research_checker(!!review.coverage, review.purpose === "live_presentation"),
         prompt: JSON.stringify(review),
       };
       if (!review.coverage) {
@@ -158,7 +160,9 @@ export const research_provider = (config: TModelCandidate, openai = createOpenAI
     async draft(brief, evidence, gaps, signal, reference_mode) {
       if (reference_mode === "context") {
         const result = streamText({
-          ...settings, abortSignal: signal, instructions: context_writer + "\n" + graph_writer_instructions,
+          // A deep brief with charts runs well past the default output cap; a cut-off object cannot be parsed.
+          ...settings, maxOutputTokens: Math.max(config.max_output_tokens, 16_000), abortSignal: signal,
+          instructions: context_writer + "\n" + graph_writer_instructions,
           prompt: JSON.stringify({ brief, evidence, gaps }),
           output: Output.object({ schema: context_draft }), onError: () => {},
         });

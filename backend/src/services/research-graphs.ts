@@ -43,7 +43,7 @@ const normalize_unit = (text: string) => normalize(text)
   .replace(/\b(thousand|million|billion|trillion|lakh|crore)s\b/gu, "$1");
 const unit_parts = (text: string): string[] => (normalize_unit(text).match(/[\p{L}\p{N}]+|[%$£€₹]/gu) ?? []).sort();
 const unit_key = (text: string) => unit_parts(text).join(" ");
-const unit_supported = (unit: string, text: string) => {
+export const unit_supported = (unit: string, text: string) => {
   const words = (normalize_unit(text).match(/[\p{L}\p{N}]+|[%$£€₹]/gu) ?? []).filter(word => !/^\p{N}+$/u.test(word));
   const parts = unit_parts(unit);
   return parts.length > 0 && words.some((_, index) => words.slice(index, index + parts.length).sort().join(" ") === parts.join(" "));

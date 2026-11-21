@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { SessionStore } from "../src/repositories/session";
 import { read_host_page, site_url } from "../src/services/host-pages";
 import { build_research } from "../src/services/research";
+import { context_markdown } from "../src/services/context-markdown";
 import { ResearchWorker } from "../src/workers/research";
 import type { TModelStep } from "../src/types/ai";
 import type { TResearchBrief, TResearchProvider } from "../src/types/research";
@@ -14,7 +15,9 @@ const brief = (): TResearchBrief => ({
 
 const provider = (search: TResearchProvider["lookup"]): TResearchProvider => ({
   collect_step: async ({ tool_providers, messages, signal }) => {
-    await tool_providers.session?.web_search?.execute?.({ query_id: "S1" }, { messages, toolCallId: "search-first", abortSignal: signal });
+    const options = { messages, toolCallId: "search-first", abortSignal: signal };
+    await tool_providers.session?.plan_coverage?.execute?.({ items: [{ question: "How many teams enrolled in the pilot?", needs: "number" }] }, options);
+    await tool_providers.session?.web_search?.execute?.({ searches: [{ item_id: "C1", query: "pilot outcomes" }] }, options);
     return { messages: [], continue_with_tools: false };
   },
   lookup: search,
@@ -94,9 +97,13 @@ test("the studio worker binds source IDs and publishes a verified files-only con
   expect(lookups).toBe(0);
   expect(db.research_jobs.get("host", job.job_id)?.status).toBe("completed");
   const saved = db.research_by_brief("host", scope.brief_id);
-  expect(saved?.context_markdown).toContain("Twelve teams enrolled.");
-  expect(saved?.context_markdown).not.toContain("## Talk track");
-  expect(saved?.context_markdown).toContain("[^M1]: Supplied material");
+  expect(saved?.markdown).toBeUndefined();
+  expect(saved?.pitch_markdown).toBeUndefined();
+  expect(saved?.context_markdown).toBeUndefined();
+  const compatibility_export = saved && context_markdown(saved);
+  expect(compatibility_export).toContain("Twelve teams enrolled.");
+  expect(compatibility_export).not.toContain("## Talk track");
+  expect(compatibility_export).toContain("[^M1]: Supplied material");
   expect(saved?.pitch_script).toBeUndefined();
 });
 
@@ -132,14 +139,14 @@ test("approved research uses verbatim host voice statements when extracted notes
   const saved = db.research_by_brief("host", scope.brief_id);
   expect(reviewed).toBe(true);
   expect(db.research_jobs.get("host", job.job_id)?.status).toBe("completed");
-  expect(saved?.context_markdown).toContain(measured);
-  expect(saved?.context_markdown).not.toContain("[^H2]");
+  expect(saved && context_markdown(saved)).toContain(measured);
+  expect(saved && context_markdown(saved)).not.toContain("[^H2]");
   expect(saved?.findings.sections[0].paragraphs[0].support[0]).toEqual({ evidence_id: "H2", excerpt: measured });
 });
 
 test("a replacement lease keeps an empty approved search and does not publish a public brief from private notes alone", async () => {
   const db = new SessionStore(":memory:");
-  const scope = { ...brief(), materials: "Twelve teams enrolled.", public_queries: ["pilot enrollment"] };
+  const scope = { ...brief(), studio_notes: ["Twelve teams enrolled."], public_queries: ["pilot enrollment"] };
   db.replace_brief("host", undefined, scope);
   const jobs = db.research_jobs;
   const job = jobs.enqueue("host", scope.brief_id);
@@ -150,17 +157,18 @@ test("a replacement lease keeps an empty approved search and does not publish a 
     lease.checkpoint, checkpoint => jobs.checkpoint(lease, checkpoint));
   configured.collect_step = async ({ messages, tool_providers, signal, on_text }) => {
     if (!calls.length) {
-      await tool_providers.session!.web_search.execute!({ query_id: "S1" }, { messages, toolCallId: "search", abortSignal: signal });
+      const options = { messages, toolCallId: "search", abortSignal: signal };
+      await tool_providers.session!.plan_coverage.execute!({ items: [{ question: "How many teams enrolled in the pilot?", needs: "number" }] }, options);
+      await tool_providers.session!.web_search.execute!({ searches: [{ item_id: "C1", query: "pilot enrollment" }] }, options);
       throw new Error("Worker stopped after search");
     }
-    expect(tool_providers.session).toBeUndefined();
-    on_text(JSON.stringify({ decision: "complete", notes: "No candidate URLs were found." }));
+    on_text("No candidate URLs were found.");
     return { messages: [], continue_with_tools: false };
   };
   configured.draft = async () => { throw new Error("No public evidence was collected."); };
   await expect(run(first)).rejects.toThrow("Worker stopped after search");
   const replacement = jobs.claim(job.job_id, Date.now() + 16_000)!;
-  expect(replacement.checkpoint).toMatchObject({ completed_lookups: 1, collection: { version: 3 } });
+  expect(replacement.checkpoint).toMatchObject({ completed_lookups: 1, collection: { version: 4, checklist: [{ id: "C1", status: "open" }] } });
   await expect(run(replacement)).rejects.toThrow("couldn't read any public evidence");
   expect(calls).toEqual(["pilot enrollment"]);
   expect(db.research_by_brief("host", scope.brief_id)).toBeUndefined();
@@ -179,7 +187,7 @@ test("a verified context is available without a saved script", async () => {
   const worker = new ResearchWorker(() => db, () => configured);
   await worker.tick(job.job_id);
   expect(db.research_jobs.get("host", job.job_id)?.status).toBe("completed");
-  expect(db.research_by_brief("host", scope.brief_id)?.context_markdown).toContain("Twelve teams enrolled.");
+  expect(db.research_by_brief("host", scope.brief_id)?.findings.sections[0].paragraphs[0].prose).toContain("Twelve teams enrolled.");
 });
 
 test("the context worker saves only canonical source-checked graphs with the research prose", async () => {
@@ -206,7 +214,11 @@ test("the context worker saves only canonical source-checked graphs with the res
     return review.units.map(unit => ({ id: unit.id, decision: "supported" }));
   };
   await new ResearchWorker(() => db, () => configured).tick(job.job_id);
-  const result = db.research_by_brief("host", scope.brief_id)?.context_markdown;
+  const fresh = db.research_by_brief("host", scope.brief_id);
+  expect(fresh?.context_markdown).toBeUndefined();
+  expect(fresh?.verified_graphs).toHaveLength(1);
+  expect(fresh?.verified_graphs?.[0].graph.data.map(point => point.value)).toEqual([1200, 1500]);
+  const result = fresh && context_markdown(fresh);
   expect(graph_checks).toBe(1);
   expect(result).toContain('<graph>{"name":"Revenue"');
   expect(result).toContain("Graph sources [^M1]");
@@ -236,7 +248,7 @@ test("a model-requested coverage revision keeps verified context if the revision
   expect(prompts).toHaveLength(2);
   expect(prompts[1]).toContain("Nine teams completed the pilot");
   expect(db.research_jobs.get("host", job.job_id)?.status).toBe("completed");
-  expect(db.research_by_brief("host", scope.brief_id)?.context_markdown).toContain("Twelve teams enrolled.");
+  expect(db.research_by_brief("host", scope.brief_id)?.findings.sections[0].paragraphs[0].prose).toContain("Twelve teams enrolled.");
 });
 
 test("a studio draft cannot publish when independent verification returns no decisions", async () => {
@@ -289,4 +301,37 @@ test("a site address written any way becomes one public https address", () => {
   expect(["jk-ai.in", "http://jk-ai.in", "JK-AI.in/", " https://jk-ai.in#top "].map(site_url)).toEqual(Array(4).fill("https://jk-ai.in/"));
   expect(site_url("https://www.jk-ai.in/resume")).toBe("https://www.jk-ai.in/resume");
   expect([site_url("localhost"), site_url("http://127.0.0.1"), site_url("not a url")]).toEqual([undefined, undefined, undefined]);
+});
+
+test("a resolved checklist becomes the brief, one checked point per section, without a writer call", async () => {
+  const db = new SessionStore(":memory:");
+  const notes = ["Twelve teams enrolled in 2025. Nine teams finished by June 2025. The pilot cost 40,000 USD in 2025."];
+  const scope: TResearchBrief = { ...brief(), public_queries: [], studio_notes: notes,
+    intent: { subject: "Pilot", audience: "Team", outcome: "Know the results", deliverable: "Deck" } };
+  db.replace_brief("host", undefined, scope);
+  const job = db.research_jobs.enqueue("host", scope.brief_id);
+  const configured = provider(async () => []);
+  let step = 0;
+  configured.collect_step = async ({ tool_providers, messages, signal }) => {
+    const tools = tool_providers.session!;
+    const options = { messages, toolCallId: "step-" + step++, abortSignal: signal };
+    await tools.plan_coverage.execute!({ items: [
+      { question: "How many teams enrolled?", needs: "number" }, { question: "How many finished?", needs: "number" },
+      { question: "What did the pilot cost?", needs: "number" }] }, options);
+    await tools.record_answers.execute!({ answers: [
+      { item_id: "C1", evidence_id: "H1", excerpt: "Twelve teams enrolled", answer: "Twelve teams enrolled in 2025.", heading: "Twelve teams enrolled" },
+      { item_id: "C2", evidence_id: "H1", excerpt: "Nine teams finished", answer: "Nine teams finished by June 2025.", heading: "Nine finished by June" },
+      { item_id: "C3", evidence_id: "H1", excerpt: "cost 40,000 USD", answer: "The pilot cost 40,000 USD in 2025.", heading: "The pilot cost 40,000 USD" },
+    ] }, options);
+    return { messages: [], continue_with_tools: false };
+  };
+  let drafts = 0;
+  configured.draft = async () => { drafts++; throw new Error("The long-form writer should not run"); };
+  await new ResearchWorker(() => db, () => configured).tick(job.job_id);
+  const saved = db.research_by_brief("host", scope.brief_id);
+  const outcome = db.research_jobs.get("host", job.job_id);
+  expect({ status: outcome?.status, error: outcome?.error, activity: outcome?.activity.map(event => event.label).slice(-4) }).toMatchObject({ status: "completed" });
+  expect(drafts).toBe(0);
+  expect(saved?.findings.sections.map(section => section.heading)).toEqual(["Twelve teams enrolled", "Nine finished by June", "The pilot cost 40,000 USD"]);
+  expect(saved?.findings.sections[2].paragraphs[0].prose).toBe("The pilot cost 40,000 USD in 2025.");
 });

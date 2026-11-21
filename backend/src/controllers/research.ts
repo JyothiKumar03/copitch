@@ -9,7 +9,7 @@ import { configured_models_for } from "../services/model-config";
 import { ResearchWorker } from "../workers/research";
 import { setTimeout as delay } from "node:timers/promises";
 import { source_summary } from "../repositories/source";
-import { public_url } from "../services/research";
+import { public_url, research_report } from "../services/research";
 import { assistant_reply, brief_history } from "../services/research-history";
 import { interview_brief } from "../services/interview";
 import { research_provider } from "../services/research-provider";
@@ -120,7 +120,7 @@ export const research_handlers = (get_provider: (purpose: "interview" | "researc
       const bundle = database().research_by_id(session, req.params.research_id);
       if (!bundle) return res.status(404).json({ error: "Unknown research artifact" });
       return res.set({ "Content-Type": "text/markdown; charset=utf-8",
-        "Content-Disposition": 'attachment; filename="presentation.md"', "Cache-Control": "private, no-store" }).send(bundle.markdown);
+        "Content-Disposition": 'attachment; filename="presentation.md"', "Cache-Control": "private, no-store" }).send(bundle.markdown ?? research_report(bundle));
     },
   };
 };
