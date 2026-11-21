@@ -1,5 +1,5 @@
-import { Hono } from "hono";
+import { Router } from "express";
 import { chat_reply } from "../controllers/chat";
 
-export const chat = new Hono();
-chat.post("/api/chat", chat_reply);
+export const chat = Router();
+chat.post("/chat", chat_reply);
