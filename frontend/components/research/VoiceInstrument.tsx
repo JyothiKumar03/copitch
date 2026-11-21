@@ -3,7 +3,7 @@ import type { TInstrumentState } from "@/types/research";
 const labels: Record<TInstrumentState, string> = {
   ready: "Ready when you are", connecting: "Connecting", listening: "Listening for your voice",
   recording: "Listening to you", transcribing: "Transcribing your turn", thinking: "Preparing a reply",
-  speaking: "Speaking", researching: "Research in progress", complete: "Pitch ready",
+  speaking: "Speaking", researching: "Research in progress", complete: "Context ready",
 };
 
 const rings = Array.from({ length: 26 }, (_, index) => {

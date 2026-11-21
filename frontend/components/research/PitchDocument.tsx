@@ -35,7 +35,7 @@ export const PitchDocument = ({ preview }: { preview: TContextPreview }) => {
         code.properties.className.includes("language-" + graphPlaceholder)) return <PitchChart chart={chart} />;
       return <pre className="my-3 overflow-x-auto whitespace-pre-wrap rounded bg-muted p-3 text-xs">{children}</pre>;
   } }), [graphs]);
-  return <div className="min-w-0 break-words text-[0.97rem] text-foreground [&_section[data-footnotes]]:mt-6 [&_section[data-footnotes]]:border-t [&_section[data-footnotes]]:border-border [&_section[data-footnotes]]:text-sm [&_table]:max-w-full">
+  return <div className="min-w-0 break-words text-[0.97rem] text-foreground [&_section[data-footnotes]]:mt-6 [&_section[data-footnotes]]:border-t [&_section[data-footnotes]]:border-border [&_section[data-footnotes]]:text-sm [&_section[data-footnotes]_li]:scroll-mt-32 [&_table]:max-w-full">
     <Markdown remarkPlugins={[remarkGfm]} components={renderers} disallowedElements={["img"]} skipHtml urlTransform={documentUrl}>{preview.markdown}</Markdown>
     {preview.rejectedGraphs > 0 && <p role="status" className="my-3 border-l-2 border-border px-3 text-sm text-muted-foreground">
       {preview.rejectedGraphs === 1 ? "One chart could not be displayed." : `${preview.rejectedGraphs} charts could not be displayed.`} Its raw data remains in Markdown.

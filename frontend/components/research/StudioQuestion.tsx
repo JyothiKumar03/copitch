@@ -1,5 +1,6 @@
 import { ArrowRight, Globe2, ListChecks, Paperclip } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import type { TProposalChoice, TResearchProposal } from "@/types/research";
 
 type TProposalProps = {
@@ -11,7 +12,7 @@ type TProposalProps = {
 };
 
 export const StudioQuestion = ({ proposal, filenames, busy, changed, onChoose }: TProposalProps) => (
-  <section className="studio-proposal" aria-label="Research plan">
+  <Card className="studio-proposal" role="region" aria-label="Research plan">
     <h3><ListChecks size={16} aria-hidden="true" />Research plan</h3>
     <p className="proposal-summary">{proposal.summary}</p>
     {proposal.source_policy === "public_search" && proposal.queries.length > 0 && <div className="proposal-details">
@@ -28,5 +29,5 @@ export const StudioQuestion = ({ proposal, filenames, busy, changed, onChoose }:
       <Button size="sm" disabled={busy || changed} onClick={() => onChoose("approve", "Start research")}>Start research <ArrowRight size={14} /></Button>
       <Button size="sm" variant="outline" disabled={busy} onClick={() => onChoose("edit", "Change something")}>Change something</Button>
     </div>
-  </section>
+  </Card>
 );

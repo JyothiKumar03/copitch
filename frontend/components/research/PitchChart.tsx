@@ -1,6 +1,9 @@
 "use client";
 
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { ChevronDown } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { TResearchGraph } from "../../../shared/research-graphs";
 
 const shortLabel = (label: string) => label.length > 15 ? label.slice(0, 14) + "…" : label;
@@ -41,9 +44,12 @@ export const PitchChart = ({ chart }: { chart: TResearchGraph }) => {
           )}
         </ResponsiveContainer>
       </div>
-      <details className="border-t border-border pt-2 text-sm">
-        <summary className="cursor-pointer py-1 font-medium text-primary">Chart data and sources</summary>
-        <div className="mt-2 overflow-x-auto">
+      <Collapsible className="border-t border-border pt-2 text-sm">
+        <CollapsibleTrigger asChild><Button type="button" size="sm" variant="ghost"
+          className="group gap-1.5 px-2 text-primary">
+          Chart data and sources <ChevronDown size={14} className="group-data-[state=open]:rotate-180" aria-hidden="true" />
+        </Button></CollapsibleTrigger>
+        <CollapsibleContent className="mt-2 overflow-x-auto">
           <table className="w-full text-left text-sm">
             <caption className="sr-only">{chart.name} data</caption>
             <thead><tr><th scope="col" className="py-1">Label</th><th scope="col">Value</th><th scope="col">Period</th><th scope="col">Source</th></tr></thead>
@@ -57,8 +63,8 @@ export const PitchChart = ({ chart }: { chart: TResearchGraph }) => {
               </tr>
             ))}</tbody>
           </table>
-        </div>
-      </details>
+        </CollapsibleContent>
+      </Collapsible>
     </figure>
   );
 };

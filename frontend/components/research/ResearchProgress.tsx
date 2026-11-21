@@ -1,4 +1,7 @@
 import { Check, ChevronDown, CircleAlert, FileText, LoaderCircle, Workflow } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { TResearchJob, TSourceCall, TTurnActivity } from "@/types/research";
 
 const failedKinds = new Set(["failed", "needs_input", "lookup_failed", "fallback", "superseded"]);
@@ -14,14 +17,14 @@ export const SourceExecution = ({ call }: { call: TSourceCall }) => {
       <p className="tool-detail">{parseNames[call.tool]}{typeof parsed === "number" ? " · " + parsed + (parsed === 1 ? " source location" : " source locations") : ""}</p>
       {call.error && <p className="tool-error">{call.error}</p>}
     </div>
-    <span className="tool-status"><Icon size={13} />{status}</span>
+    <Badge variant={call.status === "failed" ? "destructive" : "outline"} className="tool-status"><Icon size={13} aria-hidden="true" />{status}</Badge>
   </div>;
 };
 
 export const TurnExecution = ({ activity }: { activity: TTurnActivity }) => <div className="tool-event">
   <span className="tool-icon"><Workflow size={15} /></span>
   <div className="min-w-0"><p className="tool-title">{activity.tool.replaceAll("_", " ")}</p><p className="tool-detail">{activity.result}</p></div>
-  <span className="tool-status">{activity.status}</span>
+  <Badge variant="outline" className="tool-status">{activity.status}</Badge>
 </div>;
 
 export const ResearchProgress = ({ job }: { job: TResearchJob }) => {
@@ -39,16 +42,16 @@ export const ResearchProgress = ({ job }: { job: TResearchJob }) => {
       <h3>{needsInput ? "More evidence needed" : "Research could not finish"}</h3>
       <p>{job.error || (needsInput ? "Attach evidence or add details in the conversation to revise the plan." : "Ask copitch to try again or revise the plan.")}</p>
     </div>}
-    <details className="job-events" aria-label="Research activity">
-    <summary>
+    <Collapsible className="job-events" role="region" aria-label="Research activity">
+    <CollapsibleTrigger asChild><Button type="button" variant="ghost" className="job-summary">
       <span className="tool-icon">{active ? <LoaderCircle size={15} className="animate-spin" /> : <Workflow size={15} />}</span>
       <span className="min-w-0 flex-1"><strong>Research activity</strong>
         {recordedWork && <span className="tool-detail">{recordedWork}</span>}
         <span className="tool-detail">{activity.at(-1)?.label ?? "Research job details"}</span></span>
-      <span className="tool-status">{needsInput ? "Needs input" : job.status}</span><ChevronDown size={14} />
-    </summary>
-    <ol aria-label="Executed research steps">{activity.map(event => <li key={event.sequence} className={failedKinds.has(event.kind) ? "tool-error" : ""}>
+      <Badge variant="outline" className="tool-status">{needsInput ? "Needs input" : job.status}</Badge><ChevronDown size={14} aria-hidden="true" />
+    </Button></CollapsibleTrigger>
+    <CollapsibleContent><ol aria-label="Executed research steps">{activity.map(event => <li key={event.sequence} className={failedKinds.has(event.kind) ? "tool-error" : ""}>
       {failedKinds.has(event.kind) ? <CircleAlert size={13} /> : <Check size={13} />}<span>{event.label}</span>
-    </li>)}</ol>
-  </details></div>;
+    </li>)}</ol></CollapsibleContent>
+  </Collapsible></div>;
 };

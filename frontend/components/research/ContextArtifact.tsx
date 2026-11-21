@@ -1,13 +1,14 @@
 "use client";
 
 import { useState } from "react";
+import type { ReactNode } from "react";
 import { Check, Copy, Download, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useContextArtifact } from "@/hooks/research/use-context-artifact";
 import type { TContextArtifactProps } from "@/types/research";
 import { PitchDocument } from "./PitchDocument";
 
-export const ContextArtifact = (props: TContextArtifactProps) => {
+export const ContextArtifact = ({ close, ...props }: TContextArtifactProps & { close: ReactNode }) => {
   const { artifact, partial, download, retry } = useContextArtifact(props);
   const [sourceView, setSourceView] = useState(false);
   const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "failed">("idle");
@@ -19,24 +20,29 @@ export const ContextArtifact = (props: TContextArtifactProps) => {
     catch { setCopyStatus("failed"); }
   };
 
-  return <article aria-label="Context document" className="min-w-0 overflow-hidden rounded-lg border border-border bg-card">
-    <header className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-muted/35 px-4 py-3 sm:px-5">
-      <h2 className="flex items-center gap-2 text-base font-semibold"><FileText size={18} aria-hidden="true" className="text-primary" />context.md</h2>
-      <Button variant="outline" size="sm" disabled={markdown === undefined || download.isPending} onClick={() => download.mutate()}>
-        <Download size={15} aria-hidden="true" />{download.isPending ? "Downloading…" : "Download context.md"}
-      </Button>
-    </header>
-    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-border/70 px-4 py-1.5 sm:px-5">
-      <div role="group" aria-label="Document view" className="flex gap-1">
-        {(["Preview", "Markdown"] as const).map(view => <button key={view} type="button" aria-pressed={sourceView === (view === "Markdown")}
-          disabled={view === "Markdown" && markdown === undefined} onClick={() => setSourceView(view === "Markdown")}
-          className="min-h-9 rounded px-2.5 text-sm text-muted-foreground aria-pressed:bg-muted aria-pressed:font-semibold aria-pressed:text-foreground disabled:opacity-50">{view}</button>)}
+  return <article aria-label="Context document" className="min-w-0 bg-card">
+    <div className="sticky top-0 z-10 border-b border-border bg-card">
+      <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-3 py-2.5 sm:px-6 sm:py-3">
+        <h2 className="flex items-center gap-2 text-base font-semibold"><FileText size={18} aria-hidden="true" className="text-primary" />context.md</h2>
+        <div className="flex items-center gap-1.5 sm:gap-2">
+          <Button type="button" variant="outline" size="sm" className="px-2 sm:px-3.5" disabled={markdown === undefined || download.isPending} onClick={() => download.mutate()}>
+            <Download size={15} aria-hidden="true" />{download.isPending ? "Downloading…" : "Download context.md"}
+          </Button>
+          {close}
+        </div>
+      </header>
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 bg-muted/25 px-3 py-1.5 sm:px-6">
+        <div role="group" aria-label="Document view" className="flex gap-0.5 rounded-lg border border-border/70 bg-card p-0.5">
+          {(["Preview", "Markdown"] as const).map(view => <Button key={view} type="button" variant="ghost" size="sm" aria-pressed={sourceView === (view === "Markdown")}
+            disabled={view === "Markdown" && markdown === undefined} onClick={() => setSourceView(view === "Markdown")}
+            className="min-h-8 rounded-md px-2.5 text-sm text-muted-foreground aria-pressed:bg-muted aria-pressed:text-foreground">{view}</Button>)}
+        </div>
+        <Button type="button" variant="ghost" size="sm" className="px-2 sm:px-3.5" disabled={markdown === undefined} onClick={copyContext}>
+          {copyStatus === "copied" ? <Check size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />} {copyStatus === "copied" ? "Copied" : "Copy Markdown"}
+        </Button>
       </div>
-      <Button variant="ghost" size="sm" disabled={markdown === undefined} onClick={copyContext}>
-        {copyStatus === "copied" ? <Check size={14} /> : <Copy size={14} />} {copyStatus === "copied" ? "Copied" : "Copy Markdown"}
-      </Button>
     </div>
-    <div className="min-w-0 p-4 sm:p-6">
+    <div className="mx-auto min-w-0 max-w-3xl p-4 sm:p-8">
       {artifact.isPending && <p role="status" className="mb-4 text-sm text-muted-foreground">Opening saved context…</p>}
       {artifact.isError && <div role="alert" className="mb-4 flex items-center gap-3 text-sm text-destructive">
         <p>{artifact.error.message}</p><Button variant="outline" size="sm" onClick={retry}>Retry</Button>
