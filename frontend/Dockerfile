@@ -10,6 +10,7 @@ COPY backend/package.json ./backend/package.json
 COPY frontend/package.json ./frontend/package.json
 RUN bun install --frozen-lockfile
 
+COPY shared ./shared
 COPY frontend ./frontend
 
 ENV NODE_ENV=production

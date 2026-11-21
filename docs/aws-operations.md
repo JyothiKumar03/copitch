@@ -18,7 +18,7 @@ Build images on a workstation or CI runner. The web image serves every deploymen
 export DOCKER_DEFAULT_PLATFORM=linux/amd64
 docker build --platform linux/amd64 -t copitch-aws-x86-api -f backend/Dockerfile .
 docker build --platform linux/amd64 -t copitch-aws-x86-web -f frontend/Dockerfile --build-arg NEXT_PUBLIC_API_URL= .
-docker build --platform linux/amd64 -t copitch-aws-x86-voice voice
+docker build --platform linux/amd64 -f voice/Dockerfile -t copitch-aws-x86-voice .
 docker build --platform linux/amd64 -t copitch-aws-x86-gateway -f deploy/Gateway.Dockerfile .
 python3 deploy/check-images.py
 cfn-lint --regions us-east-1 --template deploy/stack.yml deploy/registry.yml

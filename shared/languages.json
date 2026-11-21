@@ -1,0 +1,17 @@
+{
+  "default_language": "en",
+  "languages": {
+    "en": {
+      "label": "English (India)",
+      "locale": "en-IN",
+      "transcription_prompt": "Indian English conversation about presentations. Preserve the speaker's words, names, spelled letters and web addresses. Common short greetings include Hi, Hey and Hello.",
+      "speech_instructions": "Read the supplied text in clear conversational Indian English. Preserve its wording, names and addresses."
+    },
+    "hi": {
+      "label": "हिन्दी",
+      "locale": "hi-IN",
+      "transcription_prompt": "हिंदी बातचीत। हिंदी शब्द देवनागरी में लिखें। English names, brand names and web addresses should retain their spelling.",
+      "speech_instructions": "Read the supplied text in natural conversational Hindi as spoken in India. Keep English names and addresses intelligible."
+    }
+  }
+}

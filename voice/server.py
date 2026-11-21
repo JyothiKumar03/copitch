@@ -4,6 +4,7 @@ import json
 import os
 import secrets
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx
 from starlette.applications import Starlette
@@ -17,6 +18,12 @@ AUDIO_EXTENSIONS = {
     "audio/mpeg": "mp3", "audio/wav": "wav", "audio/x-wav": "wav",
 }
 NO_STORE = {"Cache-Control": "no-store"}
+LANGUAGE_MANIFEST = json.loads((Path(__file__).resolve().parent.parent / "shared/languages.json").read_text())
+LANGUAGES = LANGUAGE_MANIFEST["languages"]
+
+
+def requested_language(request: Request) -> str:
+    return request.headers.get("x-interview-language", LANGUAGE_MANIFEST["default_language"])
 
 
 def error_response(message: str, status: int) -> JSONResponse:
@@ -41,6 +48,8 @@ def check_access(request: Request) -> Response | None:
         return error_response("Unauthorized", 401)
     if not os.getenv("OPENAI_API_KEY"):
         return error_response("Voice provider is unconfigured", 503)
+    if requested_language(request) not in LANGUAGES:
+        return error_response("Unsupported interview language", 400)
     return None
 
 
@@ -71,9 +80,9 @@ async def connect(request: Request) -> Response:
     if not offer or not offer.startswith(b"v=0") or b"m=audio " not in offer:
         return error_response("Invalid audio offer", 400)
     model = os.getenv("OPENAI_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe")
+    language = requested_language(request)
     config = {"type": "transcription", "audio": {"input": {
-        "transcription": {"model": model,
-                          "prompt": "Presentation and research discussion. Preserve each language as spoken, including mixed-language turns. Write Hindi in Devanagari and English in English."},
+        "transcription": {"model": model, "language": language, "prompt": LANGUAGES[language]["transcription_prompt"]},
         "noise_reduction": {"type": "near_field"},
         "turn_detection": {"type": "server_vad", "silence_duration_ms": 550},
     }}}
@@ -108,9 +117,11 @@ async def transcribe(request: Request) -> Response:
         return error_response("Audio exceeds the turn limit", 413)
     if not recording:
         return error_response("Empty recording", 400)
+    language = requested_language(request)
     result = await provider_request(
         request, "audio/transcriptions",
-        data={"model": os.getenv("OPENAI_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe"), "response_format": "json"},
+        data={"model": os.getenv("OPENAI_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe"), "response_format": "json",
+              "language": language, "prompt": LANGUAGES[language]["transcription_prompt"]},
         files={"file": (f"turn.{extension}", recording, mime)},
     )
     if isinstance(result, Response):
@@ -145,6 +156,7 @@ async def speech(request: Request) -> Response:
         request, "audio/speech", json={
             "model": os.getenv("OPENAI_SPEECH_MODEL", "gpt-4o-mini-tts"),
             "voice": os.getenv("OPENAI_SPEECH_VOICE", "alloy"),
+            "instructions": LANGUAGES[requested_language(request)]["speech_instructions"],
             "input": text, "response_format": "mp3",
         },
     )

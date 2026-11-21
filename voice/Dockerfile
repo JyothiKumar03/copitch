@@ -1,8 +1,9 @@
 FROM python:3.12-slim
 COPY --from=ghcr.io/astral-sh/uv:0.9.22 /uv /usr/local/bin/uv
-WORKDIR /app
-COPY pyproject.toml uv.lock ./
+WORKDIR /app/voice
+COPY voice/pyproject.toml voice/uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
-COPY server.py .
+COPY voice/server.py .
+COPY shared/languages.json /app/shared/languages.json
 USER nobody
-CMD ["/app/.venv/bin/uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8900", "--no-access-log"]
+CMD ["/app/voice/.venv/bin/uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8900", "--no-access-log"]

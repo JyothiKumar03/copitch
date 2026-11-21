@@ -7,6 +7,7 @@ COPY backend/package.json ./backend/package.json
 COPY frontend/package.json ./frontend/package.json
 RUN bun install --frozen-lockfile --production --filter @equal-ai/api
 
+COPY shared ./shared
 COPY backend/src ./backend/src
 COPY backend/tsconfig.json ./backend/tsconfig.json
 
