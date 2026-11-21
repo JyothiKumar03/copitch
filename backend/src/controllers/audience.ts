@@ -16,9 +16,13 @@ const host = (req: TApiRequest, res: Response) => {
 };
 
 const approved = (session: string, deck_id: string, revision: number) => {
-  const deck = database().decks.get(session, deck_id);
+  const db = database();
+  const deck = db.decks.get(session, deck_id);
   if (!deck) throw new AppError(404, "Unknown deck");
   if (deck.revision !== revision) throw new AppError(409, "Deck revision changed");
+  if (db.presentations.get(session, deck_id) || deck.grounding_mode || deck.slides.some(slide => slide.beat_id || slide.sentences?.length || slide.template)) {
+    throw new AppError(409, "Approve the reviewed deck and open the stage from the presentation controller");
+  }
   return deck;
 };
 
@@ -41,7 +45,9 @@ export const publish_audience = (req: TApiRequest, res: Response) => {
 export const read_audience = (req: TApiRequest, res: Response) => {
   res.set("Cache-Control", "no-store");
   const token = req.get("Authorization")?.match(/^Bearer ([\w-]{43})$/)?.[1];
-  const frame = token && database().audience.view(token);
+  const db = database();
+  if (token) db.presentations.refresh_token_stage(token);
+  const frame = token && db.audience.view(token);
   if (!frame) return res.status(401).json({ error: "Audience link is invalid or has expired. Ask the host to open a new view." });
   return res.json(frame);
 };

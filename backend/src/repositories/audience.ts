@@ -26,23 +26,29 @@ export class AudienceRepository {
     const slide = deck.slides[index];
     const projection: TAudienceProjection = {
       sequence: sequence + 1, revision: deck.revision, deck_title: deck.title, index, total: deck.slides.length,
-      slide: { slide_id, layout: slide.layout, title: slide.title, highlights: slide.highlights, evidence_ids: slide.evidence_ids, chart: slide.chart },
+      slide: { slide_id, layout: slide.layout, title: slide.title, highlights: slide.highlights, evidence_ids: slide.evidence_ids, chart: slide.chart, template: slide.template },
     };
     this.db.query("INSERT OR REPLACE INTO audience_stages VALUES(?,?,?,?)")
       .run(session, deck.deck_id, projection.sequence, JSON.stringify(projection));
     return projection.sequence;
   }
 
-  open(session: string, deck: TDeck, slide_id: string) {
+  open(session: string, deck: TDeck, slide_id: string, replace_existing = false) {
     return this.db.transaction(() => {
       const sequence = this.publish_slide(session, deck, slide_id);
       const now = Date.now();
       const expires_at = now + ttl_ms;
       const token = randomBytes(32).toString("base64url");
       this.db.query("DELETE FROM audience_tokens WHERE expires<=?").run(now);
+      if (replace_existing) this.db.query("DELETE FROM audience_tokens WHERE session=? AND deck=?").run(session, deck.deck_id);
       this.db.query("INSERT INTO audience_tokens VALUES(?,?,?,?)").run(hash_token(token), session, deck.deck_id, expires_at);
       return { token, sequence, expires_at };
     }).immediate();
+  }
+
+  scope(token: string, now = Date.now()) {
+    return this.db.query<{ session: string; deck: string }, [string,number]>(
+      "SELECT session,deck FROM audience_tokens WHERE hash=? AND expires>?").get(hash_token(token), now);
   }
 
   publish(session: string, deck: TDeck, slide_id: string, expected_sequence: number) {

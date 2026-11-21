@@ -6,6 +6,7 @@ import { ResearchJobRepository } from "./research-job";
 import { DeckRepository } from "./deck";
 import { StudioRepository } from "./studio";
 import { ContinuationStore } from "./continuation";
+import { PresentationRepository } from "./presentation-live";
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -23,6 +24,7 @@ export class SessionStore {
   readonly continuations: ContinuationStore;
   readonly research_jobs: ResearchJobRepository;
   readonly decks: DeckRepository;
+  readonly presentations: PresentationRepository;
   readonly studio: StudioRepository;
   constructor(path: string) {
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
@@ -35,6 +37,8 @@ export class SessionStore {
     this.continuations.recover();
     this.research_jobs = new ResearchJobRepository(this.db);
     this.decks = new DeckRepository(this.db);
+    this.presentations = new PresentationRepository(this.db, this.decks, this.audience);
+    this.presentations.recover();
     this.studio = new StudioRepository(this.db);
     this.db.exec(`
       PRAGMA journal_mode=WAL;
