@@ -1,17 +1,17 @@
 "use client";
 
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import type { TPitchChart } from "@/types/pitch-artifact";
+import type { TResearchGraph } from "../../../shared/research-graphs";
 
 const shortLabel = (label: string) => label.length > 15 ? label.slice(0, 14) + "…" : label;
 const axisStyle = { fill: "var(--ink-muted)", fontSize: 12 };
-const formatNumber = new Intl.NumberFormat("en", { maximumFractionDigits: 6 });
-const formatValue = (value: number | null, unit: string) => {
-  if (value === null) return "Unavailable";
-  return formatNumber.format(value) + (unit === "%" ? "%" : unit ? " " + unit : "");
+const formatNumber = new Intl.NumberFormat("en", { maximumSignificantDigits: 21 });
+const formatValue = (value: number, unit: string) => {
+  const text = value && Math.abs(value) < 1e-6 ? String(value) : formatNumber.format(value);
+  return text + (unit === "%" ? "%" : unit ? " " + unit : "");
 };
 
-export const PitchChart = ({ chart }: { chart: TPitchChart }) => {
+export const PitchChart = ({ chart }: { chart: TResearchGraph }) => {
   const unit = chart.data[0].unit;
   const tip = <Tooltip cursor={{ fill: "var(--paper-shade)", opacity: 0.5 }} formatter={value => [formatValue(Number(value), unit), chart.name]} />;
   return (
@@ -46,11 +46,12 @@ export const PitchChart = ({ chart }: { chart: TPitchChart }) => {
         <div className="mt-2 overflow-x-auto">
           <table className="w-full text-left text-sm">
             <caption className="sr-only">{chart.name} data</caption>
-            <thead><tr><th scope="col" className="py-1">Label</th><th scope="col">Value</th><th scope="col">Source</th></tr></thead>
+            <thead><tr><th scope="col" className="py-1">Label</th><th scope="col">Value</th><th scope="col">Period</th><th scope="col">Source</th></tr></thead>
             <tbody>{chart.data.map((point, index) => (
               <tr key={index} className="border-t border-border/70 align-top">
                 <th scope="row" className="py-1.5 pr-2 font-normal">{point.label}</th>
-                <td className="py-1.5 pr-2 tabular-nums">{formatValue(point.value, point.unit)}{point.numerator !== undefined && point.denominator !== undefined && <span className="block text-xs text-muted-foreground">{point.numerator} of {point.denominator}</span>}</td>
+                <td className="py-1.5 pr-2 tabular-nums">{formatValue(point.value, point.unit)}</td>
+                <td className="py-1.5 pr-2">{point.period}</td>
                 <td className="py-1.5"><a href={"#user-content-fn-" + point.evidence_id.toLowerCase()} title={point.evidence_id}
                   aria-label={"View source for " + point.label} className="text-primary underline underline-offset-2">View source</a></td>
               </tr>

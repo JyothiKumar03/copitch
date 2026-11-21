@@ -1,15 +1,9 @@
-export type TPitchChartPoint = {
-  label: string;
-  value: number | null;
-  unit: string;
-  evidence_id: string;
-  numerator?: number;
-  denominator?: number;
+import type { TResearchGraph } from "../../shared/research-graphs";
+
+export type TContextPreview = {
+  markdown: string;
+  graphs: ReadonlyMap<number, TResearchGraph>;
+  rejectedGraphs: number;
 };
 
-export type TPitchChart = {
-  name: string;
-  description: string;
-  type: "bar" | "line";
-  data: TPitchChartPoint[];
-};
+export type TContextArtifact = { markdown: string; preview: TContextPreview };
