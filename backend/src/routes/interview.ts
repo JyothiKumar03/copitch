@@ -1,6 +1,7 @@
 import express, { Router } from "express";
+import { connect_live, live_control } from "../controllers/live-call";
 import { interview_handlers } from "../controllers/interview";
-import { studio_heard_handler, studio_turn_handler } from "../controllers/studio-turn";
+import { studio_scope_handler, studio_turn_handler } from "../controllers/studio-turn";
 import { AppError } from "../errors/app-error";
 import { session_for } from "../middleware/host-session";
 import { max_recording_bytes } from "../services/interview-voice";
@@ -17,14 +18,13 @@ export const create_interview_router = (fetch_worker: (url:string,options:Reques
   });
   router.post("/:session_id/interview/start", handlers.start);
   router.post("/:session_id/interview/connect",
-    express.raw({ type: "application/sdp", limit: 65536, inflate: false }), handlers.connect);
+    express.raw({ type: "application/sdp", limit: 65536, inflate: false }), connect_live(fetch_worker));
+  router.post("/:session_id/interview/voice-control", express.json({ limit: 1024 }), live_control);
   router.post("/:session_id/interview/transcribe",
     express.raw({type:"multipart/form-data",limit:max_recording_bytes + 65536,inflate:false}),handlers.transcribe);
   router.post("/:session_id/interview/progress", express.json({ limit: 32768 }), handlers.progress);
   router.post("/:session_id/interview/turn", express.json({ limit: 262144 }), turn_handler);
-  router.post("/:session_id/interview/heard", express.json({ limit: 1024 }), studio_heard_handler);
-  router.post("/:session_id/interview/speech",
-    express.raw({type:() => true,limit:16384,inflate:false}),handlers.speech);
+  router.post("/:session_id/interview/sources", express.json({ limit: 262144 }), studio_scope_handler);
   router.get("/:session_id/interview/workspace",handlers.workspace);
   return router;
 };

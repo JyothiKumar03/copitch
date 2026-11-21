@@ -62,7 +62,7 @@ test("hosted provider entry points require account access", async () => {
   process.env.NODE_ENV = "production";
   try {
     await using http = await serve_api(app);
-    for (const path of ["/api/chat", "/api/CHAT/", "/api/sessions", "/api/sessions/anything/interview/speech"]) {
+    for (const path of ["/api/chat", "/api/CHAT/", "/api/sessions", "/api/sessions/anything/interview/connect"]) {
       expect((await http.request(path, { method: "POST" })).status).toBe(401);
     }
   } finally {

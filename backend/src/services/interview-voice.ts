@@ -1,6 +1,6 @@
 import { AppError } from "../errors/app-error";
 import { z } from "zod";
-import { DEFAULT_LANGUAGE, type TInterviewLanguage } from "../../../shared/languages";
+import { DEFAULT_LANGUAGE } from "../../../shared/languages";
 
 export const max_recording_bytes = 8 * 1024 * 1024;
 const supported_audio: Record<string,string> = {
@@ -45,9 +45,9 @@ const bounded_body = async (input: Response, maximum: number, oversized: AppErro
 };
 
 export const call_voice_worker = async (
-  operation: "speech" | "transcribe" | "connect", content_type: string, body: Blob | string,
+  operation: "transcribe" | "connect" | "speech", content_type: string, body: Blob | string,
   fetch_worker: (url:string, options:RequestInit) => Promise<Response> = fetch,
-  language: TInterviewLanguage = DEFAULT_LANGUAGE,
+  language: string = DEFAULT_LANGUAGE,
   client_signal?: AbortSignal,
 ) => {
   const token = process.env.VOICE_WORKER_TOKEN?.trim();
@@ -75,18 +75,17 @@ export const call_voice_worker = async (
     }
     const mime = response.headers.get("Content-Type")?.split(";",1)[0].trim().toLowerCase();
     const invalid = new AppError(502,"Interview voice worker returned an invalid response");
+    if (operation === "speech") {
+      if (mime !== "audio/mpeg") throw invalid;
+      const bytes = await bounded_body(response, 12 * 1024 * 1024, invalid);
+      if (!bytes.length) throw invalid;
+      return { kind: "audio" as const, bytes };
+    }
     if (operation === "connect") {
       if (mime !== "application/sdp") throw invalid;
       const sdp = new TextDecoder().decode(await bounded_body(response, 65536, invalid));
       if (!sdp.startsWith("v=0")) throw invalid;
-      return { kind: "sdp" as const, sdp };
-    }
-    if (operation === "speech") {
-      if (mime !== "audio/mpeg" || !response.body || Number(response.headers.get("Content-Length")) > max_recording_bytes) {
-        await response.body?.cancel();
-        throw invalid;
-      }
-      return { kind: "audio" as const, stream: response.body };
+      return { kind: "sdp" as const, sdp, session_id: response.headers.get("x-voice-session") };
     }
     if (mime !== "application/json") throw invalid;
     const bytes = await bounded_body(response,256 * 1024,invalid);
