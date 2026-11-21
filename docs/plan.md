@@ -16,7 +16,7 @@ Record results from real speech and a provider-backed research run, including re
 
 | Time | Work | Exit gate |
 |---|---|---|
-| 0–0:45 | Probe Pipecat ingress from the venue, one STT turn, one TTS asset, host cutoff, one audience frame and provider access. Freeze the paired setup fixture. | Hear and interrupt an identified clip. Trace a final turn to TypeScript exactly once. Record ICE/TURN failures. |
+| 0–0:45 | Probe authenticated WebRTC transcription from the venue, one STT turn, one TTS asset, host cutoff, one audience frame and provider access. Freeze the paired setup fixture. | Hear and interrupt an identified clip. Trace a final turn to TypeScript exactly once. Record ICE/TURN failures. |
 | 0:45–2:15 | Interview, one real source, notes, cited prose memo, structured findings, reviewed deck. | Files-only uses zero searches. A different audience changes the explanation. |
 | 2:15–4:00 | Render HTML stage, prepare claim audio, persist coverage, paint and playout. | Interrupt B mid-sentence. A stale callback cannot skip C. Offline deck passes size and privacy checks. |
 | 4:00–6:00 | Small router, pending questions, referents, conditional tour, one private prefetch. | Same instruction chooses different continuations on real setup vs login. Superseded fetch never appears. |

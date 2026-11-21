@@ -11,8 +11,9 @@ Module 1 delivers a private pitch studio. A customer signs in, opens a project, 
 ```mermaid
 flowchart LR
   Host["Next.js studio · chat, files, agent, player"] <-->|sign in, projects, turns, files| API["Express · identity and session controller"]
-  Host <-->|continuous audio after opt-in| Voice["Private Python · Pipecat, OpenAI STT and TTS"]
-  Voice <-->|final turns and authorized replies| API
+  Host <-->|continuous audio after opt-in · finalized transcripts| Media["OpenAI transcription WebRTC session"]
+  Voice["Private Python · authenticated signaling and synthesis"] -->|negotiate session| Media
+  Voice <-->|SDP and authorized spoken replies| API
   API <-->|scoped reads and writes| Store["SQLite and private artifact storage"]
   API -->|confirmed brief and job| Store
   Worker["Research worker"] <-->|lease, checkpoint, publish bundle| Store
@@ -24,7 +25,7 @@ flowchart LR
 | Customer action | Release contract |
 |---|---|
 | Sign in and open a project | Express resolves the account and its private workspace. List and create projects there. Each session belongs to a project. Check project access on every session, source, job, file and voice connection. A fresh browser resolves the project after sign-in and restores the saved transcript, attachments, job status and artifact versions. Sign-out ends access and audio capture. |
-| Speak, attach files and review scope | Chat, attached files and generated files occupy the center of the desktop studio. The agent, microphone status and stop control sit on the right. React plays replies on one host player. The Python worker streams speech over WebRTC and detects turn boundaries. Express accepts a finalized turn once for the current session and resolves the host's intent. Language changes and interruptions keep the same conversation open. |
+| Speak, attach files and review scope | Chat, attached files and generated files occupy the center of the desktop studio. The agent, microphone status and stop control sit on the right. React plays replies on one host player. The browser streams microphone audio to OpenAI over WebRTC. The private Python adapter negotiates the transcription session. Express accepts a finalized turn once for the current session and resolves the host's intent. Language changes and interruptions keep the same conversation open. |
 | Approve research and keep talking | Confirm the precise brief revision and permitted source scope. A leased job checkpoints its work independently of the browser and voice connection. A question about progress reads that job. A revised scope creates a new brief revision and fences stale results. Reopening the project recovers the active job or its committed outcome. |
 | Select the finished file | The successful job commits evidence, the pitch, its chart and the supporting memo together. The conversation shows a selectable `pitch.md` bound to the completed research ID. Selecting it opens that saved version in a private artifact viewer with Preview, Markdown and Download. `presentation.md` is the supporting research memo. Each later research run has its own file identity. |
 
@@ -32,9 +33,11 @@ flowchart LR
 
 **Chart contract.** The synthesis model proposes a chart type and evidence candidate IDs. The backend checks the selection, comparable units and source values before embedding `{name, description, type, data}` in a fenced `recharts` block. Module 1 supports bar and line charts. Each point has a label, numeric value or null, unit and evidence ID. Rates may carry a numerator and denominator. The private viewer validates the payload, renders Recharts and offers the source table. Invalid data leaves the rest of the pitch readable. [Chart service](../backend/src/services/pitch-chart.ts) · [Viewer](../frontend/components/research/PitchDocument.tsx)
 
-**Current implementation.** A tab-scoped host session, leased research jobs, private Markdown downloads and the chart viewer exist. The studio currently places the agent on the left and automatically opens the latest pitch. Its hands-free option sends complete recordings and ends when research starts. Account sign-in, cross-browser project recovery, selectable final files and a shared streaming voice transport are release work. [Host session](../frontend/lib/research.ts) · [Studio](../frontend/components/research/ResearchWorkspace.tsx) · [Voice adapter](../voice/server.py)
+**Current implementation.** Accounts own projects in SQLite. A signed-in host can reopen a saved pitch in a fresh browser, with the agent on the right and files in the conversation. The studio negotiates continuous transcription through Express and Python. Hosted, provider and physical-room evidence are tracked in the [acceptance handoff](../handoffs/1-pitch-studio.md). [Host session](../frontend/lib/research.ts) · [Studio](../frontend/components/research/ResearchWorkspace.tsx) · [Voice adapter](../voice/server.py)
 
 **Release evidence.** Walk two accounts through the hosted service. Confirm that each can reopen its own project from a clean browser and that cross-account reads, writes and media connections are denied. Interrupt a spoken status reply during research, restart a worker, then open the resulting pitch and verify its chart against the cited source. Rehearse with real microphones and the selected provider in the supported languages. Exercise provider failure, retry, backup restoration and operator-visible job failures. Record the environment and observed results before calling the module released.
+
+The [AWS operations guide](aws-operations.md) covers image digests, gateway routing, request and job latency queries, and restoring the project volume.
 
 ## Stack and trust boundaries
 
@@ -43,13 +46,13 @@ flowchart LR
 | Host and audience | Next.js, React, TypeScript, Tailwind, shadcn/ui and TanStack Query. HTML/CSS slide templates and a host-owned player. | Host can approve a revision. Audience can acknowledge its assigned frame or slide. Only the host plays room audio. |
 | Session controller | Express on Bun, Zod, SQLite on EBS, sequenced events and immutable deck revisions | Validates commands, manages the floor and agenda, records attempts and publishes public projections. Bun matches the existing SQLite implementation. |
 | Text intelligence | OpenAI via Vercel AI SDK. Purpose-scoped model configurations, structured proposals, a stronger synthesis model when justified. | Proposes questions, findings, edits or target IDs from the permitted context. The controller owns execution. |
-| Voice target | Python with OpenAI transcription and synthesis, Pipecat, SmallWebRTC and a host-owned Web Audio player from Module 1 onward | Python delivers attributable transcript segments and identified audio. React reports application playout and cutoff. |
+| Voice target | OpenAI WebRTC transcription with private Python signaling and synthesis, React-owned playout | The browser receives transcript segments. Python returns approved synthesized audio. React reports application playout and cutoff. |
 | Browser target | Isolated Chromium/Playwright worker, bounded read-only actions and approved origins | Reports observations and captures frames. The audience device acknowledges display. |
-| AWS | EC2 behind Caddy HTTPS/WSS, persistent EBS data, private worker services. ICE/TURN as required by the venue. | Keep keys and private evidence on the server, authenticate workers and issue narrowly scoped audience access. |
+| AWS | ECS on EC2 behind Caddy HTTPS, encrypted EBS data, private worker services, Secrets Manager and CloudWatch. | Keep keys and private evidence on the server, authenticate workers and issue narrowly scoped audience access. |
 
 ```mermaid
 flowchart LR
-  Host["Host · mic, approvals, player"] <-->|audio in / turn events| Voice["Pipecat · STT and TTS"]
+  Host["Host · mic, approvals, player"] <-->|audio in / turn events| Voice["Managed transcription and private synthesis"]
   Voice <-->|final turns / synthesize claim| Controller["Express · session controller"]
   Host <-->|commands / playout acknowledgments| Controller
   Controller <--> DB["SQLite and artifacts on EBS"]
