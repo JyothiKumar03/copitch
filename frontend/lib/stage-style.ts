@@ -1,0 +1,29 @@
+export const stageStyle = `
+.slide-shell { container-type:inline-size; display:flex; flex-direction:column; gap:clamp(12px,2.5vw,22px); padding:clamp(16px,4vw,42px); min-height:clamp(300px,38vw,490px); border:1px solid #cdbbc1; border-radius:2px; background:#fff6f0; color:#30212c; overflow-wrap:anywhere; }
+.slide-top { display:flex; align-items:baseline; justify-content:space-between; gap:24px; padding-bottom:12px; border-bottom:1px solid currentColor; font:500 clamp(11px,2.1cqw,15px)/1.4 ui-sans-serif,system-ui; }
+.slide-top span:last-child { flex:none; font-variant-numeric:tabular-nums; }
+.slide-shell h3 { font:normal clamp(26px,7.3cqw,72px)/1.08 var(--font-display, Georgia),serif; letter-spacing:-.035em; max-width:26ch; }
+.slide-shell ul { display:grid; gap:8px; padding:0; list-style:none; font:400 clamp(15px,3.3cqw,28px)/1.42 ui-sans-serif,system-ui; }
+.slide-shell li { border-top:1px solid #92768180; padding-top:7px; }
+.conversion-chart { display:grid; margin:0; gap:.4em; font:500 clamp(12px,2cqw,20px)/1.3 system-ui; }
+.conversion-chart figcaption { font-weight:650; }
+.conversion-row { display:grid; grid-template-columns:minmax(4em,1fr) 2fr auto; align-items:center; gap:.6em; }
+.conversion-row meter { width:100%; accent-color:#77354f; }
+.conversion-row strong { grid-column:3; font-variant-numeric:tabular-nums; }
+.slide-shell footer { margin-top:auto; padding-top:12px; font:500 clamp(11px,1.9cqw,17px)/1.4 ui-sans-serif,system-ui; }
+.slide-shell[data-layout=evidence] { background:#f1d8cf; }
+.slide-shell[data-layout=evidence] li { padding-left:14px; border-left:3px solid #77354f; border-top:0; }
+.slide-shell[data-layout=takeaway] { color:#fff8f3; background:#4c293c; }
+.slide-shell[data-layout=takeaway] li { border-color:#e8b9ad88; }
+.slide-shell[data-layout=takeaway] meter { accent-color:#ffc3aa; }
+.slide-shell[data-density=dense] { gap:clamp(6px,1.1vw,16px); }
+.slide-shell[data-density=dense] h3 { font-size:clamp(24px,3cqw,42px); max-width:100%; }
+.slide-shell[data-density=dense] ul { gap:6px; font-size:clamp(15px,1.55cqw,22px); line-height:1.32; }
+.slide-shell[data-density=dense] li { padding-top:4px; }
+.slide-shell[data-density=dense] footer { padding-top:4px; }
+`;
+
+export const slideDensity = (title: string, highlights: string[]) => {
+  const characters = title.length + highlights.join("").length;
+  return characters > 430 || title.length > 100 ? "dense" : "regular";
+};
