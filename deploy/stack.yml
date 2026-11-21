@@ -1,0 +1,304 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Copitch Module 1. One ECS service and one encrypted SQLite writer.
+Parameters:
+  Vpc:
+    Type: AWS::EC2::VPC::Id
+  PublicSubnet:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public subnet with an internet gateway route in DataZone.
+  DataZone:
+    Type: AWS::EC2::AvailabilityZone::Name
+  PublicHost:
+    Type: String
+    AllowedPattern: '[a-z0-9][a-z0-9.-]+\.[a-z]+'
+  HostType:
+    Type: String
+    Default: t3.medium
+    AllowedValues: [t3.medium, t3.large, m6i.large]
+  HostImage:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ecs/optimized-ami/amazon-linux-2023/recommended/image_id
+  ApiImage:
+    Type: String
+    AllowedPattern: '.+@sha256:[a-f0-9]{64}'
+  WebImage:
+    Type: String
+    AllowedPattern: '.+@sha256:[a-f0-9]{64}'
+  VoiceImage:
+    Type: String
+    AllowedPattern: '.+@sha256:[a-f0-9]{64}'
+  GatewayImage:
+    Type: String
+    AllowedPattern: '.+@sha256:[a-f0-9]{64}'
+  ApplicationSecret:
+    Type: String
+    Description: ARN of the regional Secrets Manager JSON secret (default service encryption key).
+  RestoreSnapshot:
+    Type: String
+    Default: ''
+    AllowedPattern: '(^$|^snap-[a-f0-9]+$)'
+    Description: Optional encrypted application data snapshot from this region.
+  VolumeGiB:
+    Type: Number
+    Default: 20
+    MinValue: 8
+Conditions:
+  Restoring: !Not [!Equals [!Ref RestoreSnapshot, '']]
+Resources:
+  Cluster:
+    Type: AWS::ECS::Cluster
+  Logs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 7
+  TraceQuery:
+    Type: AWS::Logs::QueryDefinition
+    Properties:
+      Name: !Sub '${AWS::StackName}/latency'
+      LogGroupNames: [!Ref Logs]
+      QueryString: |
+        filter operation = "http.request" or (operation = "research.attempt" and status = "completed")
+        | fields coalesce(route, operation) as endpoint
+        | stats count(*) as samples, pct(duration_ms,50) as p50_ms, pct(duration_ms,95) as p95_ms by operation, endpoint, status
+        | sort p95_ms desc
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref Vpc
+      GroupDescription: Public gateway HTTP certificate validation and HTTPS.
+      SecurityGroupIngress:
+        - {IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0}
+        - {IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0}
+  DataVolume:
+    Type: AWS::EC2::Volume
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      AvailabilityZone: !Ref DataZone
+      VolumeType: gp3
+      Size: !Ref VolumeGiB
+      Encrypted: true
+      SnapshotId: !If [Restoring, !Ref RestoreSnapshot, !Ref AWS::NoValue]
+      Tags:
+        - {Key: CopitchBackup, Value: !Ref AWS::StackName}
+  BackupRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: dlm.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole'
+  SnapshotPolicy:
+    Type: AWS::DLM::LifecyclePolicy
+    Properties:
+      Description: Daily snapshots of the project and artifact database volume
+      State: ENABLED
+      ExecutionRoleArn: !GetAtt BackupRole.Arn
+      PolicyDetails:
+        PolicyType: EBS_SNAPSHOT_MANAGEMENT
+        ResourceTypes: [VOLUME]
+        TargetTags:
+          - {Key: CopitchBackup, Value: !Ref AWS::StackName}
+        Schedules:
+          - Name: Daily
+            CreateRule: {Interval: 24, IntervalUnit: HOURS, Times: ['02:00']}
+            RetainRule: {Count: 7}
+            CopyTags: true
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ec2.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role'
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore'
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref InstanceRole]
+  HostTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        MetadataOptions: {HttpTokens: required, HttpPutResponseHopLimit: 1}
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs: {Encrypted: true, VolumeType: gp3, VolumeSize: 30, DeleteOnTermination: true}
+  Host:
+    Type: AWS::EC2::Instance
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref HostTemplate
+        Version: !GetAtt HostTemplate.LatestVersionNumber
+      InstanceType: !Ref HostType
+      ImageId: !Ref HostImage
+      IamInstanceProfile: !Ref InstanceProfile
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds: [!Ref SecurityGroup]
+      AvailabilityZone: !Ref DataZone
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euo pipefail
+          volume='${DataVolume}'
+          serial=$(echo "$volume" | tr -d '-')
+          dev=''
+          for wait in $(seq 1 180); do
+            dev=$(lsblk -dnpo NAME,SERIAL | awk -v target="$serial" '$2==target {print $1}')
+            [ -b "$dev" ] && break
+            sleep 2
+          done
+          test -b "$dev"
+          fs=$(lsblk -dnro FSTYPE "$dev")
+          if [ -z "$fs" ]; then
+            test -z '${RestoreSnapshot}'
+            test -z "$(wipefs --noheadings --output TYPE "$dev")"
+            mkfs.ext4 -q "$dev"
+          else
+            test "$fs" = ext4
+          fi
+          uuid=$(blkid -s UUID -o value "$dev")
+          mkdir -p /srv/copitch
+          echo "UUID=$uuid /srv/copitch ext4 defaults 0 2" >> /etc/fstab
+          mount /srv/copitch
+          install -d -m 0700 /srv/copitch/database /srv/copitch/gateway
+          mkdir -p /etc/systemd/system/ecs.service.d
+          echo -e '[Unit]\nRequiresMountsFor=/srv/copitch' > /etc/systemd/system/ecs.service.d/storage.conf
+          systemctl daemon-reload
+          cat >> /etc/ecs/ecs.config <<CONFIG
+          ECS_CLUSTER=${Cluster}
+          ECS_INSTANCE_ATTRIBUTES={"copitchVolume":"${DataVolume}"}
+          ECS_ENABLE_AWSLOGS_EXECUTIONROLE_OVERRIDE=true
+          CONFIG
+  Attachment:
+    Type: AWS::EC2::VolumeAttachment
+    Properties:
+      Device: /dev/sdf
+      InstanceId: !Ref Host
+      VolumeId: !Ref DataVolume
+  Address:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+  AddressBinding:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      InstanceId: !Ref Host
+      AllocationId: !GetAtt Address.AllocationId
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ecs-tasks.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
+      Policies:
+        - PolicyName: ApplicationSecretOnly
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - {Effect: Allow, Action: 'secretsmanager:GetSecretValue', Resource: !Ref ApplicationSecret}
+  Task:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      RequiresCompatibilities: [EC2]
+      NetworkMode: bridge
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      Volumes:
+        - {Name: database, Host: {SourcePath: /srv/copitch/database}}
+        - {Name: gateway, Host: {SourcePath: /srv/copitch/gateway}}
+      ContainerDefinitions:
+        - Name: voice
+          Image: !Ref VoiceImage
+          MemoryReservation: 160
+          Secrets:
+            - {Name: OPENAI_API_KEY, ValueFrom: !Sub '${ApplicationSecret}:OPENAI_API_KEY::'}
+            - {Name: VOICE_WORKER_TOKEN, ValueFrom: !Sub '${ApplicationSecret}:VOICE_WORKER_TOKEN::'}
+        - Name: api
+          Image: !Ref ApiImage
+          MemoryReservation: 512
+          Links: [voice]
+          Environment:
+            - {Name: PORT, Value: '3001'}
+            - {Name: NODE_ENV, Value: production}
+            - {Name: CORS_ORIGIN, Value: !Sub 'https://${PublicHost}'}
+            - {Name: COPITCH_TRUST_GATEWAY, Value: '1'}
+            - {Name: TRACE_LOGS, Value: '1'}
+            - {Name: AI_SESSION_DB, Value: /data/sessions.sqlite}
+            - {Name: VOICE_WORKER_URL, Value: 'http://voice:8900'}
+          Secrets:
+            - {Name: OPENAI_API_KEY, ValueFrom: !Sub '${ApplicationSecret}:OPENAI_API_KEY::'}
+            - {Name: OPENAI_TEXT_MODELS, ValueFrom: !Sub '${ApplicationSecret}:OPENAI_TEXT_MODELS::'}
+            - {Name: VOICE_WORKER_TOKEN, ValueFrom: !Sub '${ApplicationSecret}:VOICE_WORKER_TOKEN::'}
+          MountPoints:
+            - {SourceVolume: database, ContainerPath: /data}
+          HealthCheck:
+            Command: [CMD, bun, -e, "fetch('http://localhost:3001/api/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+            Interval: 15
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 20
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref Logs
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: pitch
+              mode: non-blocking
+              max-buffer-size: 4m
+        - Name: web
+          Image: !Ref WebImage
+          MemoryReservation: 512
+          HealthCheck:
+            Command: [CMD, node, -e, "fetch('http://localhost:3000/',{method:'HEAD'}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 20
+        - Name: gateway
+          Image: !Ref GatewayImage
+          MemoryReservation: 64
+          Links: [api, web]
+          DependsOn:
+            - {ContainerName: api, Condition: HEALTHY}
+            - {ContainerName: web, Condition: HEALTHY}
+          PortMappings:
+            - {ContainerPort: 80, HostPort: 80}
+            - {ContainerPort: 443, HostPort: 443}
+          MountPoints:
+            - {SourceVolume: gateway, ContainerPath: /data}
+          Environment:
+            - {Name: PUBLIC_HOST, Value: !Ref PublicHost}
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn: [Attachment, AddressBinding]
+    Properties:
+      LaunchType: EC2
+      Cluster: !Ref Cluster
+      DesiredCount: 1
+      TaskDefinition: !Ref Task
+      PlacementConstraints:
+        - {Type: memberOf, Expression: !Sub 'attribute:copitchVolume == ${DataVolume}'}
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 0
+        MaximumPercent: 100
+        DeploymentCircuitBreaker: {Enable: true, Rollback: true}
+Outputs:
+  GatewayIP: {Value: !Ref Address}
+  DataVolumeId: {Value: !Ref DataVolume}
+  InstanceId: {Value: !Ref Host}
+  TraceLogGroup: {Value: !Ref Logs}
+  ClusterName: {Value: !Ref Cluster}
+  ServiceName: {Value: !GetAtt Service.Name}
