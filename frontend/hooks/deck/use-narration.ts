@@ -9,12 +9,12 @@ export const useNarration = (
   command: (action: TPresentationAction) => Promise<TPresentationState>,
   observeAudio: (element: HTMLAudioElement) => () => void,
 ) => {
-  const playback = useRef<{ stop: () => void } | null>(null);
+  const playback = useRef<{ hold: () => () => void; stop: () => void } | null>(null);
   const latest = useRef({ load, command, observeAudio });
   const [error, setError] = useState<string | null>(null);
   useEffect(() => { latest.current = { load, command, observeAudio }; }, [load, command, observeAudio]);
 
-  const stop = useCallback(() => { playback.current?.stop(); playback.current = null; }, []);
+  const hold = useCallback(() => playback.current?.hold(), []);
   useEffect(() => {
     if (!attemptId) return;
     const abort = new AbortController();
@@ -22,13 +22,7 @@ export const useNarration = (
     let audio: HTMLAudioElement | undefined;
     let unobserve: (() => void) | undefined;
     let acknowledgement: Promise<TPresentationState> | undefined;
-    const player = { stop: () => {
-      abort.abort();
-      if (audio) { audio.onplaying = audio.onended = audio.onerror = null; audio.pause(); audio.removeAttribute("src"); audio.load(); }
-      unobserve?.();
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    } };
-    playback.current = player;
+    const holds = new Set<symbol>();
 
     const report = async (kind: "ended" | "failed") => {
       if (abort.signal.aborted) return;
@@ -39,7 +33,33 @@ export const useNarration = (
         if (!abort.signal.aborted) setError(cause instanceof Error ? cause.message : "Audio progress could not be saved.");
       }
     };
+    const fail = async (cause: unknown) => {
+      if (abort.signal.aborted) return;
+      setError(cause instanceof DOMException && cause.name === "NotAllowedError" ?
+        "Your browser blocked audio. Press Resume to try again." : "Narration audio failed. Press Resume to try again.");
+      await report("failed");
+    };
     const play = async () => {
+      if (!audio || holds.size || abort.signal.aborted) return;
+      try { await audio.play(); }
+      catch (cause) { if (!holds.size) await fail(cause); }
+    };
+    const player = {
+      hold: () => {
+        const id = Symbol();
+        holds.add(id);
+        audio?.pause();
+        return () => { if (holds.delete(id) && !holds.size) void play(); };
+      },
+      stop: () => {
+        abort.abort();
+        if (audio) { audio.onplaying = audio.onended = audio.onerror = null; audio.pause(); audio.removeAttribute("src"); audio.load(); }
+        unobserve?.();
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
+      },
+    };
+    playback.current = player;
+    const load = async () => {
       try {
         const blob = await latest.current.load(attemptId, abort.signal);
         if (abort.signal.aborted) return;
@@ -57,18 +77,12 @@ export const useNarration = (
         };
         audio.onended = () => { void report("ended"); };
         audio.onerror = () => { setError("Could not play narration. Press Resume to try again."); void report("failed"); };
-        await audio.play();
-      } catch (cause) {
-        if (!abort.signal.aborted) {
-          setError(cause instanceof DOMException && cause.name === "NotAllowedError" ?
-            "Your browser blocked audio. Press Resume to try again." : "Narration audio failed. Press Resume to try again.");
-          await report("failed");
-        }
-      }
+        await play();
+      } catch (cause) { await fail(cause); }
     };
-    void play();
+    void load();
     return () => { player.stop(); if (playback.current === player) playback.current = null; };
   }, [attemptId]);
 
-  return { error, stop };
+  return { error, hold };
 };

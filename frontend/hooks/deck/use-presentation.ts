@@ -1,20 +1,25 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { fetchPresentation, loadPresentationAudio, movePresentationStage, sendPresentationCommand, sendPresentationTurn, startPresentation, transcribePresentationAudio } from "@/lib/presentation";
+import { fetchPresentation, loadPresentationAudio, sendPresentationCommand, sendPresentationTurn, startPresentation, transcribePresentationAudio } from "@/lib/presentation";
 import type { TDeck, TDeckWorkspaceProps } from "@/types/deck";
 import type { TPresentationAction, TPresentationState } from "@/types/presentation";
+import { prepareRoomInput } from "./use-room-microphone";
 
-type TStage = { token: string; external: boolean };
+type TPresentationTarget = Pick<TPresentationState, "cursor" | "revision" | "generation">;
 
 export const usePresentation = (deck: TDeck | null, getSession: TDeckWorkspaceProps["getSession"], researchId: string) => {
   const client = useQueryClient();
   const [activeDeck, setActiveDeck] = useState<string | null>(null);
-  const [stage, setStage] = useState<TStage | null>(null);
+  const [stageToken, setStageToken] = useState<string>();
   const [pending, setPending] = useState(false);
+  const [turnPending, setTurnPending] = useState(false);
+  const [roomInput, setRoomInput] = useState<ReturnType<typeof prepareRoomInput> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const serial = useRef<Promise<unknown>>(Promise.resolve());
+  const openingInput = useRef<ReturnType<typeof prepareRoomInput> | null>(null);
+  const activeTurn = useRef<AbortController | null>(null);
   const deckId = deck?.deck_id;
   const revision = deck?.revision;
   const active = !!deckId && activeDeck === deckId;
@@ -31,6 +36,12 @@ export const usePresentation = (deck: TDeck | null, getSession: TDeckWorkspacePr
   });
   const state = query.data ?? null;
 
+  useEffect(() => () => {
+    openingInput.current?.close();
+    openingInput.current = null;
+    activeTurn.current?.abort();
+  }, [deckId]);
+
   const run = useCallback((operation: () => Promise<TPresentationState>) => {
     const queryKey = ["presentation-live", researchId, deckId];
     const job = serial.current.then(async () => {
@@ -46,7 +57,9 @@ export const usePresentation = (deck: TDeck | null, getSession: TDeckWorkspacePr
   const command = useCallback((action: TPresentationAction) => run(async () => {
     const current = client.getQueryData<TPresentationState>(["presentation-live", researchId, deckId]);
     if (!deckId || !current) throw new Error("Open the live presentation first.");
-    return sendPresentationCommand(await getSession(), deckId, current, action);
+    const result = await sendPresentationCommand(await getSession(), deckId, current, action);
+    if (action.kind !== "playing" && action.kind !== "ended" && action.kind !== "failed") activeTurn.current?.abort();
+    return result;
   }), [client, getSession, deckId, researchId, run]);
 
   const resumeAfterNoise = useCallback((pinId: string) => run(async () => {
@@ -64,44 +77,63 @@ export const usePresentation = (deck: TDeck | null, getSession: TDeckWorkspacePr
     finally { setPending(false); }
   };
 
-  const enter = () => tryAction(() => run(async () => {
-    if (!deckId || !revision) throw new Error("Open an approved deck to present.");
-    const opened = await startPresentation(await getSession(), deckId, revision);
-    setStage({ token: opened.stage.token, external: false });
-    setActiveDeck(deckId);
-    return opened.state;
-  }));
-
-  const moveStage = async (external: boolean, openWindow = false) => {
-    if (!deckId) return null;
-    const popup = openWindow ? window.open("about:blank", "_blank") : null;
-    if (openWindow && !popup) { setError("Allow pop-ups to open the audience screen, or copy its link."); return null; }
-    if (popup) popup.opener = null;
-    const previous = stage;
-    setStage(null);
-    let token: string | null = null;
-    const result = await tryAction(() => run(async () => {
-      const opened = await movePresentationStage(await getSession(), deckId);
-      token = opened.stage.token;
-      setStage({ token, external });
-      popup?.location.replace("/audience#" + token);
-      return opened.state;
+  const enter = async () => {
+    if (!deckId || !revision || openingInput.current) return;
+    // Request permission and resume the audio context on the existing approval gesture.
+    const input = prepareRoomInput();
+    openingInput.current = input;
+    const opened = await tryAction(() => run(async () => {
+      const result = await startPresentation(await getSession(), deckId, revision);
+      if (openingInput.current === input) {
+        setStageToken(result.stage.token);
+        setActiveDeck(deckId);
+        setRoomInput(input);
+      }
+      return result.state;
     }));
-    if (!result) { popup?.close(); setStage(previous); }
-    return token;
+    if (!opened && openingInput.current === input) { input.close(); openingInput.current = null; }
   };
+
+  const interrupt = (target: TPresentationTarget) => tryAction(() => run(async () => {
+    const current = client.getQueryData<TPresentationState>(key);
+    if (!deckId || !current || current.revision !== target.revision || current.generation !== target.generation ||
+        current.cursor.slide_id !== target.cursor.slide_id) throw new Error("The slide changed before the interruption could be saved.");
+    if (current.status === "listening" && current.pin) return current;
+    return sendPresentationCommand(await getSession(), deckId, current, { kind: "interrupt" });
+  }));
 
   const leave = async () => {
     const paused = await tryAction(() => command({ kind: "pause" }));
-    if (!paused) return;
+    if (!paused) return false;
+    openingInput.current?.close();
+    openingInput.current = null;
+    setRoomInput(null);
     setActiveDeck(null);
-    setStage(null);
+    setStageToken(undefined);
+    return true;
   };
 
-  const turn = (pinId: string, message: string) => tryAction(() => run(async () => {
-    if (!deckId) throw new Error("Open the live presentation first.");
-    return sendPresentationTurn(await getSession(), deckId, pinId, message);
-  }));
+  const turn = async (pinId: string, message: string) => {
+    if (!deckId || activeTurn.current) return null;
+    const request = new AbortController();
+    activeTurn.current = request;
+    setTurnPending(true);
+    setError(null);
+    try {
+      const result = await sendPresentationTurn(await getSession(), deckId, pinId, message, request.signal);
+      if (request.signal.aborted) return null;
+      client.setQueryData<TPresentationState>(key, current => current && current.version > result.version ? current : result);
+      return result;
+    } catch (cause) {
+      if (!request.signal.aborted) setError(cause instanceof Error ? cause.message : "Could not send the presentation question.");
+      return null;
+    } finally {
+      if (activeTurn.current === request) {
+        activeTurn.current = null;
+        setTurnPending(false);
+      }
+    }
+  };
 
   const loadAudio = useCallback(async (attemptId: string, signal: AbortSignal) => {
     if (!deckId) throw new Error("Open the live presentation first.");
@@ -110,5 +142,6 @@ export const usePresentation = (deck: TDeck | null, getSession: TDeckWorkspacePr
 
   const transcribe = useCallback(async (clip: Blob, signal: AbortSignal) => transcribePresentationAudio(await getSession(), clip, signal), [getSession]);
 
-  return { active, command, enter, error: error ?? query.error?.message, leave, loadAudio, moveStage, pending, resumeAfterNoise, stage, state, transcribe, tryAction, turn };
+  return { active, command, enter, error: error ?? query.error?.message, interrupt, leave, loadAudio, pending, resumeAfterNoise,
+    roomInput, stageToken, state, transcribe, tryAction, turn, turnPending };
 };

@@ -1,4 +1,3 @@
-import type { TAudienceOpen } from "./audience";
 import type { TLiveReply, TProposal } from "./deck";
 
 export type TPresentationState = {
@@ -17,10 +16,9 @@ export type TPresentationState = {
 
 export type TPresentationAction =
   | { kind: "pause" | "resume" | "next" | "back" | "skip" | "reconnect" | "restart" }
-  | { kind: "go_to"; slide_id: string }
   | { kind: "interrupt"; attempt_id?: string }
   | { kind: "playing" | "ended" | "failed"; attempt_id: string }
   | { kind: "decide"; proposal_id: string; slide_id: string; decision: "approve" | "reject" };
 
-export type TPresentationOpen = { state: TPresentationState; stage: TAudienceOpen };
+export type TPresentationOpen = { state: TPresentationState; stage: { sequence: number; token: string; expires_at: number } };
 export type TStagePaint = { sequence: number; revision: number; slide_id: string };
