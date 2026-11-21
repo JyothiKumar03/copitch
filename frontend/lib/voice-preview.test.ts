@@ -1,25 +1,51 @@
 import { expect, test } from "bun:test";
-import { isLateHostCaption, liveCaption } from "./voice-preview";
+import { committedVoiceIds, createVoicePreview, pendingVoiceCaptions, readVoiceFragment } from "./voice-preview";
 
-const merged = [{ role: "host" as const, text: "Now, obviously, it should be able to. Read my website.", turn_id: "t1", voice_items: ["item_a", "item_b"] }];
+const committed = new Set<string>();
+const feed = (buffer: ReturnType<typeof createVoicePreview>, speaker: "host" | "agent", delta: string, start: number, end: number, eventId: string) =>
+  buffer.accept({ speaker, delta, start, end, eventId }, committed);
 
-test("a caption disappears once the saved turn that contains its speech item exists", () => {
-  expect(liveCaption(merged, { speaker: "host", id: "item_b", text: "Read my website.", final: true })).toBeNull();
-  expect(liveCaption(merged, { speaker: "host", id: "item_a", text: "Now, obviously, it should be able to.", final: true })).toBeNull();
+test("late host tokens fill the host draft while the assistant keeps replying", () => {
+  const buffer = createVoicePreview("call-1");
+  feed(buffer, "host", "Review the trial", 1000, 1800, "one");
+  feed(buffer, "agent", "Here is", 1400, 1900, "two");
+  expect(feed(buffer, "host", " results.", 1600, 1820, "three")).toBe("tail");
+  feed(buffer, "agent", " what I found.", 1800, 2500, "four");
+  expect(feed(buffer, "host", " results.", 1600, 1820, "three")).toBeNull();
+  expect(buffer.captions().map(({ id, text }) => [id, text])).toEqual([
+    ["live:call-1:1000", "Review the trial results."], ["agent:call-1:1400", "Here is what I found."],
+  ]);
 });
 
-test("a caption stays visible until its speech is saved, even when its words match an earlier turn", () => {
-  const caption = { speaker: "host" as const, id: "item_c", text: "Read my website.", final: true };
-  expect(liveCaption(merged, caption)).toEqual(caption);
+test("completed captions stay visible until the exact exchange is saved, including repeated wording on a new call", () => {
+  const buffer = createVoicePreview("call-2");
+  feed(buffer, "host", "Review the trial results.", 1000, 1800, "one");
+  feed(buffer, "agent", "Here is what I found.", 1400, 3100, "two");
+  buffer.seal();
+  const history = [{ role: "host" as const, text: "Review the trial results.", voice_items: ["live:call-1:1000"] },
+    { role: "assistant" as const, text: "Here is what I found.", voice_items: ["agent:call-2:1400"] }];
+  expect(pendingVoiceCaptions(buffer.captions(), committedVoiceIds(history)).map(({ id, final }) => [id, final])).toEqual([
+    ["live:call-2:1000", true],
+  ]);
+  buffer.reconcile(new Set(["live:call-2:1000", "agent:call-2:1400"]));
+  expect(buffer.captions()).toEqual([]);
 });
 
-test("the agent's spoken caption is replaced by the saved reply it reads out", () => {
-  const history = [...merged, { role: "assistant" as const, text: "What does your website offer?", turn_id: "t1" }];
-  expect(liveCaption(history, { speaker: "agent", id: "resp_1", text: "What does your website", final: false })).toBeNull();
+test("brief acknowledgements give way to the same host turn, while a new answer follows a complete exchange", () => {
+  const buffer = createVoicePreview("call-3");
+  feed(buffer, "host", "The pilot", 100, 400, "one");
+  feed(buffer, "agent", "Mm-hm.", 500, 650, "two");
+  feed(buffer, "host", " used two cohorts.", 710, 1100, "three");
+  feed(buffer, "agent", "Which cohort should we present first?", 1200, 2900, "four");
+  feed(buffer, "host", "London.", 3000, 3400, "five");
+  expect(buffer.captions().map(({ text, final }) => [text, final])).toEqual([
+    ["The pilot used two cohorts.", true], ["Which cohort should we present first?", true], ["London.", false],
+  ]);
 });
 
-test("contiguous timestamp overlap cannot displace the reply caption, but a new speech onset can", () => {
-  expect(isLateHostCaption(3800, 3800, 4000)).toBe(true);
-  expect(isLateHostCaption(4200, 4000, 4600)).toBe(false);
-  expect(isLateHostCaption(undefined, 4000, 4600)).toBe(false);
+test("parses current provider frame fields and ignores non-caption events", () => {
+  expect(readVoiceFragment({ type: "session.input_transcript.delta", delta: "Hi", start_ms: 0, end_ms: 200, event_id: "a" }))
+    .toEqual({ speaker: "host", delta: "Hi", start: 0, end: 200, eventId: "a" });
+  expect(readVoiceFragment({ type: "response.event", delta: "unexpected" })).toBeNull();
+  expect(readVoiceFragment(null)).toBeNull();
 });

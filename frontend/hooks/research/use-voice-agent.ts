@@ -2,16 +2,16 @@
 
 import { useEffect, useRef, useState } from "react";
 import { connectInterview, closeVoice } from "@/lib/interview";
-import { isLateHostCaption } from "@/lib/voice-preview";
+import { createVoicePreview, readVoiceFragment } from "@/lib/voice-preview";
+import type { TVoiceCaption } from "@/lib/voice-preview";
+import { LIVE_BACKCHANNEL_MS, LIVE_EXCHANGE_IDLE_MS } from "../../../shared/voice-transcript";
 import type { TGetSession, TVoicePhase } from "@/types/interview";
 import type { TResearchSession } from "@/types/research";
 
-type TVoiceCaption = { speaker: "host" | "agent"; text: string; id: string; final: boolean };
-type TVoiceOptions = { onVoiceTurn?: (caption: TVoiceCaption) => void };
+type TVoiceOptions = { committed: ReadonlySet<string>; onClose: () => void };
 type TLink = { peer: RTCPeerConnection; channel: RTCDataChannel; stream: MediaStream; audio: HTMLAudioElement;
-  session: TResearchSession; lease?: string; caption?: TVoiceCaption; quiet?: ReturnType<typeof setTimeout>; timer?: ReturnType<typeof setTimeout>;
-  hostUntil?: number; agentUntil?: number };
-type TLiveEvent = { type?: string; delta?: string; start_ms?: number; end_ms?: number };
+  session: TResearchSession; lease?: string; preview?: ReturnType<typeof createVoicePreview>;
+  quiet?: ReturnType<typeof setTimeout>; settle?: ReturnType<typeof setTimeout>; timer?: ReturnType<typeof setTimeout> };
 
 // The Live model hears, speaks and handles interruptions itself; the server records the conversation and checks every
 // action. The browser carries audio, shows live captions, and can only hang up.
@@ -20,8 +20,10 @@ export const useVoiceAgent = (getSession: TGetSession, options: TVoiceOptions) =
   useEffect(() => { latest.current = { getSession, options }; });
   const live = useRef<TLink | null>(null);
   const pending = useRef<AbortController | null>(null);
+  const closing = useRef<Promise<void> | null>(null);
+  const [captions, setCaptions] = useState<TVoiceCaption[]>([]);
   const [handsFree, setConnected] = useState(false);
-  const [speaking, setSpeaking] = useState(false);
+  const [replying, setReplying] = useState(false);
   const [phase, setPhase] = useState<TVoicePhase>("idle");
   const [error, setError] = useState("");
   const [voiceEnabled, setVoiceEnabled] = useState(() => {
@@ -29,56 +31,58 @@ export const useVoiceAgent = (getSession: TGetSession, options: TVoiceOptions) =
   });
   const enabled = useRef(voiceEnabled);
 
-  const close = () => {
+  const close = (notice?: string) => {
     pending.current?.abort(); pending.current = null;
     const call = live.current;
     live.current = null;
     if (call) {
-      clearTimeout(call.timer); clearTimeout(call.quiet);
+      clearTimeout(call.timer); clearTimeout(call.quiet); clearTimeout(call.settle);
+      call.preview?.seal();
+      if (call.preview) setCaptions(call.preview.captions());
       call.stream.getTracks().forEach(track => track.stop());
       call.audio.pause(); call.audio.srcObject = null;
       call.channel.close(); call.peer.close();
-      if (call.lease) void closeVoice(call.session, call.lease).catch(() => {});
+      if (call.lease) {
+        const closeRequest = closeVoice(call.session, call.lease).catch(() => {}).finally(() => {
+          if (closing.current === closeRequest) closing.current = null;
+          latest.current.options.onClose();
+        });
+        closing.current = closeRequest;
+      }
     }
-    setConnected(false); setSpeaking(false); setPhase("idle");
+    setConnected(false); setReplying(false); setPhase("idle");
+    if (notice) setError(notice);
   };
   useEffect(() => {
-    window.addEventListener("pagehide", close);
-    return () => { window.removeEventListener("pagehide", close); close(); };
+    const leave = () => close();
+    window.addEventListener("pagehide", leave);
+    return () => { window.removeEventListener("pagehide", leave); close(); };
   }, []);
 
-  const show = (call: TLink, caption: TVoiceCaption) => {
-    call.caption = caption;
-    latest.current.options.onVoiceTurn?.(caption);
-  };
-  const handle = (call: TLink, event: TLiveEvent) => {
-    if (live.current !== call || !event.delta) return;
-    const speaker = event.type === "session.input_transcript.delta" ? "host" : event.type === "session.output_transcript.delta" ? "agent" : null;
-    if (!speaker) return;
-    const current = call.caption;
-    const end = event.end_ms ?? event.start_ms;
-    if (speaker === "host") {
-      if (current?.speaker === "agent" && isLateHostCaption(event.start_ms, call.hostUntil, call.agentUntil)) {
-        // The saved transcript still receives this overlapping input. Leave the reply caption and playout status in place.
-        if (end !== undefined) call.hostUntil = Math.max(call.hostUntil ?? end, end);
-        return;
-      }
-      call.hostUntil = end === undefined || current?.speaker !== "host" ? end : Math.max(call.hostUntil ?? end, end);
-    } else {
-      call.agentUntil = end === undefined || current?.speaker !== "agent" ? end : Math.max(call.agentUntil ?? end, end);
+  const handle = (call: TLink, event: unknown) => {
+    if (live.current !== call || !call.preview) return;
+    const fragment = readVoiceFragment(event);
+    if (!fragment) return;
+    const activity = call.preview.accept(fragment, latest.current.options.committed);
+    if (!activity) return;
+    setCaptions(call.preview.captions());
+    clearTimeout(call.settle);
+    if (activity === "agent" || activity === "tail") {
+      call.settle = setTimeout(() => {
+        if (live.current !== call || !call.preview) return;
+        call.preview.seal();
+        setCaptions(call.preview.captions());
+      }, LIVE_EXCHANGE_IDLE_MS);
     }
-    if (current && current.speaker !== speaker && !current.final) show(call, { ...current, final: true });
-    // The host's caption id matches the id the server saves the exchange under, so the caption gives way to the saved turn.
-    const continuing = current?.speaker === speaker && !current.final;
-    show(call, continuing ? { ...current, text: current.text + event.delta } :
-      { speaker, text: event.delta, id: (speaker === "host" ? "live:" : "agent:") + (event.start_ms ?? Date.now()), final: false });
+    if (activity === "tail") return;
     clearTimeout(call.quiet);
-    if (speaker === "host") { setPhase("recording"); setSpeaking(false); return; }
-    setPhase("idle"); setSpeaking(enabled.current);
-    call.quiet = setTimeout(() => {
-      setSpeaking(false);
-      if (call.caption?.speaker === "agent") show(call, { ...call.caption, final: true });
-    }, 1500);
+    if (activity === "host") {
+      setPhase("recording"); setReplying(false);
+      call.quiet = setTimeout(() => { if (live.current === call) setPhase("transcribing"); }, LIVE_BACKCHANNEL_MS);
+      return;
+    }
+    setPhase("idle"); setReplying(true);
+    call.quiet = setTimeout(() => { if (live.current === call) setReplying(false); }, LIVE_BACKCHANNEL_MS);
   };
 
   const setHandsFree = async (on: boolean) => {
@@ -89,6 +93,9 @@ export const useVoiceAgent = (getSession: TGetSession, options: TVoiceOptions) =
     setError(""); setPhase("requesting"); setConnected(true);
     let stream: MediaStream | undefined;
     try {
+      await closing.current;
+      if (abort.signal.aborted) return;
+      setCaptions([]);
       if (!navigator.mediaDevices?.getUserMedia || typeof RTCPeerConnection === "undefined") throw new Error("Live voice requires a secure browser with microphone access.");
       const session = await latest.current.getSession();
       if (abort.signal.aborted) return;
@@ -106,21 +113,23 @@ export const useVoiceAgent = (getSession: TGetSession, options: TVoiceOptions) =
         void audio.play().catch(() => { if (live.current === call) setError("Tap the page and reconnect voice to hear the interviewer."); });
       };
       peer.onconnectionstatechange = () => {
-        if (live.current === call && ["failed", "closed", "disconnected"].includes(peer.connectionState)) close();
+        if (live.current === call && ["failed", "closed", "disconnected"].includes(peer.connectionState)) close("Voice disconnected. Restart voice or continue by typing.");
       };
-      channel.onclose = () => { if (live.current === call) close(); };
+      channel.onclose = () => { if (live.current === call) close("Voice disconnected. Restart voice or continue by typing."); };
       channel.onopen = () => { if (live.current === call) { clearTimeout(call.timer); setPhase("idle"); } };
       channel.onmessage = ({ data }) => {
         if (typeof data !== "string" || data.length > 160000) return;
         try {
-          const event = JSON.parse(data) as TLiveEvent;
-          if (event.type === "session.closed") close(); else handle(call, event);
+          const event: unknown = JSON.parse(data);
+          if (event && typeof event === "object" && "type" in event && event.type === "session.closed") close();
+          else handle(call, event);
         } catch { /* Ignore malformed events. */ }
       };
       await peer.setLocalDescription(await peer.createOffer());
       const answer = await connectInterview(session, peer.localDescription!.sdp, abort.signal);
       if (live.current !== call) { void closeVoice(session, answer.lease).catch(() => {}); return; }
       call.lease = answer.lease;
+      call.preview = createVoicePreview(answer.lease);
       call.timer = setTimeout(() => { if (live.current === call) { close(); setError("Voice could not connect. Try again or type your message."); } }, 15000);
       await peer.setRemoteDescription({ type: "answer", sdp: answer.sdp });
     } catch (cause) {
@@ -135,7 +144,6 @@ export const useVoiceAgent = (getSession: TGetSession, options: TVoiceOptions) =
     enabled.current = value; setVoiceEnabled(value);
     try { sessionStorage.setItem("copitch.voice.read-aloud", value ? "on" : "off"); } catch { /* Optional preference. */ }
     if (live.current) live.current.audio.muted = !value;
-    if (!value) setSpeaking(false);
   };
-  return { speaking, handsFree, setHandsFree, phase, voiceEnabled, enableVoice, error };
+  return { captions, replying, handsFree, setHandsFree, phase, voiceEnabled, enableVoice, error };
 };

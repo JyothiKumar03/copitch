@@ -6,6 +6,7 @@ export type TSourcePolicy = "files_only" | "public_search";
 export type TResearchBrief = {
   brief_id: string;
   summary: string;
+  intent?: TPitchIntent;
   question: string | null;
   spoken_prompt?: string;
   history?: TInterviewMessage[];
@@ -19,12 +20,14 @@ export type TResearchResult = {
 
 export type TSavedBrief = TResearchBrief & { source_ids?: string[]; sources?: TUploadedSource[]; source_policy: TSourcePolicy; materials: string; urls: string[] };
 export type TStudioPhase = "interview" | "proposed" | "researching" | "done";
+export type TPitchIntent = { subject: string; audience: string; outcome: string; deliverable: string };
 export type TResearchProposal = {
   proposal_id: string;
   summary: string;
   queries: string[];
   urls: string[];
   source_policy: TSourcePolicy;
+  intent?: TPitchIntent;
 };
 export type TProposalChoice = "approve" | "edit";
 export type TResearchWorkspace = {
@@ -32,6 +35,9 @@ export type TResearchWorkspace = {
   proposal?: TResearchProposal | null;
   state?: {
     reply_language: string | null;
+    last_language?: string;
+    goal?: string | null;
+    proposal_heard?: boolean;
     proposal_turn_id?: string | null;
     materials: string;
     source_ids: string[];
@@ -66,7 +72,7 @@ export type TResearchJob = {
 
 export type TInterviewStart = { greeting: string; workspace: TResearchWorkspace };
 export type TInterviewMessage = { role: "host" | "assistant"; text: string; turn_id?: string; created_at?: number; intent?: string; answer_to?: string; option_id?: string;
-  voice_items?: string[] };
+  voice_items?: string[]; language?: string };
 
 export type TUploadedSource = {
   source_id: string;
@@ -82,7 +88,7 @@ export type TResearchActivity = {
     "verified" | "fallback" | "completed" | "failed" | "needs_input" | "superseded";
   label: string;
 };
-export type TInstrumentState = "ready" | "connecting" | "listening" | "recording" | "transcribing" | "thinking" | "speaking" | "researching" | "complete";
+export type TInstrumentState = "ready" | "connecting" | "listening" | "recording" | "transcribing" | "thinking" | "replying" | "speaking" | "researching" | "complete";
 
 
 export type TSourceCall = {

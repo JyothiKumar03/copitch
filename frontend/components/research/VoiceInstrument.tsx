@@ -1,27 +1,26 @@
+import { AudioLines, Mic, MicOff } from "lucide-react";
+import { cn } from "@/lib/utils";
 import type { TInstrumentState } from "@/types/research";
 
 const labels: Record<TInstrumentState, string> = {
-  ready: "Ready when you are", connecting: "Connecting", listening: "Listening for your voice",
+  ready: "Mic off", connecting: "Connecting", listening: "Mic on",
   recording: "Listening to you", transcribing: "Transcribing your turn", thinking: "Preparing a reply",
-  speaking: "Speaking", researching: "Research in progress", complete: "Context ready",
+  speaking: "Speaking", replying: "Replying in text", researching: "Research in progress", complete: "Research complete",
 };
 
-const rings = Array.from({ length: 26 }, (_, index) => {
-  const fraction = index / 25;
-  return {
-    transform: `rotate(${-60 + index * 4.8}deg) scale(${0.35 + fraction * .65}, ${1 - fraction * .26})`,
-    opacity: .4 + .6 * Math.sin(fraction * Math.PI),
-  };
-});
-
-export const VoiceInstrument = ({ state }: { state: TInstrumentState }) => (
-  <section className="voice-instrument" data-state={state} aria-label="Voice agent">
-    <div className="instrument-orb" aria-hidden="true">
-      <div className="instrument-weave">{rings.map((style, index) => <i key={index} style={style} />)}</div>
+export const VoiceInstrument = ({ state, micOpen }: { state: TInstrumentState; micOpen: boolean }) => {
+  const Icon = state === "recording" ? Mic : AudioLines;
+  return <div className="flex min-w-0 items-center gap-1.5 sm:gap-3" aria-label="Voice agent">
+    <span className={cn("voice-indicator grid size-7 shrink-0 place-items-center rounded-lg bg-secondary text-primary lg:size-9",
+      state === "recording" && "bg-live/12 text-live")}>
+      <Icon size={17} aria-hidden="true" />
+    </span>
+    <div className="min-w-0">
+      <p className="text-sm font-semibold leading-tight">Voice agent</p>
+      <p role="status" className={cn("mt-0.5 text-xs leading-tight text-muted-foreground", state === "recording" && "text-live")}>{labels[state]}</p>
+      {state !== "ready" && state !== "connecting" && state !== "listening" && <p className="mt-1 hidden items-center gap-1 text-xs text-muted-foreground lg:flex">
+        {micOpen ? <Mic size={11} aria-hidden="true" /> : <MicOff size={11} aria-hidden="true" />}{micOpen ? "Mic on" : "Mic off"}
+      </p>}
     </div>
-    <div className="instrument-caption">
-      <span className="font-display text-3xl leading-none">copitch</span>
-      <span className="instrument-state" role="status">{labels[state]}</span>
-    </div>
-  </section>
-);
+  </div>;
+};
