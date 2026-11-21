@@ -15,6 +15,10 @@ const deck: TDeck = {
       highlights: ["4 of 20 enterprise trials converted.", "Across the full sample, 10 of 100 converted."], narration: "PRIVATE_AUDIO_B", evidence_ids: ["M1", "M2"] },
     { slide_id: "c", layout: "takeaway", title: "Review setup before expanding <the pilot>",
       highlights: ["Check the first-run experience.", "Compare the next cohort against the same denominator."], narration: "PRIVATE_AUDIO_C", evidence_ids: ["M1"] },
+    { slide_id: "d", layout: "evidence", title: "Conversion changed by cohort", highlights: [], narration: "PRIVATE_AUDIO_D",
+      evidence_ids: ["M1"], chart_period: "FY2025/26", template: { type: "bar_chart", unit: "percentage points", points: Array.from({ length: 12 }, (_, i) => ({ label: `Cohort ${i + 1}`, value: i - 3 })) } },
+    { slide_id: "e", layout: "evidence", title: "Paid orders rose in February", highlights: ["Track repeat orders next."],
+      narration: "PRIVATE_AUDIO_E", evidence_ids: ["M2"], template: { type: "line_chart", unit: "orders", points: [{ label: "January", value: 14 }, { label: "February", value: 20 }] } },
   ],
 };
 // Exercise the accepted limits for host-authored copy, including four full-length highlight rows.
@@ -68,7 +72,12 @@ try {
       }));
       assert.ok(sizes.width <= width + 1 && !sizes.clipping, "Content overflow at width " + width);
       assert.ok(sizes.heights.length >= deck.slides.length, "Missing slide sections");
-      if (width >= 1000) assert.ok(sizes.heights.every(h => h <= height + 1), "Projector slide spills onto next screen");
+      assert.equal(await viewer.locator('[data-composition="visual"] .template-chart-mark').count(), 12);
+      assert.equal(await viewer.locator('[data-composition="visual"] .slide-points').count(), 0);
+      assert.equal(await viewer.getByText("percentage points · FY2025/26", { exact: true }).count(), 1);
+      assert.equal(await viewer.locator('[data-composition="mixed"] svg circle').count(), 2);
+      assert.equal(await viewer.locator('[data-composition="mixed"] .slide-points li').count(), 1);
+      if (width >= 1000) assert.ok(sizes.heights.every(h => h <= height + 1), `Projector slide exceeds ${height}px: ${sizes.heights.join(", ")}`);
       console.log("PASS standalone HTML at " + width + "×" + height);
     }
     assert.equal(external, 0, "Standalone HTML depends on network resources");

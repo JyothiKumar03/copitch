@@ -2,18 +2,19 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { cp, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { chromium, type Page } from "playwright";
 
 const directory = await mkdtemp(join(tmpdir(), "copitch-studio-check-"));
-const apiPort = Number(process.env.STUDIO_CHECK_API_PORT || 3191);
-const webPort = Number(process.env.STUDIO_CHECK_WEB_PORT || 3190);
+const apiPort = Number(process.env.STUDIO_CHECK_API_PORT || 3491);
+const webPort = Number(process.env.STUDIO_CHECK_WEB_PORT || 3490);
 const api = "http://127.0.0.1:" + apiPort;
 const web = "http://127.0.0.1:" + webPort;
 const env = { ...process.env, NODE_ENV: "development", OPENAI_API_KEY: "", CORS_ORIGIN: web, NEXT_PUBLIC_API_URL: api, NEXT_TELEMETRY_DISABLED: "1" };
-const startApi = () => spawn("bun", ["backend/tests/fixtures/studio-api.ts", join(directory, "check.sqlite"), String(apiPort), web], { env, stdio: ["ignore", "ignore", "inherit"] });
+const startApi = () => spawn(process.execPath, ["backend/tests/fixtures/studio-api.ts", join(directory, "check.sqlite"), String(apiPort), web],
+  { env, stdio: ["ignore", process.env.TRACE_LOGS === "1" ? "inherit" : "ignore", "inherit"] });
 const ready = async (url: string, child: ChildProcess) => {
   for (let i = 0; i < 160; i++) {
     if (child.exitCode !== null) throw Error("Fixture process exited with code " + child.exitCode);
@@ -44,12 +45,21 @@ const stop = async (child: ChildProcess) => {
   if (child.exitCode !== null || child.signalCode !== null) return;
   const exited = once(child, "exit");
   child.kill();
-  await exited;
+  const force = setTimeout(() => child.kill("SIGKILL"), 1500);
+  try { await exited; } finally { clearTimeout(force); }
 };
+const webDirectory = join(directory, "frontend");
+await cp("frontend", webDirectory, { recursive: true,
+  filter: path => !["node_modules", ".next", "tsconfig.tsbuildinfo"].includes(basename(path)) && !basename(path).startsWith(".env") });
+await cp("shared", join(directory, "shared"), { recursive: true });
+await cp("tsconfig.base.json", join(directory, "tsconfig.base.json"));
+await symlink(resolve("frontend/node_modules"), join(webDirectory, "node_modules"));
 let server = startApi();
-const next = spawn(process.execPath, ["node_modules/next/dist/bin/next", "dev", "--webpack", "--hostname", "127.0.0.1", "--port", String(webPort)], { cwd: "frontend", env, stdio: ["ignore", "ignore", "inherit"] });
+const next = spawn("node", ["node_modules/next/dist/bin/next", "dev", "--webpack", "--hostname", "127.0.0.1", "--port", String(webPort)],
+  { cwd: webDirectory, env, stdio: ["ignore", "ignore", "inherit"] });
 try {
   await Promise.all([ready(api + "/api/health", server), ready(web + "/research", next)]);
+  await ready(web + "/deck-render-check", next);
   const browser = await chromium.launch({ channel: process.env.DECK_BROWSER_CHANNEL || "chrome" });
   try {
     const owner = "owner-" + crypto.randomUUID() + "@example.test";
@@ -106,29 +116,10 @@ try {
     await signIn(reopened, owner, password, false);
     await reopened.getByRole("link", { name: "November revenue" }).click();
     assert.equal(reopened.url(), projectUrl);
-    const streamed = reopened.waitForResponse(response => response.url().endsWith("/context.md") &&
-      response.request().headers().accept === "text/event-stream");
-    await reopened.getByRole("button", { name: "context.md", exact: true }).click({ timeout: 45000 });
-    const contextResponse = await streamed;
-    assert.equal(contextResponse.status(), 200);
-    assert.match(contextResponse.headers()["content-type"], /^text\/event-stream/);
-    const artifact = reopened.getByRole("article", { name: "Context document" });
-    await artifact.getByRole("figure").waitFor();
-    await artifact.getByText("Chart data and sources").click();
-    const values = await artifact.getByRole("table").innerText();
-    assert.match(values, /January 2025/);
-    assert.match(values, /1,?200/);
-    assert.match(values, /1,?500/);
-    await artifact.getByRole("button", { name: "Markdown", exact: true }).click();
-    const source = await artifact.getByLabel("Markdown source").textContent();
-    assert.ok(source);
-    assert.match(source, /<graph>[^\n]*<\/graph>/);
-    assert.doesNotMatch(source, /^## (?:Talk track|Speaker notes)\b/im);
-    const download = reopened.waitForEvent("download");
-    await artifact.getByRole("button", { name: "Download context.md" }).click();
-    const file = await (await download).path();
-    assert.ok(file);
-    assert.deepEqual(await readFile(file), Buffer.from(source));
+    const slideCount = reopened.getByRole("log", { name: "Conversation messages" }).getByRole("spinbutton", { name: "How many slides?", exact: true });
+    await slideCount.waitFor({ timeout: 45_000 });
+    assert.equal(await reopened.getByRole("button", { name: /context\.md/i }).count(), 0);
+    assert.equal(await reopened.getByRole("article", { name: "Context document" }).count(), 0);
     const session = new URL(projectUrl).searchParams.get("project");
     const workspace = await returning.request.get(api + "/api/sessions/" + session + "/interview/workspace");
     const state = await workspace.json();
@@ -141,6 +132,20 @@ try {
     if (process.env.STUDIO_CHECK_SCREENSHOT) await reopened.screenshot({ path: process.env.STUDIO_CHECK_SCREENSHOT });
     const reads: number[] = [];
     const artifactUrl = api + "/api/sessions/" + session + "/research/" + state.research.research_id + "/context.md";
+    const contextResponse = await returning.request.get(artifactUrl);
+    assert.equal(contextResponse.status(), 200);
+    const source = await contextResponse.text();
+    assert.match(source, /<graph>[^\n]*<\/graph>/);
+    assert.match(source, /January 2025/);
+    assert.match(source, /1,?200/);
+    assert.match(source, /1,?500/);
+    assert.doesNotMatch(source, /^## (?:Talk track|Speaker notes)\b/im);
+    const stream = await returning.request.get(artifactUrl, { headers: { Accept: "text/event-stream" } });
+    assert.match(stream.headers()["content-type"], /^text\/event-stream/);
+    const events = await stream.text();
+    const streamed = Array.from(events.matchAll(/^event: delta\ndata: (.+)$/gm), match => JSON.parse(match[1]).text).join("");
+    assert.equal(streamed, source);
+    assert.match(events, /^event: done$/m);
     for (let index = 0; index < 20; index++) {
       const before = performance.now();
       const response = await returning.request.get(artifactUrl);
@@ -149,24 +154,88 @@ try {
     }
     reads.sort((a, b) => a - b);
     console.log("Local authenticated Markdown read, 20 warm samples (ms):", { p50: reads[9].toFixed(1), p95: reads[18].toFixed(1) });
-    await reopened.getByRole("button", { name: "Close artifact" }).click();
-    await reopened.getByText("Presentation options", { exact: true }).click();
-    await reopened.getByRole("button", { name: "Prepare slides", exact: true }).click();
-    await reopened.getByRole("heading", { name: "Presentation preview" }).waitFor();
+    assert.equal(await reopened.getByRole("heading", { name: "Prepare your presentation" }).count(), 0);
+    assert.equal(await reopened.getByRole("button", { name: "Open original research slides" }).count(), 0);
+    assert.equal(await reopened.getByLabel("Audience", { exact: true }).count(), 0);
+    assert.equal(await reopened.getByLabel("Speaking time (minutes)").count(), 0);
+    const generate = reopened.getByRole("button", { name: "Generate slides", exact: true });
+    await slideCount.fill("13");
+    assert.equal(await generate.isEnabled(), false);
+    await slideCount.fill("1.5");
+    assert.equal(await generate.isEnabled(), false);
+    await slideCount.fill("2");
+    const planned = reopened.waitForResponse(response => response.url().endsWith("/decks") && response.request().method() === "POST").catch(cause => {
+      throw Error("Timed out waiting for deck preparation to be queued", { cause });
+    });
+    const preparationPoll = /\/decks\/preparations\/[0-9a-f-]{36}$/i;
+    // Hold only the original page's first status read so reload always happens before that page sees completion.
+    await reopened.route(preparationPoll, () => {}, { times: 1 });
+    const beganPolling = reopened.waitForRequest(preparationPoll);
+    await generate.click();
+    const preparationResponse = await planned;
+    assert.equal(preparationResponse.status(), 202, await preparationResponse.text());
+    assert.deepEqual(preparationResponse.request().postDataJSON(), { research_id: state.research.research_id, pitch: { slide_count: 2 } });
+    const preparation = await preparationResponse.json();
+    assert.match(preparation.job_id, /^[0-9a-f-]{36}$/i);
+    assert.ok(["queued", "running"].includes(preparation.status));
+    const repeated = await returning.request.post(preparationResponse.url(), { data: preparationResponse.request().postDataJSON() });
+    assert.ok([200, 202].includes(repeated.status()), await repeated.text());
+    const repeatedResult = await repeated.json();
+    if (repeated.status() === 202) assert.equal(repeatedResult.job_id, preparation.job_id);
+    const preparationUrl = api + "/api/sessions/" + session + "/decks/preparations/" + preparation.job_id;
+    assert.equal((await beganPolling).url(), preparationUrl);
+    await reopened.reload({ waitUntil: "domcontentloaded" });
+    await reopened.getByRole("heading", { name: "Presentation", exact: true }).waitFor();
+    const preview = reopened.getByRole("heading", { name: "Presentation preview" });
+    await preview.waitFor({ timeout: 100_000 }).catch(async cause => {
+      const response = await returning.request.get(preparationUrl, { timeout: 5_000 });
+      const result = await response.json();
+      throw Error(`Presentation preview unavailable after preparation returned ${response.status()}: ${result.status} ${result.error ?? ""}`, { cause });
+    });
+    const preparedResponse = await returning.request.get(preparationUrl);
+    assert.equal(preparedResponse.status(), 200);
+    const prepared = await preparedResponse.json();
+    assert.equal(prepared.job_id, preparation.job_id);
+    assert.equal(prepared.status, "completed");
+    const deck = prepared.deck;
+    assert.ok(deck);
+    if (repeated.status() === 200) assert.equal(repeatedResult.deck_id, deck.deck_id);
+    assert.equal(deck.research_id, state.research.research_id);
+    assert.equal(deck.render_review?.status, "passed");
+    assert.ok(deck.render_review.rounds >= 1 && deck.render_review.rounds <= 3);
+    console.log(`PASS reloading during preparation recovered a deck that passed browser review in ${deck.render_review.rounds} round(s)`);
+    assert.ok(deck.slides.length >= 1 && deck.slides.length <= 2);
+    assert.ok(deck.slides.some((slide: { template?: { points?: { value: number }[] } }) =>
+      slide.template?.points?.some(point => point.value === 1200) && slide.template.points.some(point => point.value === 1500)),
+    "Slide plan should reuse the verified research series");
     await reopened.getByRole("heading", { name: "Private narration" }).waitFor();
+    assert.equal(await reopened.getByRole("button", { name: /Download plan|Share/i }).count(), 0);
     const deckDownload = reopened.waitForEvent("download");
     await reopened.getByRole("button", { name: "Download offline slides" }).click();
     const deckFile = await (await deckDownload).path();
     assert.ok(deckFile);
     const deckHtml = await readFile(deckFile, "utf8");
     assert.match(deckHtml, /slide-shell/);
+    assert.match(deckHtml, /template-chart/);
+    assert.match(deckHtml, /1,200/);
+    assert.match(deckHtml, /1,500/);
     assert.doesNotMatch(deckHtml, /Private narration|<script\b/i);
-    const painted = reopened.waitForResponse(response => response.url().endsWith("/api/audience/paint") && response.status() === 204);
+    const painted = reopened.waitForResponse(response => response.url().endsWith("/api/audience/paint")).catch(cause => {
+      throw Error("Timed out waiting for host slide paint", { cause });
+    });
     await reopened.getByRole("button", { name: "Approve and present" }).click();
     await reopened.getByRole("heading", { name: "Live presentation" }).waitFor();
-    await painted;
+    assert.equal((await painted).status(), 204);
+    assert.equal(await returning.pages().length, 1);
+    assert.equal(await reopened.getByLabel("Go to slide").count(), 0);
+    assert.equal(await reopened.getByRole("button", { name: /Share|Audience/i }).count(), 0);
     await reopened.getByRole("button", { name: "Exit live view" }).click();
-    await reopened.getByRole("heading", { name: "Presentation preview" }).waitFor();
+    await preview.waitFor();
+    await reopened.getByRole("button", { name: "Back to conversation" }).click();
+    await slideCount.waitFor();
+    await reopened.getByLabel("Prepared presentations").selectOption(deck.deck_id);
+    await preview.waitFor();
+    assert.equal((await returning.request.get(web + "/audience")).status(), 404);
     console.log("PASS signed-in context to deck review, private narration, offline HTML, approved controller start, and matching stage paint");
     const second = await browser.newContext();
     const other = await second.newPage();
@@ -174,6 +243,8 @@ try {
     assert.equal(await other.getByRole("link", { name: "November revenue" }).count(), 0);
     const denied = await second.request.get(api + "/api/sessions/" + session + "/research/" + state.research.research_id + "/context.md");
     assert.ok([401, 403, 404].includes(denied.status()));
+    const preparationDenied = await second.request.get(preparationUrl);
+    assert.ok([401, 403, 404].includes(preparationDenied.status()));
     await other.getByLabel("Project name").fill("Mixed units");
     await other.getByRole("button", { name: "New project" }).click();
     await other.getByRole("button", { name: /Public research allowed/ }).click();
@@ -181,14 +252,14 @@ try {
     await other.getByLabel("Your message").fill("Review the reported revenue for the board. Ask them to approve the pilot.");
     await other.getByRole("button", { name: "Send", exact: true }).click();
     await other.getByRole("button", { name: "Start research", exact: true }).click();
-    await other.getByRole("button", { name: "context.md", exact: true }).click();
-    const mixed = other.getByRole("article", { name: "Context document" });
-    await mixed.getByRole("button", { name: "Markdown", exact: true }).click();
-    const mixedSource = await mixed.getByLabel("Markdown source").innerText();
+    await other.getByRole("spinbutton", { name: "How many slides?", exact: true }).waitFor({ timeout: 45_000 });
+    const mixedSession = new URL(other.url()).searchParams.get("project");
+    const mixedWorkspace = await (await second.request.get(api + "/api/sessions/" + mixedSession + "/interview/workspace")).json();
+    const mixedSource = await (await second.request.get(api + "/api/sessions/" + mixedSession + "/research/" + mixedWorkspace.research.research_id + "/context.md")).text();
     assert.match(mixedSource, /EUR/);
     assert.doesNotMatch(mixedSource, /<graph>/);
     console.log("PASS denied microphone to typed briefing, incomparable graph units withheld");
-    console.log("PASS private project, desktop layout, files-only job, process restart, fresh-browser reopen, context SSE, chart data, exact Markdown download, cross-account denial");
+    console.log("PASS private project, desktop layout, files-only job, process restart, fresh-browser reopen, hidden private context SSE, chart data, cross-account denial");
   } finally { await browser.close(); }
 } finally {
   await Promise.all([stop(next), stop(server)]);
