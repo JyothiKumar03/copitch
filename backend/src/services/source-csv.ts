@@ -32,6 +32,12 @@ const period = (label: string) => {
     if (new Date(thursday).getUTCFullYear() === Number(week[1])) return {date:thursday,scale:"week"};
     return;
   }
+  const relative_week = /^week\s+(0|[1-9]\d*)$/i.exec(label);
+  if (relative_week) {
+    const date = count(relative_week[1]);
+    if (date !== undefined) return { date, scale:"relative week" };
+    return;
+  }
   const standalone_quarter = /^Q([1-4])$/i.exec(label);
   if (standalone_quarter) return {date:Number(standalone_quarter[1]),scale:"quarter without year"};
   const quarter = /^(?:(\d{4})[ -]?Q([1-4])|Q([1-4])[ -]?(\d{4}))$/i.exec(label);
@@ -74,10 +80,16 @@ const attach_observations = (header: string[], names: string[], data: string[][]
   const periods = labels.map(label => temporal ? period(label) : undefined);
   if (temporal && (periods.some(p => !p) || new Set(periods.map(p => p?.scale)).size !== 1 ||
       new Set(periods.map(p => p?.date)).size !== periods.length)) return;
+  const unit_column = names.indexOf("unit");
+  const units = unit_column < 0 ? [] : records.map(row => data[row.number-2][unit_column].trim());
+  const declared_unit = units[0];
+  if (unit_column >= 0 && (!declared_unit || units.some(unit => unit !== declared_unit))) return;
   for (const [column,name] of names.entries()) {
-    if (column === axis || !/\p{L}/u.test(name) || /(?:^|\W)(id|ids|identifier|code|zip|postal|sku|uuid|phone|number of record|serial|latitude|longitude|index)(?:$|\W)/.test(name) ||
+    if (column === axis || column === unit_column || !/\p{L}/u.test(name) || /(?:^|\W)(id|ids|identifier|code|zip|postal|sku|uuid|phone|number of record|serial|latitude|longitude|index)(?:$|\W)/.test(name) ||
         /^(?:[a-z]+id|row number|account number|phone number|order number|invoice number|customer number|tracking number)$/.test(name)) continue;
-    const values = records.map(row => numeric_cell(data[row.number-2][column],column_unit(name)));
+    const header_unit = column_unit(name);
+    if (declared_unit && header_unit && declared_unit !== header_unit) continue;
+    const values = records.map(row => numeric_cell(data[row.number-2][column],declared_unit ?? header_unit));
     if (values.some(v => !v) || new Set(values.map(v => v?.unit)).size !== 1) continue;
     records.forEach((row,i) => {
       const observation = values[i]!;
