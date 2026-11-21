@@ -125,3 +125,5 @@ main:has(.studio-cockpit)>header { flex:none; }
 .question-reply { margin-top:.4rem; gap:.9rem; }
 .question-reply button,.replying-to { min-height:2rem; color:var(--plum); font-size:.78rem; }
 .replying-to { justify-content:space-between; padding:.15rem .3rem; }
+.approval-sources { margin:.3rem 0 .7rem; color:var(--ink-muted); font-size:.8rem; overflow-wrap:anywhere; }
+.approval-sources ul { padding-left:1rem; list-style:disc; }

@@ -88,6 +88,8 @@ export type TTurnInput = {
   turn_id: string;
   replace_scope?: boolean;
   answer_to?: string;
+  heard_question_id?: string;
+  heard_turn_id?: string;
   option_id?: string;
   input: "typed" | "speech";
   message: string;

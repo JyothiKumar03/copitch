@@ -21,3 +21,7 @@ export const fetchSourceCalls = async (session: TResearchSession, signal: AbortS
       ["running", "succeeded", "failed"].includes(call.status))) throw new Error("File activity is unavailable.");
   return value.calls;
 };
+
+export const acknowledgeHeardQuestion = async (session: TResearchSession, requestId: string, turnId: string) => {
+  await request(`/api/sessions/${encodeURIComponent(session.session_id)}/interview/heard`, session, { request_id: requestId, turn_id: turnId });
+};

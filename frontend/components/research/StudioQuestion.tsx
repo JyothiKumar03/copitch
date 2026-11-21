@@ -1,22 +1,27 @@
 import { Check, CornerDownLeft, MessageCircleQuestion, Mic } from "lucide-react";
-import type { TInterviewMessage, TStudioQuestion } from "@/types/research";
+import type { TInterviewMessage, TSavedBrief, TStudioQuestion } from "@/types/research";
 
 type TQuestionProps = {
   question: TStudioQuestion;
   pendingId?: string;
+  scope: TSavedBrief | null;
   busy: boolean;
   history: TInterviewMessage[];
   onChoose: (question: TStudioQuestion, id: string, label: string) => void;
   onCompose: (question: TStudioQuestion, spoken: boolean) => void;
 };
 
-export const StudioQuestion = ({ question, pendingId, busy, history, onChoose, onCompose }: TQuestionProps) => {
+export const StudioQuestion = ({ question, pendingId, scope, busy, history, onChoose, onCompose }: TQuestionProps) => {
   const open = question.request_id === pendingId;
   const answer = history.find(turn => turn.role === "host" && turn.answer_to === question.request_id);
   return (
   <section className={"studio-question" + (open ? "" : " resolved")} aria-labelledby={"ask-" + question.request_id}>
     <div className="question-state"><MessageCircleQuestion size={15} /><span>{open ? "Your input" : answer ? "Answered" : "Closed"}</span></div>
     <h3 id={"ask-" + question.request_id}>{question.question}</h3>
+    {open && question.kind === "approval" && scope && <div className="approval-sources">
+      <p>{scope.source_policy === "files_only" ? "Only your materials will be used." : "Public research is included."}</p>
+      <ul>{[...(scope.sources ?? []).map(file => file.filename), ...scope.urls, ...scope.public_queries].map((item, index) => <li key={index}>{item}</li>)}</ul>
+    </div>}
     {question.options.length > 0 && <div className="question-options" role="group" aria-label="Suggested answers">
       {question.options.map(option => <button type="button" key={option.id} disabled={!open || busy}
         aria-pressed={answer?.option_id === option.id} onClick={() => onChoose(question, option.id, option.label)}>

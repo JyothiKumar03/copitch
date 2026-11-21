@@ -8,9 +8,10 @@ import { DeckWorkspace } from "@/components/deck/DeckWorkspace";
 import { useBriefDictation } from "@/hooks/research/use-brief-dictation";
 import { useStudioEvents } from "@/hooks/research/use-studio-events";
 import { useResearch, useSavedWorkspace } from "@/hooks/research/use-research";
+import { acknowledgeHeardQuestion } from "@/lib/studio-turns";
 import { savedSession, restoreSourceSelection, saveSourceSelection } from "@/lib/research";
 import { DEFAULT_LANGUAGE, type TInterviewLanguage } from "../../../shared/languages";
-import type { TResearchWorkspace, TStudioQuestion, TTurnInput, TUploadedSource } from "@/types/research";
+import type { TInterviewMessage, TResearchWorkspace, TStudioQuestion, TTurnInput, TUploadedSource } from "@/types/research";
 import { ResearchProgress, SourceExecution, TurnExecution } from "./ResearchProgress";
 import { ResearchMemo } from "./ResearchMemo";
 import { PitchFileViewer } from "./PitchFileViewer";
@@ -41,7 +42,7 @@ const Interview = ({ initial }: { initial: TResearchWorkspace }) => {
   const [replacingScope, setReplacingScope] = useState(false);
   const [message, setMessage] = useState("");
   const [answerTo, setAnswerTo] = useState<string | null>(null);
-  const draftQuestion = useRef<string | null>(null);
+  const heardQuestion = useRef<{ id: string; turnId: string; acknowledgement: Promise<boolean> } | null>(null);
   const [language, setLanguage] = useState<TInterviewLanguage>(initial.context?.language_preference ?? DEFAULT_LANGUAGE);
   const [sources, setSources] = useState<TUploadedSource[]>(() => {
     const saved = restoreSourceSelection(initial.brief);
@@ -77,25 +78,37 @@ const Interview = ({ initial }: { initial: TResearchWorkspace }) => {
   const voice = useBriefDictation(service.getSession, {
     language, suspended: !!pending || service.upload.isPending,
     onFinal: (text: string, turnId: string) => submit(text, "speech", turnId, answerTo ?? undefined),
+    onReplyPlayback: (turnId: string, state: "playing" | "completed" | "interrupted") => {
+      if (state !== "completed") { heardQuestion.current = null; return; }
+      const current = client.getQueryData<TResearchWorkspace>(["host-workspace", session?.session_id])?.pending_question;
+      if (current?.turn_id !== turnId) return;
+      const acknowledgement = service.getSession().then(active => acknowledgeHeardQuestion(active, current.request_id, turnId)).then(() => true, () => false);
+      heardQuestion.current = { id: current.request_id, turnId, acknowledgement };
+    },
   });
   const submit = (text: string, input: "typed" | "speech" = "typed", turnId: string = crypto.randomUUID(), questionId?: string, optionId?: string) => {
     if (!text.trim() || sending.current || parsing.current) return;
     const payload: TTurnInput = { turn_id: turnId, message: text.trim(), input,
       ...(questionId && { answer_to: questionId }), ...(optionId && { option_id: optionId }),
       ...(running && replacingScope && { replace_scope: true }), ...(brief && { brief_id: brief.brief_id }), source_policy: policy, materials, urls, source_ids: sources.map(s => s.source_id) };
-    execute(payload);
+    const heard = input === "speech" && !questionId ? heardQuestion.current : null;
+    if (heard) { payload.heard_question_id = heard.id; payload.heard_turn_id = heard.turnId; }
+    execute(payload, heard?.acknowledgement);
   };
-  const execute = (payload: TTurnInput) => {
+  const execute = async (payload: TTurnInput, acknowledgement?: Promise<boolean>) => {
     if (sending.current) return;
     sending.current = true;
     setFailedTurn(null); setNotice(""); setPending(payload);
     if (payload.input === "typed" && message.trim() === payload.message) setMessage("");
     voice.stopPlayback();
+    if (acknowledgement && !await acknowledgement) {
+      delete payload.heard_question_id; delete payload.heard_turn_id;
+    }
     service.turn.mutate(payload, {
       onSuccess(reply) {
         const next = reply.workspace;
         client.setQueryData(["host-workspace", session?.session_id], next);
-        setAnswerTo(null); draftQuestion.current = null;
+        setAnswerTo(null);
         if (payload.option_id) composer.current?.focus();
         setReplacingScope(false); setLanguage(next.context?.language_preference ?? reply.language);
         setPolicy(next.context?.source_policy ?? next.brief?.source_policy ?? policy);
@@ -105,10 +118,10 @@ const Interview = ({ initial }: { initial: TResearchWorkspace }) => {
       },
       onError(error) {
         if ("status" in error && error.status === 409) {
-          setAnswerTo(null); draftQuestion.current = null; setMessage(payload.message);
+          setAnswerTo(null); setMessage(payload.message);
           void client.invalidateQueries({ queryKey: ["host-workspace", session?.session_id] });
         } else setFailedTurn(payload);
-        setNotice(error.message);
+        setNotice("status" in error && error.status === 409 ? "The conversation changed. Review the current question before sending again." : error.message);
       },
       onSettled() { sending.current = false; setPending(null); },
     });
@@ -162,12 +175,17 @@ const Interview = ({ initial }: { initial: TResearchWorkspace }) => {
     setMaterials(value); setNotice("");
   };
   const questionProps = {
-    pendingId: workspace.pending_question?.request_id, history, busy: !!pending,
+    pendingId: workspace.pending_question?.request_id, scope: brief, history, busy: !!pending,
     onChoose: (question: TStudioQuestion, id: string, label: string) => submit(label, "typed", crypto.randomUUID(), question.request_id, id),
     onCompose: (question: TStudioQuestion, spoken: boolean) => {
-      setAnswerTo(question.request_id); draftQuestion.current = question.request_id; composer.current?.focus();
+      setAnswerTo(question.request_id); composer.current?.focus();
       if (spoken && !voice.handsFree) toggleVoice();
     },
+  };
+  const turnBody = (turn: TInterviewMessage) => {
+    if (turn.role !== "assistant") return turn.text;
+    const question = workspace.activities?.find(activity => activity.turn_id === turn.turn_id && activity.tool === "ask_input")?.question?.question;
+    return question && turn.text.endsWith(question) ? turn.text.slice(0, -question.length).trim() : turn.text;
   };
   const approvalIndex = history.findLastIndex(turn => turn.role === "assistant" &&
     (turn.intent === "approval" || /researching the scope you approved/i.test(turn.text)));
@@ -192,7 +210,7 @@ const Interview = ({ initial }: { initial: TResearchWorkspace }) => {
         <div className="chat-turns" role="log" aria-relevant="additions" aria-live="polite" aria-label="Conversation messages">
           {history.map((turn, index) => <Fragment key={(turn.turn_id ?? index) + turn.role}>
             {calls.filter(call => callIndex(call.started_at) === index).map(call => <SourceExecution key={call.call_id} call={call} />)}
-            <div className={"chat-turn " + turn.role}><small>{turn.role === "host" ? "You" : "copitch"}</small><p>{turn.text}</p></div>
+            {turnBody(turn) && <div className={"chat-turn " + turn.role}><small>{turn.role === "host" ? "You" : "copitch"}</small><p>{turnBody(turn)}</p></div>}
             {turn.role === "assistant" && workspace.activities?.filter(activity => activity.turn_id === turn.turn_id).map((activity,i) =>
               activity.tool === "ask_input" && activity.question ? <StudioQuestion key={activity.question.request_id} question={activity.question} {...questionProps} /> : <TurnExecution key={i} activity={activity} />)}
             {job && index === stepIndex && <ResearchProgress job={job} />}
@@ -234,16 +252,12 @@ const Interview = ({ initial }: { initial: TResearchWorkspace }) => {
         {failedTurn && <button onClick={() => execute(failedTurn)}>Retry message</button>}
         {notice && <button aria-label="Dismiss notice" onClick={() => setNotice("")}><X size={14} /></button>}</div>}
       {answerTo && <div className="replying-to"><span>Answering {workspace.pending_question?.question ?? "an earlier question"}</span>
-        <button type="button" aria-label="Cancel answering" onClick={() => { setAnswerTo(null); draftQuestion.current = null; }}><X size={13} /></button></div>}
-      <StudioComposer inputRef={composer} message={message} setMessage={value => {
-        if (!message && value) draftQuestion.current = workspace.pending_question?.request_id ?? null;
-        if (!value) draftQuestion.current = null;
-        setMessage(value);
-      }} sources={sources} urls={urls} materials={materials}
+        <button type="button" aria-label="Cancel answering" onClick={() => { setAnswerTo(null); }}><X size={13} /></button></div>}
+      <StudioComposer inputRef={composer} message={message} setMessage={setMessage} sources={sources} urls={urls} materials={materials}
         policy={policy} setPolicy={setPolicy} canSend={canSend} sending={!!pending} uploading={service.upload.isPending}
         attachFiles={files => void attachFiles(files)} attachUrl={attachUrl} attachText={attachText} removeFile={id => selectSources(sources.filter(s => s.source_id !== id))}
         removeUrl={url => setUrls(urls.filter(item => item !== url))} removeText={() => setMaterials("")}
-        voiceActive={voice.handsFree} toggleVoice={toggleVoice} submit={() => submit(message.trim() || "Update the research sources.", "typed", crypto.randomUUID(), answerTo ?? draftQuestion.current ?? undefined)} />
+        voiceActive={voice.handsFree} toggleVoice={toggleVoice} submit={() => submit(message.trim() || "Update the research sources.", "typed", crypto.randomUUID(), answerTo ?? undefined)} />
     </section>
     <aside className="cockpit-agent" aria-label="Agent and microphone controls"><VoiceInstrument state={instrument} />
       <div className="agent-settings"><span>Spoken replies</span><button type="button" aria-pressed={voice.voiceEnabled} onClick={() => voice.enableVoice(!voice.voiceEnabled)}>
