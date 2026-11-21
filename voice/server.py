@@ -1,31 +1,35 @@
-"""Private OpenAI adapter for host-controlled interview audio."""
+"""Private OpenAI adapter for interview audio and approved presentation narration."""
 
 import asyncio
+import hashlib
 import json
 import os
+import re
 import secrets
-import unicodedata
+from collections import OrderedDict
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 import httpx
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response, StreamingResponse
+from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
+
 MAX_AUDIO_BYTES = 8 * 1024 * 1024
+MAX_SPEECH_BYTES = 2 * 1024 * 1024
+MAX_CACHED_SPEECH_BYTES = 16 * 1024 * 1024
+MAX_CACHED_CLIPS = 64
+MAX_PENDING_CLIPS = 16
+LANGUAGE_TAG = re.compile(r"[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*")
 AUDIO_EXTENSIONS = {
     "audio/webm": "webm", "audio/mp4": "mp4", "audio/ogg": "ogg",
     "audio/mpeg": "mp3", "audio/wav": "wav", "audio/x-wav": "wav",
 }
 NO_STORE = {"Cache-Control": "no-store"}
-LANGUAGE_MANIFEST = json.loads((Path(__file__).resolve().parent.parent / "shared/languages.json").read_text())
-LANGUAGES = LANGUAGE_MANIFEST["languages"]
-
-
-def requested_language(request: Request) -> str:
-    return request.headers.get("x-interview-language", LANGUAGE_MANIFEST["default_language"])
+# Neutral on purpose: naming example words ("Hi, Hey, Hello") or languages biases what the model writes for unclear audio.
+TRANSCRIPTION_HINT = ("Transcribe exactly what is said, in the language and script it is spoken in. "
+                      "Keep English words, names and web addresses as spoken. Never translate.")
 
 
 def error_response(message: str, status: int) -> JSONResponse:
@@ -50,8 +54,6 @@ def check_access(request: Request) -> Response | None:
         return error_response("Unauthorized", 401)
     if not os.getenv("OPENAI_API_KEY"):
         return error_response("Voice provider is unconfigured", 503)
-    if requested_language(request) not in LANGUAGES:
-        return error_response("Unsupported interview language", 400)
     return None
 
 
@@ -74,36 +76,41 @@ async def provider_request(request: Request, path: str, **kwargs) -> httpx.Respo
     return result
 
 
+# The browser only hears and shows captions. Every command goes through the trusted server connection.
+BROWSER_EVENTS = [{"type": t} for t in ("session.started", "session.closed", "error",
+                                        "session.input_transcript.delta", "session.output_transcript.delta")]
+SESSION_KEYS = {"instructions", "input", "delegation"}
+
+
 async def connect(request: Request) -> Response:
+    """Start a Live session for a browser WebRTC offer, using the conversation setup Express supplies."""
     denied = check_access(request)
     if denied is not None:
         return denied
-    offer = await bounded_body(request, 65536)
-    if not offer or not offer.startswith(b"v=0") or b"m=audio " not in offer:
-        return error_response("Invalid audio offer", 400)
-    model = os.getenv("OPENAI_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe")
-    language = requested_language(request)
-    config = {"type": "transcription", "audio": {"input": {
-        "transcription": {"model": model, "language": language, "prompt": LANGUAGES[language]["transcription_prompt"]},
-        "noise_reduction": {"type": "near_field"},
-        "turn_detection": {"type": "server_vad", "silence_duration_ms": 550},
-    }}}
-    secret = await provider_request(request, "realtime/client_secrets", json={
-        "expires_after": {"anchor": "created_at", "seconds": 60}, "session": config,
-    })
-    if isinstance(secret, Response):
-        return secret
+    raw = await bounded_body(request, 262144)
     try:
-        token = secret.json()["value"]
-        if not isinstance(token, str) or not token:
-            raise ValueError()
-        answer = await request.app.state.provider.post("realtime/calls", content=offer,
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/sdp"})
-    except (ValueError, KeyError, TypeError, httpx.RequestError):
-        return error_response("Voice connection unavailable", 502)
-    if not answer.is_success or not answer.content.startswith(b"v=0") or len(answer.content) > 65536:
-        return error_response("Voice connection unavailable", 502)
-    return Response(answer.content, media_type="application/sdp", headers=NO_STORE)
+        payload = json.loads(raw or b"")
+        offer, setup = payload["sdp"], payload["session"]
+        if not isinstance(offer, str) or not offer.startswith("v=0") or "m=audio " not in offer or not isinstance(setup, dict):
+            raise ValueError
+    except (ValueError, KeyError, TypeError):
+        return error_response("Invalid voice offer", 400)
+    # Express decides what the agent knows and may do; the model, voice and browser permissions are fixed here.
+    session = {key: value for key, value in setup.items() if key in SESSION_KEYS}
+    session.update({"model": os.getenv("OPENAI_LIVE_MODEL", "gpt-live-1.1"),
+                    "audio": {"output": {"voice": os.getenv("OPENAI_SPEECH_VOICE", "marin")}},
+                    "client": {"data_channel": {"allowed_client_events": [], "allowed_server_events": BROWSER_EVENTS}}})
+    result = await provider_request(request, "live/sessions", json={"session": session, "transport": {"type": "webrtc", "sdp": offer}})
+    if isinstance(result, Response):
+        return result
+    try:
+        created = result.json()
+        session_id, answer = created["session"]["id"], created["transport"]["sdp"]
+        if not isinstance(session_id, str) or not 1 <= len(session_id) <= 160 or not answer.startswith("v=0"):
+            raise ValueError
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return error_response("Invalid voice provider answer", 502)
+    return Response(answer, media_type="application/sdp", headers={**NO_STORE, "X-Voice-Session": session_id})
 
 
 async def transcribe(request: Request) -> Response:
@@ -119,11 +126,10 @@ async def transcribe(request: Request) -> Response:
         return error_response("Audio exceeds the turn limit", 413)
     if not recording:
         return error_response("Empty recording", 400)
-    language = requested_language(request)
     result = await provider_request(
         request, "audio/transcriptions",
         data={"model": os.getenv("OPENAI_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe"), "response_format": "json",
-              "language": language, "prompt": LANGUAGES[language]["transcription_prompt"]},
+              "prompt": TRANSCRIPTION_HINT},
         files={"file": (f"turn.{extension}", recording, mime)},
     )
     if isinstance(result, Response):
@@ -137,90 +143,63 @@ async def transcribe(request: Request) -> Response:
         return error_response("No speech was recognized", 422)
     if len(text.strip()) > 6000:
         return error_response("Transcript exceeds the brief input limit", 422)
-    letters = [unicodedata.name(char, "") for char in text if char.isalpha()]
-    if letters and not any("LATIN" in name or "DEVANAGARI" in name for name in letters):
-        return error_response("Please repeat your message in English or Hindi", 422)
     return JSONResponse({"text": text.strip()}, headers=NO_STORE)
+
+
+async def render_speech(request: Request, key: str, payload: dict[str, str]) -> bytes | Response:
+    state = request.app.state
+    try:
+        result = await provider_request(request, "audio/speech", json=payload)
+        if isinstance(result, Response):
+            return result
+        content = result.content
+        media_type = result.headers.get("content-type", "").partition(";")[0].strip().lower()
+        if media_type not in ("audio/mpeg", "audio/mp3") or not 0 < len(content) <= MAX_SPEECH_BYTES:
+            return error_response("Invalid speech returned by provider", 502)
+        cache = state.speech_cache
+        cache[key] = content
+        while len(cache) > MAX_CACHED_CLIPS or sum(map(len, cache.values())) > MAX_CACHED_SPEECH_BYTES:
+            cache.popitem(last=False)
+        return content
+    finally:
+        state.pending_speech.pop(key, None)
 
 
 async def speech(request: Request) -> Response:
     denied = check_access(request)
     if denied is not None:
         return denied
-    raw = await bounded_body(request, 16384)
+    raw = await bounded_body(request, 24_576)
     if raw is None:
-        return error_response("Question exceeds the turn limit", 413)
+        return error_response("Speech request exceeds the turn limit", 413)
     try:
-        payload = json.loads(raw)
-    except (ValueError, UnicodeError):
-        return error_response("Invalid question", 400)
-    text = payload.get("text") if isinstance(payload, dict) else None
-    if not isinstance(text, str) or not 1 <= len(text.strip()) <= 1600:
-        return error_response("Invalid question", 400)
-    preparing = asyncio.create_task(prepare_speech(request, text))
+        value = json.loads(raw)
+        text = value["text"]
+        language = value.get("language", "")
+        if (not isinstance(text, str) or not text.strip() or len(text) > 4000 or
+                not isinstance(language, str) or len(language) > 35 or
+                (language and not LANGUAGE_TAG.fullmatch(language))):
+            raise ValueError
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return error_response("Invalid approved narration", 400)
 
-    async def wait_for_disconnect():
-        while (await request.receive())["type"] != "http.disconnect":
-            pass
-
-    disconnected = asyncio.create_task(wait_for_disconnect())
-    try:
-        done, _ = await asyncio.wait((preparing, disconnected), return_when=asyncio.FIRST_COMPLETED)
-        if preparing in done:
-            return await preparing
-        return error_response("Playback ended", 499)
-    finally:
-        disconnected.cancel()
-        preparing.cancel()
-        await asyncio.gather(disconnected, preparing, return_exceptions=True)
-
-
-async def prepare_speech(request: Request, text: str) -> Response:
-    client = request.app.state.provider
-    upstream = client.build_request(
-        "POST", "audio/speech", headers={"Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}"}, json={
-            "model": os.getenv("OPENAI_SPEECH_MODEL", "gpt-4o-mini-tts"),
-            "voice": os.getenv("OPENAI_SPEECH_VOICE", "alloy"),
-            "instructions": LANGUAGES[requested_language(request)]["speech_instructions"],
-            "input": text, "response_format": "mp3",
-        },
-    )
-    try:
-        result = await client.send(upstream, stream=True)
-    except httpx.RequestError:
-        return error_response("Voice provider is unavailable", 503)
-    if not result.is_success:
-        await result.aclose()
-        return error_response("Voice provider capacity exceeded" if result.status_code == 429 else "Voice provider request failed",
-                              429 if result.status_code == 429 else 502)
-    if result.headers.get("content-type", "").split(";")[0] not in {"audio/mpeg", "audio/mp3", "application/octet-stream"}:
-        await result.aclose()
-        return error_response("Voice provider returned invalid audio", 502)
-    chunks = result.aiter_bytes()
-    try:
-        first = await anext(chunks, b"")
-    except asyncio.CancelledError:
-        await result.aclose()
-        raise
-    except httpx.RequestError:
-        first = b""
-    if not first or len(first) > MAX_AUDIO_BYTES:
-        await result.aclose()
-        return error_response("Voice provider returned invalid audio", 502)
-
-    async def audio_stream():
-        size = len(first)
-        try:
-            yield first
-            async for chunk in chunks:
-                size += len(chunk)
-                if size > MAX_AUDIO_BYTES:
-                    raise ValueError("Voice output exceeds the audio limit")
-                yield chunk
-        finally:
-            await result.aclose()
-
-    return StreamingResponse(audio_stream(), media_type="audio/mpeg", headers=NO_STORE)
+    model = os.getenv("OPENAI_SPEECH_MODEL", "gpt-4o-mini-tts")
+    payload = {"model": model, "voice": os.getenv("OPENAI_SPEECH_VOICE", "marin"), "input": text,
+               "response_format": "mp3"}
+    if model not in ("tts-1", "tts-1-hd"):
+        payload["instructions"] = ("Read the input verbatim as approved presentation narration. Use a calm, natural pace. "
+                                   "Preserve the words and language changes. Do not add, paraphrase or translate any text.")
+    key = hashlib.sha256(json.dumps([language.lower(), payload], sort_keys=True).encode()).hexdigest()
+    state = request.app.state
+    if key in state.speech_cache:
+        state.speech_cache.move_to_end(key)
+        return Response(state.speech_cache[key], media_type="audio/mpeg", headers=NO_STORE)
+    if key not in state.pending_speech:
+        if len(state.pending_speech) >= MAX_PENDING_CLIPS:
+            return error_response("Voice worker is busy", 429)
+        state.pending_speech[key] = asyncio.create_task(render_speech(request, key, payload))
+    result = await asyncio.shield(state.pending_speech[key])
+    return result if isinstance(result, Response) else Response(result, media_type="audio/mpeg", headers=NO_STORE)
 
 
 def create_app(transport: httpx.AsyncBaseTransport | None = None) -> Starlette:
@@ -228,11 +207,20 @@ def create_app(transport: httpx.AsyncBaseTransport | None = None) -> Starlette:
     async def lifespan(instance: Starlette):
         async with httpx.AsyncClient(base_url="https://api.openai.com/v1/", timeout=40, transport=transport) as provider:
             instance.state.provider = provider
-            yield
+            instance.state.speech_cache = OrderedDict()
+            instance.state.pending_speech = {}
+            try:
+                yield
+            finally:
+                pending = tuple(instance.state.pending_speech.values())
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
 
     return Starlette(
         lifespan=lifespan,
-        routes=[Route("/connect", connect, methods=["POST"]), Route("/transcribe", transcribe, methods=["POST"]), Route("/speech", speech, methods=["POST"])],
+        routes=[Route("/connect", connect, methods=["POST"]), Route("/transcribe", transcribe, methods=["POST"]),
+                Route("/speech", speech, methods=["POST"])],
     )
 
 
