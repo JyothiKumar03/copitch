@@ -15,6 +15,10 @@ type TLiveHooks = {
   idle_ms?: number;
 };
 type TPlanReading = { proposal_id: string; turn_id: string; spoken_until?: number };
+// Delegation outcomes are otherwise invisible: the voice model keeps talking whatever happens. Names and outcomes only.
+const trace = (fields: Record<string, unknown>) => {
+  if (process.env.TRACE_LOGS === "1") console.log(JSON.stringify({ operation: "live.delegation", ...fields }));
+};
 // A short agent utterance followed quickly by more host speech is a backchannel ("Mm-hmm"), not a reply. Session clock, ms.
 const backchannel_ms = 1500;
 
@@ -89,18 +93,29 @@ export const create_live_interviewer = (hooks: TLiveHooks) => {
       : "Not saved: the pitch topic is still unclear. Ask the host what the pitch is about.";
   };
   const delegate = (call_id: string, name: string, raw: string) => {
-    if (!(name in tool_inputs)) { reply(call_id, "Not done: that action is not available."); return; }
+    if (!Object.hasOwn(tool_inputs, name)) { trace({ outcome: "unknown_tool" }); reply(call_id, "Not done: that action is not available."); return; }
+    trace({ tool: name, outcome: "received" });
     let parsed: unknown;
     try { parsed = JSON.parse(raw); } catch { parsed = undefined; }
     const args = tool_inputs[name as keyof typeof tool_inputs].safeParse(parsed);
-    if (!args.success) { reply(call_id, "Not done: the request was incomplete. Ask the host for what is missing."); return; }
+    if (!args.success) {
+      trace({ tool: name, outcome: "invalid_arguments", issues: args.error.issues.map(issue => issue.path.join(".") + ":" + issue.code).slice(0, 8) });
+      reply(call_id, "Not done: the request was incomplete. Ask the host for what is missing.");
+      return;
+    }
     const data = args.data as Record<string, unknown>;
     const action: TVoiceAction = name === "propose_research" ? { kind: "propose_research", goal: String(data.subject), summary: String(data.summary),
       queries: data.queries as string[], urls: data.urls as string[], factual_notes: data.factual_notes as string[] | undefined,
       intent: { subject: String(data.subject), audience: String(data.audience),
         outcome: String(data.outcome), deliverable: String(data.deliverable) } } : { kind: "start_research" };
-    try { reply(call_id, result_for(hooks.act(host, action), action.kind)); }
-    catch (cause) { reply(call_id, "Not done: " + (cause instanceof Error ? cause.message : "the change could not be saved") + "."); }
+    try {
+      const turn = hooks.act(host, action);
+      trace({ tool: name, outcome: "applied", phase: turn.phase, proposal: !!turn.proposal });
+      reply(call_id, result_for(turn, action.kind));
+    } catch (cause) {
+      trace({ tool: name, outcome: "rejected" });
+      reply(call_id, "Not done: " + (cause instanceof Error ? cause.message : "the change could not be saved") + ".");
+    }
   };
 
   const receive = async (raw: unknown) => {

@@ -65,8 +65,10 @@ export const interview_workspace = (session: string, db = database()): TIntervie
   const turns = snapshot ? db.studio.turns(session) : [];
   const history = snapshot && turns.length ? [...snapshot.prior_history, ...turns.flatMap(turn => {
     const identity = { turn_id: turn.turn_id, created_at: turn.created_at, intent: turn.intent, answer_to: turn.answer_to, option_id: turn.option_id };
-    return [{ role: "host" as const, text: turn.user_text, ...identity, ...(turn.voice_items && { voice_items: turn.voice_items }) },
-      { role: "assistant" as const, text: turn.text, ...identity }];
+    // An exchange where only the agent spoke (reading back a plan) has no host words; it must not render an empty bubble.
+    return [...(turn.user_text.trim() || turn.option_id ? [{ role: "host" as const, text: turn.user_text, ...identity,
+      ...(turn.voice_items && { voice_items: turn.voice_items }) }] : []),
+      ...(turn.text.trim() ? [{ role: "assistant" as const, text: turn.text, ...identity }] : [])];
   })] : brief ? studio_history(brief, session, db) : snapshot?.prior_history ?? [];
   const conversation = {
     history, sources: snapshot ? db.sources.selected(session, state.source_ids).map(source_summary) : brief?.sources ?? [],

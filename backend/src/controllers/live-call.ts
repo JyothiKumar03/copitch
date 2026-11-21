@@ -77,6 +77,9 @@ export const connect_live = (fetch_worker: typeof fetch | ((url: string, options
       try {
         const event = JSON.parse(data);
         if (event.type === "session.input_transcript.delta" || event.type === "session.output_transcript.delta") reset_idle();
+        else if (event.type === "error" && process.env.TRACE_LOGS === "1") {
+          console.log(JSON.stringify({ operation: "live.sideband_event", type: "error" }));
+        }
         void interviewer.receive(event).catch(end);
       } catch { /* Ignore malformed provider frames. */ }
     };
