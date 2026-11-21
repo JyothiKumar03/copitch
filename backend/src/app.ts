@@ -12,6 +12,7 @@ import { decks } from "./routes/deck";
 import { interview } from "./routes/interview";
 import { research } from "./routes/research";
 import { sessions } from "./routes/session";
+import { website_walkthroughs } from "./routes/website-walkthrough";
 
 export const create_api = (raw_session_routes?: Router) => {
   const app = express();
@@ -47,7 +48,7 @@ export const create_api = (raw_session_routes?: Router) => {
 
 const app = create_api(interview);
 app.use("/api", accounts, chat, audience);
-app.use("/api/sessions", sessions, research, decks, continuation);
+app.use("/api/sessions", sessions, research, decks, website_walkthroughs, continuation);
 app.use((_req, res) => res.status(404).json({ error: "Not found" }));
 app.use(api_error);
 

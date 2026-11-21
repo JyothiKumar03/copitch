@@ -8,6 +8,7 @@ import { DeckPreparationRepository } from "./deck-preparation";
 import { StudioRepository } from "./studio";
 import { ContinuationStore } from "./continuation";
 import { PresentationRepository } from "./presentation-live";
+import { WebsiteWalkthroughRepository } from "./website-walkthrough";
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -28,6 +29,7 @@ export class SessionStore {
   readonly deck_preparations: DeckPreparationRepository;
   readonly presentations: PresentationRepository;
   readonly studio: StudioRepository;
+  readonly website_walkthroughs: WebsiteWalkthroughRepository;
   constructor(path: string) {
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
     this.db = new Database(path, { create: true, strict: true });
@@ -43,6 +45,7 @@ export class SessionStore {
     this.presentations = new PresentationRepository(this.db, this.decks, this.audience);
     this.presentations.recover();
     this.studio = new StudioRepository(this.db);
+    this.website_walkthroughs = new WebsiteWalkthroughRepository(this.db);
     this.db.exec(`
       PRAGMA journal_mode=WAL;
       CREATE TABLE IF NOT EXISTS ai_sessions (id TEXT PRIMARY KEY, token_hash TEXT NOT NULL);
