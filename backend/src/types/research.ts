@@ -14,7 +14,7 @@ export type TBriefReview = {
 };
 
 export type TInterviewTurn = { role: "host" | "assistant"; text: string; turn_id?: string; created_at?: number; intent?: TStudioIntent;
-  answer_to?: string; option_id?: string; voice_items?: string[] };
+  answer_to?: string; option_id?: string; voice_items?: string[]; language?: string };
 
 export type TResearchBrief = TBriefReview & {
   studio_version?: 2;

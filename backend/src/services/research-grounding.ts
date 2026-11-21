@@ -149,19 +149,22 @@ export const verify_draft = async (draft: TResearchDraft, evidence: TEvidence[],
   on_verify?.();
   const deadline = AbortSignal.timeout(90_000);
   try {
-    const check = () => provider.verify!(review, AbortSignal.any([signal, deadline]));
-    // One malformed structured reply should not withhold a whole verified brief. Retry once before giving up.
-    const result = await check().catch(error => {
+    const check = async () => {
+      const result = await provider.verify!(review, AbortSignal.any([signal, deadline]));
+      const verdicts = Array.isArray(result) ? result : result.verdicts;
+      const decisions = new Map(verdicts.map(v => [v.id,v.decision]));
+      if (verdicts.length !== review.units.length || decisions.size !== review.units.length ||
+          !review.units.every(unit => ["supported","unsupported","missing_qualification"].includes(decisions.get(unit.id) ?? ""))) {
+        throw new Error(`The fact-check returned ${decisions.size} decisions for ${review.units.length} units and could not be applied.`);
+      }
+      return { result, verdicts, decisions };
+    };
+    // A structurally valid response can still omit units. Give both malformed and incomplete reviews one retry.
+    const { result, verdicts, decisions } = await check().catch(error => {
       if (signal.aborted || deadline.aborted) throw error;
       return check();
     });
-    const verdicts = Array.isArray(result) ? result : result.verdicts;
-    const decisions = new Map(verdicts.map(v => [v.id,v.decision]));
-    if (signal.aborted || verdicts.length !== review.units.length || decisions.size !== review.units.length ||
-      !review.units.every(unit => ["supported","unsupported","missing_qualification"].includes(decisions.get(unit.id) ?? ""))) {
-      if (!signal.aborted) on_skip?.(`The fact-check returned ${decisions.size} decisions for ${review.units.length} units and could not be applied.`);
-      return withheld;
-    }
+    if (signal.aborted) return withheld;
     const by_id = new Map(verdicts.map(verdict => [verdict.id, verdict]));
     if (coverage_brief) {
       const records = new Map(review.evidence.map(record => [record.id, record]));

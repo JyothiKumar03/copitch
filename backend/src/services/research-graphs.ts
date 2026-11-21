@@ -276,20 +276,19 @@ const graph_result = async (proposed: TGraphDraft[], evidence: TEvidence[], veri
   try {
     const result = await verify(review, AbortSignal.any([signal, AbortSignal.timeout(16000)]));
     const verdicts = Array.isArray(result) ? result : result.verdicts;
-    const decisions = new Map(verdicts.map(verdict => [verdict.id, verdict.decision]));
-    if (signal.aborted || verdicts.length !== review.units.length || decisions.size !== review.units.length || !review.units.every(unit => decisions.has(unit.id))) {
-      trace("incomplete_review");
-      return { output: empty, reason: "unavailable" as const };
-    }
+    if (signal.aborted) return { output: empty, reason: "unavailable" as const };
+    const decisions = new Map<string, string>();
+    for (const { id, decision } of verdicts) decisions.set(id, decisions.has(id) ? "ambiguous" : decision);
+    const complete = review.units.every(unit => decisions.has(unit.id) && decisions.get(unit.id) !== "ambiguous");
     const graphs = prepared.filter(graph => graph.units.every(unit => decisions.get(unit.id) === "supported")).map(({ draft }, index) => ({
       graph_id: "graph-" + (index + 1), graph: canonical_graph(draft),
       evidence_ids: [...new Set([
         ...draft.data.map(point => point.evidence_id), ...draft.data.flatMap(point => point.unit_source?.evidence_id ?? []),
       ])],
     }));
-    trace("reviewed", graphs.length);
+    trace(complete ? "reviewed" : "incomplete_review", graphs.length);
     const output = graph_document(graphs);
-    return { output, reason: graphs.length ? "accepted" as const : "review" as const };
+    return { output, reason: graphs.length ? "accepted" as const : complete ? "review" as const : "unavailable" as const };
   } catch { trace("review_failed"); return { output: empty, reason: "unavailable" as const }; }
 };
 
@@ -343,9 +342,10 @@ const chart_repair_feedback = (proposed: TGraphDraft[], reason: "local" | "revie
   return feedback;
 };
 
-const sourced_category_chart = (raw: string, evidence: TEvidence[]): TGraphDraft | undefined => {
-  if (!/<(?:graph\b)|\\u003cgraph\b/iu.test(raw)) return;
-  const proposed_units = [...raw.matchAll(/"unit"\s*:\s*"([^"\\]+)"/gu)].map(match => match[1]);
+const sourced_category_chart = (raw: string | undefined, evidence: TEvidence[]): TGraphDraft | undefined => {
+  if (raw !== undefined && !/<(?:graph\b)|\\u003cgraph\b/iu.test(raw)) return;
+  const proposed = raw ?? "";
+  const proposed_units = [...proposed.matchAll(/"unit"\s*:\s*"([^"\\]+)"/gu)].map(match => match[1]);
   const candidates = evidence.flatMap(record => {
     if (record.origin === "host") return [];
     const legend = unit_legend(record);
@@ -367,11 +367,19 @@ const sourced_category_chart = (raw: string, evidence: TEvidence[]): TGraphDraft
       const graph = graph_schema.safeParse({ name: "Reported values by category", description: `Selected source categories in ${unit} for ${period}.`, type: "bar", data });
       if (!graph.success) return [];
       const score = data.length + (proposed_units.some(value => unit_key(value) === unit_key(unit)) ? 10 : 0) +
-        Math.min([...raw.matchAll(new RegExp(`"${regex_escape(record.id)}"`, "gu"))].length, 6);
+        Math.min([...proposed.matchAll(new RegExp(`"${regex_escape(record.id)}"`, "gu"))].length, 6);
       return [{ graph: graph.data, score }];
     });
   });
   return candidates.sort((a, b) => b.score - a.score)[0]?.graph;
+};
+
+export const verify_sourced_chart = async (evidence: TEvidence[], verify: TGraphVerifier | undefined, signal: AbortSignal) => {
+  if (!verify || signal.aborted) return;
+  // Checklist briefs skip the writer. Look for an exact comparable table among the passages supporting that brief.
+  const candidate = sourced_category_chart(undefined, evidence);
+  if (!candidate) return;
+  return (await graph_result([candidate], evidence, verify, signal)).output;
 };
 
 export const verify_graph_document = async (raw: string, evidence: TEvidence[], verify: TGraphVerifier | undefined, signal: AbortSignal,

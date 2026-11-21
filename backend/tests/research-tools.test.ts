@@ -97,3 +97,23 @@ test("the source tools enforce the source policy and turn hosted results into li
   expect(queries).toEqual(approved.public_queries);
   expect(requests).toEqual([approved.urls[0], links[0].url]);
 });
+
+test("the public dispatch blocks private note identifiers and upload excerpts while permitting public queries", async () => {
+  const queries: string[] = [];
+  const signal = AbortSignal.timeout(1000);
+  const public_query = "national collaboration pilot results from government statistics";
+  const tools = create_research_sources({ ...approved, public_queries: [public_query],
+    studio_notes: ["The synthetic case is synthetic-company-private-internal-id."],
+    history: [{ role: "host", text: "Follow up with presenter@example.invalid privately." }],
+  }, async query => { queries.push(query); return []; }, undefined, [{
+    id: "M1", origin: "material", location: "Notes.pdf",
+    passage: "The national collaboration pilot results from government statistics accompany the confidential board voted to postpone strategy.",
+  }]);
+  await expect(tools.search_web("public collaboration research SYNTHETIC-COMPANY-PRIVATE-INTERNAL-ID", signal)).rejects.toThrow("private notes or identifiers");
+  await expect(tools.search_web("pilot presenter@example.invalid contact", signal)).rejects.toThrow("private notes or identifiers");
+  await expect(tools.search_web("why the confidential board voted to postpone strategy", signal)).rejects.toThrow("private notes or identifiers");
+  expect(queries).toEqual([]);
+  await tools.search_web(`site:example.org ${public_query}`, signal);
+  await tools.search_web("official national public sector collaboration pilot benchmarks", signal);
+  expect(queries).toEqual([`site:example.org ${public_query}`, "official national public sector collaboration pilot benchmarks"]);
+});

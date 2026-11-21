@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { MockLanguageModelV4, convertArrayToReadableStream } from "ai/test";
 import { create_model_step } from "../src/services/ai-sdk";
-import { collect_research } from "../src/services/research-agent";
+import { collect_research, research_mode } from "../src/services/research-agent";
 import type { TCollectResearch, TResearchAgentState } from "../src/types/research-agent";
 
 const usage = {
@@ -173,6 +173,27 @@ test("a host's own site is read in focused mode: no web search and a 12-lookup c
   expect(state.stop_reason).toBe("budget");
 });
 
+test("slide coverage can search for a specific gap when the approved plan lists a URL and public queries", async () => {
+  const presentation_coverage = { slide_count: 3, gaps: [opened], existing_findings: [participants] };
+  const { model, step } = fixture_model_step(call(plan([opened, "number"])),
+    call(["web_search", { searches: [{ item_id: "C1", query: "official growth project opening year" }] }]),
+    call(["read_url", { source_ids: ["S1", "S3"], item_id: "C1" }]),
+    call(["record_answers", { answers: [{ item_id: "C1", evidence_id: "P1", excerpt: "opened in 2025", answer: "2025" }] }]), done());
+  const dispatch: string[] = [];
+  const state = await collect_research(test_input({ presentation_coverage, model_step: step, lookup: async ({ kind, target }) => {
+    dispatch.push(kind + ":" + target);
+    if (kind === "search") return { hits: [], links: [{ url: "https://history.example/project", title: "Public history" }] };
+    if (target === brief.urls[0]) return { hits: [] };
+    return { url: target, hits: [{ url: target, title: "Public history", passage: "The project opened in 2025 in Pune." }] };
+  } }));
+  expect(research_mode(test_input({}))).toBe("focused");
+  expect(research_mode(test_input({ brief: { ...brief, public_queries: [] }, presentation_coverage }))).toBe("focused");
+  expect((model.doStreamCalls[0].tools ?? []).map(tool => tool.name)).toContain("web_search");
+  expect(dispatch).toContain("search:official growth project opening year");
+  expect(dispatch).toContain("read:https://history.example/project");
+  expect(state.checklist[0]).toMatchObject({ status: "covered", answer: "2025", evidence_id: "P1" });
+});
+
 test("worker interruption keeps the checklist and evidence for restart", async () => {
   let previous: TResearchAgentState | undefined;
   const initial = fixture_model_step(call(plan([participants, "number"]), ["read_url", { source_ids: ["S1"] }]));
@@ -236,12 +257,12 @@ test("a long report keeps the passages that answer the question, not its front m
   expect(state.checklist[0].status).toBe("covered");
 });
 
-test("host files with no links are used as supplied, and no link or file means a broad web hunt", async () => {
+test("host files keep focused scope unless the host also approved a public search", async () => {
   const selected = [{ id: "M1", location: "Supplied material", origin: "material" as const, passage: "42 completed pilots." }];
-  const focused = await collect_research(test_input({ brief: { ...brief, urls: [] }, evidence: selected }));
+  const focused = await collect_research(test_input({ brief: { ...brief, urls: [], public_queries: [] }, evidence: selected }));
   expect(focused.steps).toBe(0);
   expect(focused.stop_reason).toBe("finished");
   const { model, step } = fixture_model_step(call(plan([participants, "number"])), done(), done(), done(), done());
-  await collect_research(test_input({ brief: { ...brief, urls: [] }, model_step: step }));
+  await collect_research(test_input({ brief: { ...brief, urls: [] }, evidence: selected, model_step: step }));
   expect((model.doStreamCalls[0].tools ?? []).map(tool => tool.name).sort()).toEqual(["mark_unavailable", "plan_coverage", "read_url", "record_answers", "web_search"]);
 });

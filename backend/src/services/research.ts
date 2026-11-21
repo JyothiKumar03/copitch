@@ -1,12 +1,12 @@
 import { pitch_markdown } from "./pitch-markdown";
-import { verify_graph_document } from "./research-graphs";
+import { verify_graph_document, verify_sourced_chart } from "./research-graphs";
 import { selected_chart } from "./pitch-chart";
 import { source_evidence } from "./source";
 import { conversion_evidence } from "./conversion-metrics";
 import type { TUploadedSource } from "../types/source";
 import { keep_supported, source_extracts, verify_draft } from "./research-grounding";
 import { collect_research } from "./research-agent";
-import { create_research_sources } from "./research-tools";
+import { create_research_sources, research_discovery_lookup } from "./research-tools";
 import { AppError } from "../errors/app-error";
 import type { TRecordActivity, TResearchCheckpoint } from "../types/research-job";
 import { isIP } from "node:net";
@@ -188,20 +188,13 @@ export const build_research = async (
   if (studio && !model_step) throw new AppError(503, "The research model is unavailable. Retry research.");
   let completed_lookups = previous?.completed_lookups ?? 0;
   let collection = previous?.collection;
+  const discovery = create_research_sources(brief, provider.lookup, undefined, evidence);
   if (model_step) {
-    const discovery = create_research_sources(brief, provider.lookup);
     const state = await collect_research({
       brief, evidence, gaps: [...gaps],
       previous: collection && { ...collection, evidence, gaps: [...gaps], completed_lookups }, model_step, signal, check_current, activity,
       checkpoint: ({ completed_lookups, evidence, gaps, ...collection }) => checkpoint?.({ completed_lookups, evidence, gaps, collection }),
-      lookup: async ({ kind, target, known_links }, lookup_signal) => {
-        if (kind === "read") {
-          const page = await discovery.read_page(target, known_links, lookup_signal);
-          return { url: page.url, hits: page.hits, links: page.links.map(link => ({ url: link.url, title: link.label })) };
-        }
-        const links = await discovery.search_web(target, lookup_signal);
-        return { hits: [], links: links.map(link => ({ url: link.url, title: link.label })) };
-      },
+      lookup: research_discovery_lookup(discovery),
     });
     const { completed_lookups: count, evidence: records, gaps: remaining, ...details } = state;
     collection = details;
@@ -227,6 +220,7 @@ export const build_research = async (
       const before = evidence.length;
       activity?.("lookup_requested", task.url ? "Requested a lookup of a host-approved page." : "Requested a reviewed public search.");
       try {
+        discovery.check_public_query(task.query);
         const timeout = AbortSignal.any([signal, AbortSignal.timeout(20_000)]);
         const hits = await provider.lookup(task.query, task.url, timeout, action => {
           if (action === "search") activity?.("search_completed","The provider completed a public search.");
@@ -266,7 +260,6 @@ export const build_research = async (
   let draft_attempts = previous?.draft_attempts ?? (draft ? 1 : 0);
   let draft_feedback = previous?.draft_feedback ?? [];
   let verified_candidate = previous?.verified_candidate;
-  let built_from_checklist = false;
   const draft_limit = studio ? 2 : 1;
   const save_draft = () => checkpoint?.({ completed_lookups, evidence, gaps: [...gaps], collection, draft, grounding, draft_attempts, draft_feedback, verified_candidate });
   const restore_candidate = () => {
@@ -282,7 +275,6 @@ export const build_research = async (
     // A resolved checklist is the brief. The long-form writer remains for briefs without one, or to repair a rejected draft.
     const answered = studio && !draft && draft_attempts === 0 && !verified_candidate ? checklist_draft(brief, collection) : undefined;
     if (answered) {
-      built_from_checklist = true;
       draft = answered;
       draft_attempts = 1;
       activity?.("draft_started", `Built the brief from ${answered.sections.length} checked answers.`);
@@ -325,7 +317,9 @@ export const build_research = async (
       const by_id = new Map(evidence.map(item => [item.id, item]));
       if (collection) {
         const bind_records = <T extends { support: { evidence_id: string; excerpt: string }[] }>(unit: T): T => ({
-          ...unit, support: unit.support.map(({ evidence_id }) => ({ evidence_id, excerpt: by_id.get(evidence_id)?.passage ?? "" })),
+          ...unit, support: unit.support.map(({ evidence_id, excerpt }) => ({
+            evidence_id, excerpt: excerpt || by_id.get(evidence_id)?.passage || "",
+          })),
         });
         draft = { ...draft, sections: draft.sections.map(section => ({ ...section, paragraphs: section.paragraphs.map(bind_records) })) };
       }
@@ -379,9 +373,7 @@ export const build_research = async (
     if (draft) draft.pitch_chart = approved_chart;
     const checked: TGrounding = { version:1, mode:accepted ? "verified" : "source_extracts",
       ...(selection ? {chart:approved_chart ? "verified" : "withheld"} : {}) };
-    // A checklist-built brief already covers the questions the agent planned; open questions are listed gaps.
-    // Appending long-form writer paragraphs here costs a call and brings back process text, so it is skipped.
-    if (studio && usable && draft && !built_from_checklist && verdict?.coverage_feedback?.length && draft_attempts < draft_limit) {
+    if (studio && usable && draft && verdict?.coverage_feedback?.length && draft_attempts < draft_limit) {
       verified_candidate = { draft, grounding: checked };
       draft_feedback = [...verdict.coverage_feedback, ...verdict.feedback ?? []];
       draft = undefined;
@@ -404,10 +396,18 @@ export const build_research = async (
   const bundle: TResearchBundle = { research_id: crypto.randomUUID(), brief_id: brief.brief_id, confirmed_brief: brief,
     findings, grounding, evidence, gaps: [...gaps] };
   if (studio) {
-    const checked_graphs = draft.graph_xml ? await verify_graph_document(draft.graph_xml, evidence, provider.verify, signal, provider.repair_graph,
-      () => activity?.("verification_started", "Checking a new chart with comparable source values.")) : undefined;
+    const cited = new Set(findings.sections.flatMap(section =>
+      section.paragraphs.flatMap(paragraph => paragraph.support.map(reference => reference.evidence_id))));
+    const checked_graphs = draft.graph_xml
+      ? await verify_graph_document(draft.graph_xml, evidence, provider.verify, signal, provider.repair_graph,
+        () => activity?.("verification_started", "Checking a new chart with comparable source values."))
+      : await verify_sourced_chart(evidence.filter(record => cited.has(record.id)), provider.verify, signal);
     check_current();
-    return { ...bundle, verified_graphs: checked_graphs?.graphs ?? [] };
+    if ((draft.graph_xml || checked_graphs) && !checked_graphs?.graphs.length) {
+      gaps.add("A proposed chart could not be verified against comparable source values and was withheld.");
+      activity?.("verification_skipped", "A proposed chart could not be verified and was withheld.");
+    }
+    return { ...bundle, gaps: [...gaps], verified_graphs: checked_graphs?.graphs ?? [] };
   }
   const legacy = { ...bundle, pitch_chart: draft.pitch_chart ?? null, pitch_script: draft.pitch_script };
   return { ...legacy, markdown: research_report(legacy), pitch_markdown: pitch_markdown(legacy) };

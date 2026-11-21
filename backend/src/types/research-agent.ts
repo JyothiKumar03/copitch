@@ -59,6 +59,7 @@ export type TResearchCollectionCheckpoint =
 
 export type TCollectResearch = {
   brief: TResearchBrief;
+  presentation_coverage?: { slide_count: number; gaps: string[]; existing_findings: string[] };
   evidence: TEvidence[];
   gaps: string[];
   previous?: TResearchAgentState | TLegacyResearchState;
