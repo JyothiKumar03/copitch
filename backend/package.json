@@ -1,0 +1,29 @@
+{
+  "name": "@equal-ai/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --hot src/index.ts",
+    "start": "bun run src/index.ts",
+    "build": "bun build src/index.ts --outdir dist --target bun",
+    "start:built": "bun run dist/index.js",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^4.0.122",
+    "@hono/node-server": "^2.1.11",
+    "ai": "^7.0.179",
+    "hono": "^4.13.19",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/bun": "^1.4.5",
+    "@types/node": "^24.0.0",
+    "eslint": "^10.15.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.73.0"
+  }
+}

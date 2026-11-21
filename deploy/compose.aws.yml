@@ -1,0 +1,32 @@
+services:
+  api:
+    ports: !reset []
+    restart: unless-stopped
+    environment:
+      CORS_ORIGIN: https://${PUBLIC_HOST:?Set PUBLIC_HOST}
+    volumes:
+      - ${SESSION_DATA_DIR:?Set SESSION_DATA_DIR on mounted EBS}:/data
+  web:
+    ports: !reset []
+    restart: unless-stopped
+    build:
+      args:
+        NEXT_PUBLIC_API_URL: https://${PUBLIC_HOST}
+    environment:
+      NEXT_PUBLIC_API_URL: https://${PUBLIC_HOST}
+  gateway:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST}
+      DEMO_PASSWORD_HASH: ${DEMO_PASSWORD_HASH:?Set the Caddy demo password hash}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    depends_on:
+      - web
+volumes:
+  caddy-data:
