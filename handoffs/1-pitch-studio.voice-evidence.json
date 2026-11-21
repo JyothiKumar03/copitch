@@ -1,0 +1,25 @@
+{
+  "date": "2026-11-21",
+  "environment": "Local macOS Chrome driving the signed-in Next.js studio, Express, a private Python voice service and an isolated SQLite database",
+  "evidence_class": "live",
+  "providers": ["OpenAI realtime transcription", "OpenAI interview, research and verification", "OpenAI speech synthesis"],
+  "input": "Synthetic English speech from a WAV file substituted for the microphone in Chrome. Research used fictitious host-supplied pilot data with files-only approval.",
+  "AC-5": {
+    "voice_connected_before_approval": true,
+    "initial_job_status": "queued",
+    "recognized_turn": "What is the research status?",
+    "progress_reply": "Research is running. Completed lookups: 0.",
+    "progress_job_and_brief_matched_approval": true,
+    "speech_http_status": 200,
+    "playout_observation": "The studio displayed Speaking after the audio element fired its playing event.",
+    "terminal_job_status": "completed",
+    "terminal_job_and_brief_matched_approval": true,
+    "progress_question_in_restored_workspace_response": true,
+    "result": "verified"
+  },
+  "AC-3": {
+    "rehearsal": "Two synthetic turns passed through the studio's WebRTC transport on one connection. English matched the source. The final trial preserved Hindi script and misrecognized words in the Hindi question.",
+    "result": "unverified",
+    "remaining": "Real speakers, physical microphone, mixed-language turn and acoustic interruption during audible playout"
+  }
+}
