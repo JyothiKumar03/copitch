@@ -2,7 +2,7 @@ import { lookup } from "node:dns/promises";
 import { get as http_get } from "node:http";
 import { get as https_get } from "node:https";
 import type { RequestOptions } from "node:https";
-import { BlockList } from "node:net";
+import { BlockList, isIP } from "node:net";
 import { public_url } from "./research";
 import { parse_source } from "./source";
 import { research_pdf_limits } from "../constants/sources";
@@ -16,6 +16,8 @@ for (const [address, prefix] of [
   ["198.51.100.0", 24], ["203.0.113.0", 24], ["224.0.0.0", 3],
 ] as const) private_networks.addSubnet(address, prefix);
 
+export const is_public_ipv4 = (address: string) => isIP(address) === 4 && !private_networks.check(address);
+
 const max_page_bytes = 2 * 1024 * 1024;
 const download_types = new Set(["application/octet-stream", "application/force-download", "application/x-download", "application/download", "binary/octet-stream"]);
 const max_links = 40;
@@ -28,7 +30,7 @@ const read_page = async (url: URL, signal: AbortSignal) => {
   signal.throwIfAborted();
   const { address } = await lookup(url.hostname, { family: 4 });
   signal.throwIfAborted();
-  if (private_networks.check(address)) throw new Error("The page does not resolve to a public address.");
+  if (!is_public_ipv4(address)) throw new Error("The page does not resolve to a public address.");
   const get = url.protocol === "https:" ? https_get : http_get;
   const options: RequestOptions = {
     hostname: address, port: url.port, path: url.pathname + url.search, servername: url.hostname,
