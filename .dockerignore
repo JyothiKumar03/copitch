@@ -11,3 +11,9 @@ dist
 .DS_Store
 coverage
 **/ai-sessions.sqlite*
+
+**/.env
+**/.env.*
+**/.venv
+**/*.sqlite*
+**/data
