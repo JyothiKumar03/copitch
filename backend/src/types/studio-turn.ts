@@ -134,6 +134,7 @@ export type TStudioActivity = {
 export type TStudioTurn = {
   turn_id: string; created_at: number; user_text: string; text: string; language: string;
   voice_items?: string[];
+  voice_reply?: string;
   phase: TStudioPhase; proposal: TResearchProposal | null;
   activity?: TStudioActivity; answer_to?: string; option_id?: string; intent?: TStudioIntent;
 };

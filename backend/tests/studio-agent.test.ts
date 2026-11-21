@@ -34,3 +34,16 @@ test("a research-phase plan in the provider reply cannot become an action", asyn
   expect(result.actions).toEqual([]);
   expect(result.reply).toBe("Research is running.");
 });
+
+test("a greeting cannot replace an open goal, and Telugu reply tags follow the written text", async () => {
+  const model = model_reply({
+    reply: "నమస్కారం! మీ ప్రణాళిక సిద్ధంగా ఉంది.", language: "en", factual_notes: [],
+    suggested_goal: "Start over", language_preference: null, citations: [], intent: "conversation", plan: null,
+  });
+  const result = await create_studio_agent(model)({
+    message: "నమస్కారం!", history: [], state: { ...parse_state(null, false), phase: "proposed", goal: "Bank pilot" },
+    files: [], job_status: null,
+  }, AbortSignal.timeout(1000));
+  expect(result.language).toBe("te");
+  expect(result.actions).toEqual([]);
+});
