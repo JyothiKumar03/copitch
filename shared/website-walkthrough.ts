@@ -1,5 +1,6 @@
 export const WEBSITE_WALKTHROUGH_DEPTHS = [0, 1, 2, 3] as const;
 export const DEFAULT_WEBSITE_WALKTHROUGH_DEPTH = 2;
+export const MAX_WEBSITE_WALKTHROUGH_PAGES = 5;
 
 export type TWebsiteWalkthroughInput = {
   request_id: string;

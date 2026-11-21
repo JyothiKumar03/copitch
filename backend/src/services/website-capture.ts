@@ -2,7 +2,7 @@ import { lookup } from "node:dns/promises";
 import { get as http_get } from "node:http";
 import { get as https_get } from "node:https";
 import { chromium } from "playwright";
-import { DEFAULT_WEBSITE_WALKTHROUGH_DEPTH, WEBSITE_WALKTHROUGH_DEPTHS } from "../../../shared/website-walkthrough";
+import { DEFAULT_WEBSITE_WALKTHROUGH_DEPTH, MAX_WEBSITE_WALKTHROUGH_PAGES, WEBSITE_WALKTHROUGH_DEPTHS } from "../../../shared/website-walkthrough";
 import { AppError } from "../errors/app-error";
 import { is_public_ipv4 } from "./host-pages";
 import { public_url } from "./research";
@@ -38,7 +38,7 @@ export type TWebsiteCaptureServices = {
 };
 
 const capture_limits = {
-  pages: 5, attempts: 8, redirects: 3, assets_per_page: 50,
+  pages: MAX_WEBSITE_WALKTHROUGH_PAGES, attempts: 8, redirects: 3, assets_per_page: 50,
   body_bytes: 2 * 1024 * 1024, assets_bytes_per_page: 10 * 1024 * 1024,
   request_ms: 5_000, page_ms: 15_000, dns_ms: 5_000,
 };

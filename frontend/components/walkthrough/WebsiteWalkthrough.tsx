@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
 import { approveWalkthrough, captureImage, downloadWalkthrough, listWalkthroughs, loadWalkthrough } from "@/lib/website-walkthrough";
-import { DEFAULT_WEBSITE_WALKTHROUGH_DEPTH, WEBSITE_WALKTHROUGH_DEPTHS } from "../../../shared/website-walkthrough";
+import { DEFAULT_WEBSITE_WALKTHROUGH_DEPTH, MAX_WEBSITE_WALKTHROUGH_PAGES, WEBSITE_WALKTHROUGH_DEPTHS } from "../../../shared/website-walkthrough";
 import type { TWebsiteWalkthrough, TWebsiteWalkthroughInput } from "../../../shared/website-walkthrough";
 
 type TWalkthroughDraft = Pick<TWebsiteWalkthroughInput, "url" | "audience" | "goal" | "max_depth">;
@@ -182,7 +182,7 @@ export const WebsiteWalkthrough = ({ projectId }: { projectId: string }) => {
           <CardContent>
             {approval ? <div className="grid gap-4">
               <ScopeFields scope={approval} />
-              <p className="text-sm text-muted-foreground">Copitch will read pages on this website and save screenshots in this project.</p>
+              <p className="text-sm text-muted-foreground">Copitch will capture up to {MAX_WEBSITE_WALKTHROUGH_PAGES} pages on this website and save the screenshots in this project.</p>
               {start.error && <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{start.error.message}</p>}
               <div className="flex flex-wrap gap-2">
                 <Button type="button" disabled={start.isPending} onClick={() => start.mutate(approval)}>{start.isPending ? "Starting…" : "Approve and capture"}<ArrowRight size={16} aria-hidden="true" /></Button>
