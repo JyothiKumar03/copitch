@@ -40,8 +40,11 @@ const readiness_schema = z.strictObject({
 const assessed_output = planner_output.extend({
   readiness: readiness_schema, beats: z.array(planned_beat).max(MAX_PRESENTATION_SLIDES),
 });
+const completion_output = assessed_output.omit({ beats: true }).extend({
+  additions: z.array(z.strictObject({ after_slide_id: z.string().max(32).nullable(), beat: planned_beat }))
+    .max(MAX_PRESENTATION_SLIDES),
+});
 type TAssessment = z.infer<typeof readiness_schema>;
-type TParsedPlan = z.infer<typeof planner_output> & { readiness?: TAssessment };
 
 type TPlanBeat = z.infer<typeof planned_beat>;
 type TBeatVisual = Pick<TPlanBeat, "title" | "highlights" | "evidence_ids"> & Pick<TSlide, "template" | "chart_period">;
@@ -56,20 +59,76 @@ type TPlanContext = {
   headings: string[];
   findings: { heading: string; text: string; evidence_ids: string[] }[];
   talk_track?: { id: string; purpose: TPassage["purpose"]; narration: string; evidence_ids: string[] }[];
-  evidence: Pick<TEvidence, "id" | "origin" | "passage" | "location">[];
+  evidence: TPresentationEvidence[];
   available_graphs?: TSavedGraph[];
   review_feedback?: string[];
-  context_assessment?: { title: string; objective?: string; known_gaps: string[] };
+  verified_beats?: TPlanBeat[];
+  completion?: { missing: number; candidate_limit: number; retained: { slide_id: string; beat: TPlanBeat }[] };
+  context_assessment?: { title: string; objective?: string; audience?: string; known_gaps: string[] };
   layout_repair?: {
     issues: TDeckLayoutIssue[];
     slides: Pick<TSlide, "slide_id" | "title" | "highlights" | "template" | "evidence_ids" | "chart_period">[];
   };
 };
-export type TPlanPresentation = (context: TPlanContext, research_id: string) => Promise<unknown>;
-type TPresentationPlanReview = { verified_slide_ids: string[]; feedback: string[] };
-export type TVerifyPresentationPlan = (slides: TSlide[], evidence: TEvidence[], research_id: string) =>
+export type TPlanPresentation = (context: TPlanContext, research_id: string, signal?: AbortSignal) => Promise<unknown>;
+type TPresentationPlanReview = { verified_slide_ids: string[]; feedback: string[]; unavailable?: boolean };
+type TPlanAttempt = {
+  slides: TSlide[];
+  verified_beats: TPlanBeat[];
+  feedback: string[];
+  rationale?: string;
+  assessment?: TAssessment;
+  unavailable?: boolean;
+  anchors?: Map<string, string | null>;
+};
+export type TVerifyPresentationPlan = (slides: TSlide[], evidence: TEvidence[], research_id: string, signal?: AbortSignal) =>
   Promise<boolean | TPresentationPlanReview>;
 
+export class PresentationCoverageError extends AppError {
+  constructor(readonly requested: number, readonly verified: number, readonly gaps: string[], reason: string) {
+    super(422, [`Saved evidence supports ${verified} of ${requested} requested slides.`, reason, ...gaps].join(" "));
+    this.name = "PresentationCoverageError";
+  }
+}
+
+type TPresentationEvidence = Pick<TEvidence, "id" | "origin" | "passage" | "location" | "url">;
+const presentation_evidence_budget = 68_000;
+
+export const select_presentation_evidence = (bundle: TResearchBundle): TPresentationEvidence[] => {
+  const excerpts_by_id = new Map<string, Set<string>>();
+  const by_id = new Map(bundle.evidence.map(record => [record.id, record]));
+  for (const section of bundle.findings.sections) {
+    if (!speakable(section.heading)) continue;
+    for (const paragraph of section.paragraphs) {
+      if (!speakable(paragraph.prose)) continue;
+      for (const { evidence_id, excerpt } of paragraph.support) {
+        if (!speakable(excerpt) || !quotes(by_id.get(evidence_id)?.passage, excerpt)) continue;
+        const excerpts = excerpts_by_id.get(evidence_id) ?? new Set<string>();
+        excerpts.add(excerpt);
+        excerpts_by_id.set(evidence_id, excerpts);
+      }
+    }
+  }
+  const graph_ids = new Set(saved_research_graphs(bundle).flatMap(graph => graph.evidence_ids));
+  const linked = (id: string) => excerpts_by_id.has(id) || graph_ids.has(id);
+  const ordered = [...bundle.evidence].sort((left, right) => Number(linked(right.id)) - Number(linked(left.id)));
+  let remaining = presentation_evidence_budget;
+  return ordered.flatMap(({ id, origin, location, url, passage }) => {
+    if (origin === "host" && !excerpts_by_id.has(id)) return [];
+    if (origin === "public" && bundle.confirmed_brief.source_policy === "files_only") return [];
+    const supported_excerpt = [...(excerpts_by_id.get(id) ?? [])].join("\n\n");
+    const eligible_passage = origin !== "host" && speakable(passage) ? passage : supported_excerpt;
+    for (const candidate of new Set([eligible_passage, supported_excerpt])) {
+      if (!candidate.trim()) continue;
+      const record = { id, origin, location, url, passage: candidate };
+      const size = Buffer.byteLength(JSON.stringify(record), "utf8") + 1;
+      if (size > remaining) continue;
+      remaining -= size;
+      return [record];
+    }
+    return [];
+  });
+};
 
 const literal_text = (passage: string, text: string) =>
   quotes(passage, text) && numeric_tokens(text).every(value => numeric_tokens(passage).includes(value));
@@ -113,7 +172,10 @@ const place = (passage: string, label: string, value: number, unit?: string): TP
   const lines = passage.split("\n");
   const header_support = unit !== undefined && lines.some(row =>
     row.includes("|") && !numeric_tokens(row).length && unit_supported(unit, row));
-  return lines.flatMap(line => {
+  // PDF prose commonly wraps within a sentence. Join only prose runs; table rows must stay separate.
+  const prose = passage.split(/\n\s*\n|^.*\|.*$/mu).flatMap(run =>
+    Array.from(sentences.segment(run.replace(/\s*\n\s*/gu, " ")), part => part.segment.trim()));
+  return [...new Set([...lines, ...prose])].flatMap(line => {
     if (unit !== undefined && (uncertain_chart_value.test(line) ||
         (!unit_supported(unit, line) && !(line.includes("|") && header_support)))) return [];
     const labels = label_positions(line, label, passage);
@@ -141,6 +203,16 @@ const points_supported = (points: { label: string; value: number }[], records: T
   return true;
 };
 
+const donut_supported = (template: Extract<TSlideTemplate, { points: unknown[] }>) => {
+  const values = template.points.map(point => point.value);
+  if (values.some(value => value < 0) || values.filter(value => value > 0).length < 2) return false;
+  if (/^(?:%|percent|per cent|percentage)$/iu.test(template.unit)) {
+    // Independently reported shares can differ slightly from 100 because they were rounded.
+    return Math.abs(values.reduce((sum, value) => sum + value, 0) - 100) <= 1;
+  }
+  return !/^(?:%|percentage|percent|per cent)\s*(?:points?|pts?)$/iu.test(template.unit);
+};
+
 export const template_supported = (template: TSlideTemplate, records: TEvidence[]) => {
   const groups = records.flatMap(record => excerpts(record.passage));
   const together = (...parts: string[]) => groups.some(group =>
@@ -166,7 +238,7 @@ export const template_supported = (template: TSlideTemplate, records: TEvidence[
     case "line_chart":
     case "donut_chart":
       return new Set(template.points.map(point => point.label)).size === template.points.length &&
-        (template.type !== "donut_chart" || template.points.every(point => point.value >= 0) && template.points.some(point => point.value > 0)) &&
+        (template.type !== "donut_chart" || donut_supported(template)) &&
         points_supported(template.points, records, template.unit);
     default:
       return true;
@@ -193,7 +265,12 @@ const trace_plan = (research_id: string, outcome: string, counts?: { requested: 
   if (process.env.TRACE_LOGS === "1") console.log(JSON.stringify({ operation: "presentation.plan_acceptance", research_id, outcome, ...counts }));
 };
 
-export const presentation_plan_review = (provider: TResearchProvider): TVerifyPresentationPlan => async (slides, evidence, research_id) => {
+const bounded_signal = (milliseconds: number, parent?: AbortSignal) => {
+  const deadline = AbortSignal.timeout(milliseconds);
+  return parent ? AbortSignal.any([parent, deadline]) : deadline;
+};
+
+export const presentation_plan_review = (provider: TResearchProvider): TVerifyPresentationPlan => async (slides, evidence, research_id, signal) => {
   const call = provider.verify;
   const traced_provider: TResearchProvider = { ...provider, verify: call && ((review, signal) => call(review, signal, attempt => {
     if (process.env.TRACE_LOGS === "1") console.log(JSON.stringify({ operation: "presentation.plan_review", research_id, ...attempt }));
@@ -207,7 +284,9 @@ export const presentation_plan_review = (provider: TResearchProvider): TVerifyPr
       ...(slide.sentences ?? []).map(sentence => ({ prose: sentence.text, support: support(sentence.evidence_ids) })),
     ] }));
   const result = await verify_draft({ title: "Presentation review", gaps: [], sections },
-    evidence, [], traced_provider, AbortSignal.timeout(20_000));
+    evidence, [], traced_provider, bounded_signal(20_000, signal), undefined,
+    () => trace_plan(research_id, "independent_check_unavailable"));
+  signal?.throwIfAborted();
   const verified_slide_ids = slides.flatMap((slide, index) => {
     const supported = (id: string) => result.decisions?.get(id) === "supported";
     return supported("section-" + index) &&
@@ -215,26 +294,27 @@ export const presentation_plan_review = (provider: TResearchProvider): TVerifyPr
   });
   trace_plan(research_id, verified_slide_ids.length === slides.length ? "independently_verified" :
     verified_slide_ids.length ? "independent_check_partial" : "independent_check_rejected");
-  return { verified_slide_ids, feedback: result.feedback ?? [] };
+  return { verified_slide_ids, feedback: result.feedback ?? [], ...(!result.decisions && { unavailable: true }) };
 };
 
-export const verify_presentation_plan: TVerifyPresentationPlan = async (slides, evidence, research_id) => {
+export const verify_presentation_plan: TVerifyPresentationPlan = async (slides, evidence, research_id, signal) => {
   const [model] = configured_models_for("planning");
   return model && process.env.OPENAI_API_KEY
-    ? presentation_plan_review(research_provider(model, undefined, []))(slides, evidence, research_id)
-    : false;
+    ? presentation_plan_review(research_provider(model, undefined, []))(slides, evidence, research_id, signal)
+    : { verified_slide_ids: [], feedback: [], unavailable: true };
 };
 
-export const presentation_plan_provider = (config: TModelCandidate, openai = createOpenAI()): TPlanPresentation => async (context, research_id) => {
+export const presentation_plan_provider = (config: TModelCandidate, openai = createOpenAI()): TPlanPresentation => async (context, research_id, signal) => {
   const started = performance.now();
   let outcome = "failed";
   let usage;
   try {
     const reply = await generateText({
       model: openai.responses(config.model), maxOutputTokens: Math.min(config.max_output_tokens, 5200),
-      temperature: config.temperature, maxRetries: 0, abortSignal: AbortSignal.timeout(25_000),
+      temperature: config.temperature, maxRetries: 0, abortSignal: bounded_signal(25_000, signal),
       providerOptions: { openai: { store: false } }, instructions: presentation_planner,
-      output: Output.object({ schema: context.context_assessment ? assessed_output : planner_output }), prompt: JSON.stringify(context),
+      output: Output.object({ schema: context.completion ? completion_output :
+        context.context_assessment ? assessed_output : planner_output }), prompt: JSON.stringify(context),
     });
     outcome = "completed";
     usage = reply.usage;
@@ -247,9 +327,9 @@ export const presentation_plan_provider = (config: TModelCandidate, openai = cre
   }
 };
 
-export const request_presentation_plan: TPlanPresentation = async (context, research_id) => {
+export const request_presentation_plan: TPlanPresentation = async (context, research_id, signal) => {
   const [config] = configured_models_for("planning");
-  if (config && process.env.OPENAI_API_KEY) return presentation_plan_provider(config)(context, research_id);
+  if (config && process.env.OPENAI_API_KEY) return presentation_plan_provider(config)(context, research_id, signal);
 };
 
 // Every slide stands on its own, so each verified slide is kept even when a neighbour failed review.
@@ -272,6 +352,7 @@ const graph_visual = ({ graph }: TSavedGraph): { template: TSlideTemplate; chart
 });
 
 const chart_template_types: TSlideTemplate["type"][] = ["bar_chart", "line_chart", "donut_chart"];
+const max_completion_rounds = 3;
 
 const reuse_graphs = (slides: TSlide[], graphs: TSavedGraph[], maximum: number) => {
   const result = [...slides];
@@ -301,29 +382,20 @@ const reuse_graphs = (slides: TSlide[], graphs: TSavedGraph[], maximum: number) 
 };
 
 export const plan_verified_pitch = async (bundle: TResearchBundle, pitch: TDeckPlanInput, plan: TPlanPresentation,
-  verify: TVerifyPresentationPlan, layout_repair?: TDeckLayoutRepair): Promise<TDeck> => {
+  verify: TVerifyPresentationPlan, layout_repair?: TDeckLayoutRepair, signal?: AbortSignal): Promise<TDeck> => {
   const settings = "duration_minutes" in pitch ? pitch : undefined;
   if (layout_repair && (settings || layout_repair.deck.research_id !== bundle.research_id ||
       layout_repair.deck.grounding_mode !== "verified" || !layout_repair.issues.length)) {
     throw new AppError(422, "The layout report must refer to a verified deck for this research context.");
   }
-  const graphs = settings ? [] : saved_research_graphs(bundle).filter(({ graph }) =>
-    speakable(graph.name) && speakable(graph.description) && graph.data.every(point => speakable(point.label)));
-  const by_graph_id = new Map(graphs.map(item => [item.graph_id, item]));
   const records = new Map(bundle.evidence.map(record => [record.id, record]));
   const cited_records = new Set<string>();
-  const citations = new Map<string, Set<string>>();
   const supported_ids = (support: { evidence_id: string; excerpt: string }[]) => {
     if (!support.every(ref => quotes(records.get(ref.evidence_id)?.passage, ref.excerpt))) {
       throw new AppError(422, "The saved pitch has an unresolved evidence reference. Run research again before planning.");
     }
     const ids = [...new Set(support.map(ref => ref.evidence_id))];
     for (const id of ids) cited_records.add(id);
-    for (const { evidence_id, excerpt } of support) {
-      const approved = citations.get(evidence_id) ?? new Set<string>();
-      if (speakable(excerpt)) approved.add(excerpt);
-      citations.set(evidence_id, approved);
-    }
     return ids;
   };
   const approved_headings = new Map<string, string[]>();
@@ -356,74 +428,99 @@ export const plan_verified_pitch = async (bundle: TResearchBundle, pitch: TDeckP
         .map((text, i) => ({ sentence_id: id + "-sentence-" + (i + 1), text, evidence_ids })),
     };
   });
-  if ((!passages.length && !graphs.length) || passages.some(passage => !passage.sentences.length ||
-      passage.purpose === "point" && !passage.sentences[0].evidence_ids.length)) {
+  if (settings && (!passages.length || passages.some(passage => !passage.sentences.length ||
+      passage.purpose === "point" && !passage.sentences[0].evidence_ids.length))) {
     throw new AppError(422, "The saved pitch needs supported narration before it can be presented.");
   }
   const duration = settings ? settings.duration_minutes * 60 - (settings.demo?.seconds ?? 0) : Infinity;
   const count = Math.min(pitch.slide_count ?? MAX_PRESENTATION_SLIDES, MAX_PRESENTATION_SLIDES);
   const audience = settings ? settings.audience.trim() || bundle.confirmed_brief.intent?.audience || "Audience in the confirmed brief" : "";
-  for (const { evidence_ids } of graphs) for (const id of evidence_ids) cited_records.add(id);
-  const context_records: TPlanContext["evidence"] = [];
-  let record_budget = 68_000;
-  for (const id of cited_records) {
+  let record_budget = presentation_evidence_budget;
+  const context_records = settings ? [...cited_records].flatMap(id => {
     const { origin, passage, location } = records.get(id)!;
-    const excerpt = settings || speakable(passage) ? passage : [...(citations.get(id) ?? [])].join("\n");
-    if (!excerpt) continue;
-    const record = { id, origin, passage: excerpt, location };
+    const record = { id, origin, passage, location };
     const size = Buffer.byteLength(JSON.stringify(record), "utf8");
-    if (size > record_budget) continue;
-    context_records.push(record);
+    if (size > record_budget) return [];
     record_budget -= size;
+    return [record];
+  }) : select_presentation_evidence(bundle);
+  const eligible = settings ? records : new Map(context_records.map(record => [record.id, record]));
+  if (!settings && !eligible.size) {
+    throw new PresentationCoverageError(count, 0, ["Add a source that directly supports the presentation objective."],
+      "The saved research has no eligible evidence for this deck.");
   }
+  const graphs = settings ? [] : saved_research_graphs(bundle).filter(({ graph, evidence_ids }) =>
+    evidence_ids.every(id => eligible.has(id)) && speakable(graph.name) &&
+    speakable(graph.description) && graph.data.every(point => speakable(point.label)));
+  const by_graph_id = new Map(graphs.map(item => [item.graph_id, item]));
   // Each rejected rule is traced by name, so a refused plan says why instead of silently falling back.
   // A slide that breaks a rule is dropped with its reason traced; the rest of the plan survives. Dropping the whole
   // plan for one unsupported figure used to send the deck to the research-wording fallback.
   const reject = (reason: string) => { trace_plan(bundle.research_id, "rejected_constraints:" + reason); return undefined; };
-  const skip = (reason: string) => trace_plan(bundle.research_id, "dropped_beat:" + reason);
-  const build = (beats: TPlanBeat[]) => {
-    if (!beats.length || beats.length > count) return reject("beat_count");
+  const build = (beats: TPlanBeat[], feedback: string[], completion?: TPlanContext["completion"]) => {
+    if (!beats.length || beats.length > (completion?.candidate_limit ?? count)) return reject("beat_count");
     const slides: TSlide[] = [];
-    const titles = new Set<string>();
-    const used_graphs = new Set<string>();
+    const retained = completion?.retained.map(({ beat }) => beat) ?? [];
+    const fact_key = (beat: TPlanBeat) => JSON.stringify([[...beat.highlights].sort(), beat.sentences.map(sentence => sentence.text)])
+      .toLowerCase();
+    const titles = new Set(retained.map(beat => beat.title.toLowerCase()));
+    const used_graphs = new Set(retained.flatMap(beat => beat.template.type === "saved_graph" ? [beat.template.graph_id] : []));
+    const facts = new Set(retained.map(fact_key));
+    const reserved_ids = new Set(completion?.retained.map(item => item.slide_id));
+    let next_id = completion ? count : 0;
+    const proposed_by_slide_id = new Map<string, TPlanBeat>();
+    const skip = (reason: string, title: string) => {
+      trace_plan(bundle.research_id, "dropped_beat:" + reason);
+      feedback.push(`Slide "${title}" was flagged (${reason}).`);
+    };
+    const has_evidence = (id: string) => settings ? cited_records.has(id) : eligible.has(id);
     const supported_numbers = (text: string, ids: string[]) => numeric_tokens(text).every(value =>
-      ids.some(id => numeric_tokens(records.get(id)?.passage ?? "").includes(value)));
+      ids.some(id => numeric_tokens(eligible.get(id)?.passage ?? "").includes(value)));
     for (const beat of beats) {
       const title_key = beat.title.toLowerCase();
-      if (titles.has(title_key)) { skip("duplicate_title"); continue; }
-      if (!beat.evidence_ids.length || !beat.evidence_ids.every(id => cited_records.has(id))) {
-        skip("uncited_evidence");
+      if (titles.has(title_key)) { skip("duplicate_title", beat.title); continue; }
+      if (!beat.evidence_ids.length || !beat.evidence_ids.every(has_evidence)) {
+        skip("uncited_evidence", beat.title);
         continue;
       }
-      const used = beat.evidence_ids.map(id => records.get(id)!);
+      const used = beat.evidence_ids.map(id => eligible.get(id)!);
       const unsupported_visible = [beat.title, ...beat.highlights].find(text => !supported_numbers(text, beat.evidence_ids));
-      if (unsupported_visible) { skip("unsupported_number_on_slide"); continue; }
-      const unsupported_spoken = beat.sentences.find(sentence => !sentence.evidence_ids.every(id => cited_records.has(id)) ||
+      if (unsupported_visible) { skip("unsupported_number_on_slide", beat.title); continue; }
+      const unsupported_spoken = beat.sentences.find(sentence => !sentence.evidence_ids.every(has_evidence) ||
         !supported_numbers(sentence.text, sentence.evidence_ids));
-      if (unsupported_spoken) { skip("unsupported_number_spoken"); continue; }
+      if (unsupported_spoken) { skip("unsupported_number_spoken", beat.title); continue; }
       let visual: TBeatVisual;
       if (beat.template.type === "saved_graph") {
         const saved = by_graph_id.get(beat.template.graph_id);
-        if (!saved || used_graphs.has(saved.graph_id)) { skip("unknown_or_reused_graph"); continue; }
+        if (!saved || used_graphs.has(saved.graph_id)) { skip("unknown_or_reused_graph", beat.title); continue; }
         used_graphs.add(saved.graph_id);
         visual = { ...beat, ...graph_visual(saved), evidence_ids: [...new Set([...beat.evidence_ids, ...saved.evidence_ids])] };
       } else {
         const supported = template_supported(beat.template, used);
-        if (!supported) skip("template_downgraded:" + beat.template.type);
+        if (!supported) skip("template_downgraded:" + beat.template.type, beat.title);
         const template = supported ? beat.template : { type: "bullet_slide" as const };
-        if (!beat.highlights.length && !chart_template_types.includes(template.type)) { skip("empty_text_slide:" + beat.template.type); continue; }
+        if (!beat.highlights.length && template.type === "bullet_slide") { skip("empty_text_slide", beat.title); continue; }
         visual = { ...beat, template };
       }
+      const facts_on_slide = fact_key(beat);
+      if (!settings && facts.has(facts_on_slide)) { skip("duplicate_takeaway", beat.title); continue; }
+      facts.add(facts_on_slide);
       titles.add(title_key);
+      while (reserved_ids.has(`slide-${next_id + 1}`)) next_id++;
+      const id_index = next_id++;
       const script = beat.sentences.flatMap(sentence => Array.from(sentences.segment(sentence.text), part => part.segment.trim())
         .filter(Boolean).map(text => ({ text, evidence_ids: [...new Set(sentence.evidence_ids)] })))
-        .map((sentence, index) => ({ ...sentence, sentence_id: `beat-${slides.length + 1}-sentence-${index + 1}` }));
-      slides.push(compile_beat(visual, script, script.map(sentence => sentence.text).join(" "), slides.length, beats.length));
+        .map((sentence, index) => ({ ...sentence, sentence_id: `beat-${id_index + 1}-sentence-${index + 1}` }));
+      const slide = compile_beat(visual, script, script.map(sentence => sentence.text).join(" "), id_index, beats.length);
+      slides.push(slide);
+      proposed_by_slide_id.set(slide.slide_id, { ...beat, template: beat.template.type === "saved_graph"
+        ? beat.template : visual.template! });
     }
     if (!slides.length) return reject("no_usable_beats");
     const kept = slides.map((slide, index): TSlide => ({ ...slide,
       layout: index === 0 ? "headline" : index === slides.length - 1 ? "takeaway" : "evidence" }));
-    return kept.reduce((total, slide) => total + slide.estimated_seconds!, 0) <= duration ? kept : reject("over_duration");
+    return kept.reduce((total, slide) => total + slide.estimated_seconds!, 0) <= duration
+      ? { slides: kept, proposed_by_slide_id } : reject("over_duration");
   };
   const context: TPlanContext = {
     ...(settings && {
@@ -441,6 +538,8 @@ export const plan_verified_pitch = async (bundle: TResearchBundle, pitch: TDeckP
       title: deck_title,
       ...(bundle.confirmed_brief.intent?.outcome && speakable(bundle.confirmed_brief.intent.outcome) &&
         { objective: bundle.confirmed_brief.intent.outcome }),
+      ...(bundle.confirmed_brief.intent?.audience && speakable(bundle.confirmed_brief.intent.audience) &&
+        { audience: bundle.confirmed_brief.intent.audience }),
       known_gaps: bundle.gaps.filter(gap => speakable(gap)).slice(0, 30).map(gap => gap.slice(0, 500)),
     } }),
     ...(layout_repair && { layout_repair: {
@@ -452,60 +551,122 @@ export const plan_verified_pitch = async (bundle: TResearchBundle, pitch: TDeckP
     evidence: context_records,
   };
   if (context.layout_repair && !context.layout_repair.issues.length) throw new AppError(422, "The layout report needs valid slide IDs.");
-  let assessment: TAssessment | undefined;
-  const propose = async (request: TPlanContext) => {
+  const propose = async (request: TPlanContext): Promise<TPlanAttempt> => {
+    signal?.throwIfAborted();
+    const attempt: TPlanAttempt = { slides: [], verified_beats: [], feedback: [] };
     try {
-      const model_output = await plan(request, bundle.research_id);
-      const planned: z.ZodSafeParseResult<TParsedPlan> = (settings ? planner_output : assessed_output).safeParse(model_output);
-      if (planned.success && planned.data.readiness) {
-        assessment = planned.data.readiness;
-        if (assessment.status === "insufficient") return;
+      const model_output = await plan(request, bundle.research_id, signal);
+      signal?.throwIfAborted();
+      const planned = (request.completion ? completion_output : settings ? planner_output : assessed_output).safeParse(model_output);
+      if (!planned.success) {
+        trace_plan(bundle.research_id, model_output === undefined ? "provider_unavailable" : "rejected_schema");
+        return { ...attempt, unavailable: model_output === undefined, feedback: ["Return a complete plan in the requested format."] };
       }
-      const proposed = planned.success ? build(planned.data.beats) : undefined;
-      if (!proposed || !planned.success) {
-        trace_plan(bundle.research_id, planned.success ? "rejected_constraints" :
-          model_output === undefined ? "provider_unavailable" : "rejected_schema");
-        return;
+      const { data } = planned;
+      const readiness = "readiness" in data ? data.readiness : undefined;
+      attempt.assessment = readiness;
+      attempt.rationale = data.rationale;
+      if (readiness?.status === "insufficient") return attempt;
+      const anchors = new Map<string, string | null>();
+      const retained_ids = new Set(request.completion?.retained.map(({ slide_id }) => slide_id));
+      const beats = "beats" in data ? data.beats : data.additions.flatMap(({ after_slide_id, beat }) => {
+        if (anchors.has(beat.title) || after_slide_id !== null && !retained_ids.has(after_slide_id)) return [];
+        anchors.set(beat.title, after_slide_id);
+        return [beat];
+      });
+      const proposed = build(beats, attempt.feedback, request.completion);
+      if (!proposed) return attempt;
+      const review = await verify(proposed.slides, settings ? bundle.evidence : context_records, bundle.research_id, signal);
+      signal?.throwIfAborted();
+      if (typeof review === "object") {
+        attempt.feedback.unshift(...review.feedback);
+        attempt.unavailable = review.unavailable;
       }
-      const review = await verify(proposed, bundle.evidence, bundle.research_id);
-      const slides = verified_slides(proposed, review);
-      if (layout_repair && slides.length !== layout_repair.deck.slides.length) {
-        trace_plan(bundle.research_id, "layout_candidate_lost_verified_slides");
-        return;
-      }
-      trace_plan(bundle.research_id, slides.length === proposed.length ? "accepted" :
-        slides.length ? "accepted_verified_subset" : "rejected_verification",
-        { requested: count, generated: planned.data.beats.length, eligible: proposed.length, verified: slides.length });
-      return { slides, assessment, generated_count: planned.data.beats.length, rationale: planned.data.rationale +
-        (slides.length < proposed.length ? " The deck retains the slides with checked content." : ""),
-      feedback: typeof review === "object" ? review.feedback : [] };
+      attempt.slides = verified_slides(proposed.slides, review);
+      attempt.verified_beats = attempt.slides.map(slide => proposed.proposed_by_slide_id.get(slide.slide_id)!);
+      if (request.completion) attempt.anchors = new Map(attempt.slides.map(slide => [slide.slide_id, anchors.get(slide.title)!]));
+      trace_plan(bundle.research_id, attempt.slides.length === proposed.slides.length ? "accepted" :
+        attempt.slides.length ? "accepted_verified_subset" : "rejected_verification",
+        { requested: count, generated: beats.length, eligible: proposed.slides.length, verified: attempt.slides.length });
+      if (attempt.slides.length < proposed.slides.length) attempt.rationale += " The deck retains the slides with checked content.";
+      return attempt;
     } catch {
+      signal?.throwIfAborted();
       trace_plan(bundle.research_id, "proposal_failed");
-      return;
+      return { ...attempt, unavailable: true };
     }
   };
-  const require_sufficient_context = () => {
-    if (assessment?.status === "insufficient") throw new AppError(422, [assessment.reason, ...assessment.gaps].join(" "));
+  const first = await propose(context);
+  const verified_count = first.slides.length;
+  const missing_evidence = (attempt: TPlanAttempt, verified: number) => {
+    const assessment = attempt.assessment;
+    if (attempt.unavailable || !assessment || assessment.status === "ready") return;
+    const gaps = [...new Set(assessment.gaps)];
+    if (gaps.length) return new PresentationCoverageError(count, verified, gaps, assessment.reason);
   };
-  let selected = await propose(context);
-  require_sufficient_context();
-  const verified_count = selected?.slides.length ?? 0;
-  const source_backed_count = Math.min(count, passages.length);
-  const needs_count_repair = !settings && verified_count < count &&
-    (!selected || selected.assessment?.status !== "limited" || selected.generated_count > verified_count || source_backed_count > verified_count);
-  if (!layout_repair && (needs_count_repair || (selected && !verified_count && selected.feedback.length))) {
+  if (!settings && !layout_repair && first.assessment?.status === "insufficient") {
+    const coverage_failure = missing_evidence(first, verified_count);
+    if (coverage_failure) throw coverage_failure;
+  }
+  let repaired: TPlanAttempt | undefined;
+  const needs_count_repair = !settings && verified_count < count;
+  if (!layout_repair && (needs_count_repair || (!verified_count && first.feedback.length))) {
     trace_plan(bundle.research_id, "repair_requested");
     const count_feedback = needs_count_repair ? [
-      `The first plan retained ${verified_count} of ${count} requested slides. Use the full saved findings to reach ${count} distinct slides wherever supported. A finding may support multiple independent takeaways. Retain qualifications and use a simple text slide when the evidence does not bind a visual precisely. Explain any genuine shortfall.`,
+      `The first plan retained ${verified_count} of ${count} requested slides. Return the entire ordered deck and reach ${count} distinct slides. Keep the verified beats and replace or fill in the missing ones. Mine the actual passages for specific independent takeaways, including ones from the same passage. Use a short text slide when the evidence does not bind a visual precisely. Keep every reporting period, estimate and qualifier. Name genuinely missing evidence in readiness.gaps.`,
     ] : [];
-    const repaired = await propose({ ...context, review_feedback: [...count_feedback, ...(selected?.feedback ?? [])].slice(0, 8) });
-    if (!verified_count) require_sufficient_context();
-    if (repaired && repaired.slides.length >= verified_count) selected = repaired;
+    repaired = await propose({
+      ...context, review_feedback: [...count_feedback, ...first.feedback].slice(0, 10),
+      ...(needs_count_repair && verified_count > 0 && { verified_beats: first.verified_beats }),
+    });
   }
-  const selected_plan = selected && selected.slides.length && (settings || layout_repair || selected.slides.length >= source_backed_count)
-    ? selected : undefined;
+  let selected = repaired && repaired.slides.length >= verified_count && !repaired.unavailable ? repaired : first;
+  let added: TPlanAttempt | undefined;
+  for (let round = 0; !settings && !layout_repair && selected.slides.length > 0 &&
+      selected.slides.length < count && selected.assessment?.status === "ready" && round < max_completion_rounds; round++) {
+    const missing = count - selected.slides.length;
+    trace_plan(bundle.research_id, "complete_verified_deck");
+    added = await propose({
+      ...context, completion: { missing, candidate_limit: Math.min(MAX_PRESENTATION_SLIDES, missing + 1),
+        retained: selected.slides.map(({ slide_id }, index) =>
+        ({ slide_id, beat: selected.verified_beats[index] })) },
+      review_feedback: [...new Set([...(added?.feedback ?? []), ...selected.feedback])].slice(0, 8),
+    });
+    if (added.anchors?.size && added.slides.length) {
+      const places = new Map<string | null, TSlide[]>();
+      const verified_by_id = new Map(selected.slides.map(({ slide_id }, index) => [slide_id, selected.verified_beats[index]]));
+      for (const [index, slide] of added.slides.slice(0, missing).entries()) {
+        const anchor = added.anchors.get(slide.slide_id) ?? null;
+        const following = places.get(anchor) ?? [];
+        following.push(slide);
+        places.set(anchor, following);
+        verified_by_id.set(slide.slide_id, added.verified_beats[index]);
+      }
+      const ordered = [...(places.get(null) ?? []),
+        ...selected.slides.flatMap(slide => [slide, ...(places.get(slide.slide_id) ?? [])])];
+      selected = { ...selected, slides: ordered.map((slide, index): TSlide => ({ ...slide,
+        layout: index === 0 ? "headline" : index === ordered.length - 1 ? "takeaway" : "evidence" })),
+      verified_beats: ordered.map(slide => verified_by_id.get(slide.slide_id)!),
+      rationale: added.rationale ?? selected.rationale, assessment: added.assessment ?? selected.assessment };
+    }
+    if (added.unavailable || added.assessment?.status === "insufficient") break;
+  }
+  if (!settings && selected.slides.length !== count) {
+    trace_plan(bundle.research_id, "requested_count_not_met", {
+      requested: count, generated: selected.slides.length, eligible: selected.slides.length, verified: selected.slides.length,
+    });
+    if (layout_repair) throw new AppError(422, "The layout repair did not produce a verified candidate. Keep the previous draft.");
+    if (added?.unavailable || repaired?.unavailable || first.unavailable && !repaired) {
+      throw new AppError(503, "Slide planning or fact-checking is unavailable. Try again shortly.");
+    }
+    const coverage_failure = [added, repaired, first].flatMap(attempt => attempt ?
+      missing_evidence(attempt, selected.slides.length) ?? [] : [])[0];
+    if (coverage_failure) throw coverage_failure;
+    throw new AppError(422,
+      `Only ${selected.slides.length} of ${count} requested slides passed review. Try generating the deck again or choose fewer slides.`);
+  }
+  const selected_plan = selected.slides.length ? selected : undefined;
   let slides = selected_plan?.slides;
-  if (layout_repair && !slides) throw new AppError(422, "The layout repair did not produce a verified candidate. Keep the previous draft.");
   if (slides) {
     if (!slides.some(slide => slide.chart || slide.template && chart_template_types.includes(slide.template.type))) {
       slides = reuse_graphs(slides, graphs, slides.length);

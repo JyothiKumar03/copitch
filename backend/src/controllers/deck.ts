@@ -17,7 +17,7 @@ const prepare_input = z.strictObject({
   pitch: z.union([z.strictObject({ slide_count: z.number().int().min(1).max(MAX_PRESENTATION_SLIDES) }), z.strictObject({
     audience: z.string().trim().max(6000).transform(value => value.normalize("NFKC").replace(/\s+/gu, " ")),
     duration_minutes: z.number().int().min(1).max(60),
-    slide_count: z.number().int().min(1).max(100).optional(),
+    slide_count: z.number().int().min(1).max(MAX_PRESENTATION_SLIDES).optional(),
     demo: z.strictObject({ url: z.string().max(2048).refine(value => !!public_url(value)),
       objective: z.string().trim().min(1).max(240), seconds: z.number().int().min(1).max(3600),
     }).optional(),
@@ -31,7 +31,11 @@ export const list_decks = (req: TApiRequest, res: Response) => {
   if (!session) return res.status(401).json({ error: "Unauthorized" });
   const research = z.string().uuid().safeParse(req.query.research_id);
   if (!research.success) throw new AppError(400, "Supply a research artifact ID");
-  return res.json({ decks: database().decks.variants(session, research.data) });
+  const db = database();
+  return res.set("Cache-Control", "private, no-store").json({
+    decks: db.decks.variants(session, research.data),
+    preparation: db.deck_preparations.active_for_research(session, research.data),
+  });
 };
 
 const preview_editable = (session: string, deck_id: string) => {

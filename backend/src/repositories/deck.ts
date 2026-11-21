@@ -6,7 +6,7 @@ import { estimate_pitch_seconds } from "../services/pitch";
 import { propose_slide } from "../services/deck";
 
 const pitch_variant_version = 3;
-const context_slides_version = 5;
+const context_slides_version = 6;
 
 export const pitch_variant_key = (pitch?: TDeckPlanInput) => {
   if (!pitch) return "";
@@ -58,7 +58,9 @@ export class DeckRepository {
       WHERE d.session=? AND d.research=? ORDER BY d.rowid DESC LIMIT 100`).all(session, research).map(row => {
       const deck = JSON.parse(row.payload) as TDeck;
       const label = deck.pitch?.audience ? `${deck.pitch.audience} · ${deck.pitch.duration_minutes} min` :
-        deck.pitch?.slide_count ? `${deck.slides.length} ${deck.slides.length === 1 ? "slide" : "slides"}` : deck.title;
+        deck.pitch?.slide_count && deck.slides.length !== deck.pitch.slide_count
+          ? `${deck.slides.length} of ${deck.pitch.slide_count} requested slides`
+          : deck.pitch?.slide_count ? `${deck.slides.length} ${deck.slides.length === 1 ? "slide" : "slides"}` : deck.title;
       return { deck_id: deck.deck_id, label };
     });
   }
