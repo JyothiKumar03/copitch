@@ -3,6 +3,7 @@ import type { TConversionMetric, TCsvObservation, TSourceSummary } from "./sourc
 import type { TPitchPassage } from "./pitch-content";
 import type { TStudioIntent } from "./studio-turn";
 import type { TAttempt, TModelStep } from "./ai";
+import type { TResearchGraph } from "../../../shared/research-graphs";
 
 export type TSourcePolicy = "files_only" | "public_search";
 
@@ -64,9 +65,11 @@ export type TGroundingReview = { units: TGroundingUnit[]; evidence: TEvidence[];
 export type TGroundingVerdict = { id: string; decision: "supported" | "unsupported" | "missing_qualification"; reason?: string };
 export type TGroundingOmission = { finding: string; reason: string; evidence_ids: string[] };
 export type TGroundingReviewResult = TGroundingVerdict[] | { verdicts: TGroundingVerdict[]; omissions?: TGroundingOmission[] };
+export type TVerifiedResearchGraph = { graph_id: string; graph: TResearchGraph; evidence_ids: string[] };
 export type TResearchBundle = {
   context_markdown?: string;
   pitch_markdown?: string;
+  verified_graphs?: TVerifiedResearchGraph[];
   pitch_chart?: TPitchChartSelection | null;
   pitch_script?: TPitchPassage[];
   grounding?: TGrounding;

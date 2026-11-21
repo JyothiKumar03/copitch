@@ -52,8 +52,10 @@ test("the original PDF column controls each value and valid line dates are order
   expect(valid.markdown.indexOf("Oct 2025")).toBeLessThan(valid.markdown.indexOf("2026-10"));
   let wrong_period_reviews = 0;
   trend.data[0].value = 5523.20;
-  expect(await verify_graph_document(wrap(trend), evidence, async (review, signal) => { wrong_period_reviews++; return pass_review(review, signal); }, signal()))
-    .toEqual({ markdown: "", graph_count: 0, evidence_ids: [] });
+  const rejected = await verify_graph_document(wrap(trend), evidence,
+    async (review, signal) => { wrong_period_reviews++; return pass_review(review, signal); }, signal());
+  expect(rejected.graphs).toEqual([]);
+  expect(rejected.markdown).toBe("");
   expect(wrong_period_reviews).toBe(0);
   trend.data[0].value = 13.76;
   expect((await verify_graph_document(wrap(trend), evidence, pass_review, signal())).graph_count).toBe(0);

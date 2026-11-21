@@ -2,7 +2,7 @@ import { once } from "node:events";
 import type { Response } from "express";
 import { z } from "zod";
 import type { TResearchGraph, TResearchGraphPoint } from "../../../shared/research-graphs";
-import type { TEvidence, TGraphRepairInput, TGroundingUnit, TResearchProvider } from "../types/research";
+import type { TEvidence, TGraphRepairInput, TGroundingUnit, TResearchBundle, TResearchProvider, TVerifiedResearchGraph } from "../types/research";
 import { quotes } from "./excerpt";
 import { mark_units, unit_legend } from "./research-table-units";
 
@@ -17,6 +17,7 @@ const point_schema = z.strictObject({
 const graph_schema = z.strictObject({
   name: plain(120), description: plain(300), type: z.enum(["bar", "line"]), data: z.array(point_schema).min(2).max(12),
 });
+const saved_graph_schema = graph_schema.extend({ data: z.array(point_schema.omit({ excerpt: true })).min(2).max(12) });
 type TGraphDraft = z.infer<typeof graph_schema>;
 type TGraphPointDraft = z.infer<typeof point_schema>;
 type TBoundPoint = TGraphPointDraft & { unit_source?: { evidence_id: string; excerpt: string } };
@@ -213,6 +214,27 @@ const write_graph = (graph: TResearchGraph, extra_ids: string[]) => {
   return `<graph>${json}</graph>\n\nGraph sources ${cited.map(id => `[^${id}]`).join(" ")}`;
 };
 
+export const saved_research_graphs = (bundle: Pick<TResearchBundle, "context_markdown" | "verified_graphs" | "evidence">) => {
+  if (bundle.verified_graphs) return bundle.verified_graphs;
+  const ids = new Set(bundle.evidence.map(record => record.id));
+  const result: TVerifiedResearchGraph[] = [];
+  for (const match of (bundle.context_markdown ?? "").matchAll(/^<graph>(\{[^\n]{1,23000}\})<\/graph>\r?\n\r?\nGraph sources (\[\^[A-Z]\d+\](?: \[\^[A-Z]\d+\])*)\r?$/gmu)) {
+    try {
+      const parsed = saved_graph_schema.safeParse(JSON.parse(match[1]));
+      const evidence_ids = [...new Set(Array.from(match[2].matchAll(/\[\^([A-Z]\d+)\]/gu), citation => citation[1]))];
+      if (!parsed.success || evidence_ids.some(id => !ids.has(id))) continue;
+      const graph = parsed.data;
+      if (graph.data.some(point => !evidence_ids.includes(point.evidence_id) || point.unit !== graph.data[0].unit) ||
+          new Set(graph.data.map(point => normalize(point.label))).size < graph.data.length) continue;
+      const periods = new Set(graph.data.map(point => normalize_period(point.period)));
+      if (periods.size !== (graph.type === "bar" ? 1 : graph.data.length)) continue;
+      result.push({ graph_id: "graph-" + (result.length + 1), graph, evidence_ids });
+      if (result.length === max_graphs) break;
+    } catch { /* An invalid archived graph cannot become a slide. */ }
+  }
+  return result;
+};
+
 const review_graph = (graph: TBoundGraph, index: number): TGroundingUnit[] => {
   const support = (point: TBoundPoint) => [{ evidence_id: point.evidence_id, excerpt: point.excerpt }, ...(point.unit_source ? [point.unit_source] : [])];
   return [{ id: `graph-${index}-summary`, kind: "paragraph", text: `${graph.name}. ${graph.description} (${graph.type} graph; ${graph.data.map(point =>
@@ -221,7 +243,15 @@ const review_graph = (graph: TBoundGraph, index: number): TGroundingUnit[] => {
     text: `${graph.name}: ${point.label} reported ${point.value} ${point.unit} in ${point.period}.`, support: support(point) }))];
 };
 
-const empty_graphs = () => ({ markdown: "", graph_count: 0, evidence_ids: [] as string[] });
+const graph_document = (graphs: TVerifiedResearchGraph[]) => ({
+  graphs, graph_count: graphs.length,
+  evidence_ids: [...new Set(graphs.flatMap(graph => graph.evidence_ids))],
+  get markdown() { return graphs.map(({ graph, evidence_ids }) => write_graph(graph, evidence_ids)).join("\n\n"); },
+});
+
+export const serialize_research_graphs = (bundle: TResearchBundle) => graph_document(saved_research_graphs(bundle));
+
+const empty_graphs = () => graph_document([]);
 
 const graph_result = async (proposed: TGraphDraft[], evidence: TEvidence[], verify: TGraphVerifier, signal: AbortSignal) => {
   const empty = empty_graphs();
@@ -251,12 +281,14 @@ const graph_result = async (proposed: TGraphDraft[], evidence: TEvidence[], veri
       trace("incomplete_review");
       return { output: empty, reason: "unavailable" as const };
     }
-    const graphs = prepared.filter(graph => graph.units.every(unit => decisions.get(unit.id) === "supported")).map(({ draft }) => ({
-      graph: canonical_graph(draft), unit_ids: draft.data.flatMap(point => point.unit_source?.evidence_id ?? []),
+    const graphs = prepared.filter(graph => graph.units.every(unit => decisions.get(unit.id) === "supported")).map(({ draft }, index) => ({
+      graph_id: "graph-" + (index + 1), graph: canonical_graph(draft),
+      evidence_ids: [...new Set([
+        ...draft.data.map(point => point.evidence_id), ...draft.data.flatMap(point => point.unit_source?.evidence_id ?? []),
+      ])],
     }));
     trace("reviewed", graphs.length);
-    const output = { markdown: graphs.map(({ graph, unit_ids }) => write_graph(graph, unit_ids)).join("\n\n"), graph_count: graphs.length,
-      evidence_ids: [...new Set(graphs.flatMap(({ graph, unit_ids }) => [...graph.data.map(point => point.evidence_id), ...unit_ids]))] };
+    const output = graph_document(graphs);
     return { output, reason: graphs.length ? "accepted" as const : "review" as const };
   } catch { trace("review_failed"); return { output: empty, reason: "unavailable" as const }; }
 };
