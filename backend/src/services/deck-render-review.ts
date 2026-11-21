@@ -67,6 +67,8 @@ export const prepare_reviewed_deck = async (bundle: TResearchBundle, pitch: TDec
     signal?.throwIfAborted();
     if (process.env.TRACE_LOGS === "1") console.log(JSON.stringify({
       operation: "presentation.render_review", research_id: bundle.research_id, round, issues: last_issues.length,
+      review_source: rendered.issues.length ? "browser" : "visual_model",
+      issue_codes: [...new Set(last_issues.map(issue => issue.issue))],
     }));
     if (!last_issues.length) return { ...deck, render_review: { rounds: round, status: "passed" as const } };
     if (round < MAX_DECK_REVIEW_PASSES) {
