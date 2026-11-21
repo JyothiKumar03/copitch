@@ -1,5 +1,5 @@
 import { createElement } from "react";
-import { PublicSlide, deckSlideView } from "@/components/deck/Slide";
+import { PublicSlide, deckSlideView } from "../components/deck/Slide";
 import { stageStyle } from "./stage-style";
 import type { TDeck } from "@/types/deck";
 
@@ -20,11 +20,11 @@ export const exportDeck = async (deck: TDeck) => {
   doc.head.append(viewport);
   const style = doc.createElement("style");
   style.textContent = stageStyle + `
-    *{box-sizing:border-box}body{margin:0;background:#f6edeb}h3,ul,footer{margin:0}
-    .slide-shell{border-radius:0;min-height:100dvh;padding:clamp(20px,6vw,80px)}
-    .slide-shell[data-density=dense]{padding:clamp(20px,3vw,48px)}
-    nav{display:flex;gap:1em;font:500 16px/1.5 system-ui}a{color:inherit;text-underline-offset:.25em}
-    @media print{.slide-shell{min-height:0;break-after:page}nav{display:none}}`;
+    *{box-sizing:border-box}body{margin:0;background:#0e0f12}h3,ul,footer{margin:0}
+    .slide-shell{position:relative;width:min(100vw,177.78dvh);margin:0 auto 12px;border:0;border-radius:0}
+    nav{position:absolute;right:5cqw;bottom:2.6cqw;display:flex;gap:1.4em;font:500 1.3cqw/1.3 var(--slide-font)}
+    a{color:var(--slide-muted);text-underline-offset:.25em}
+    @media print{body{background:#fff}.slide-shell{width:100%;margin:0;break-after:page}nav{display:none}}`;
   doc.head.append(style);
 
   const append = (parent: HTMLElement, tag: string, text: string) => {

@@ -16,25 +16,16 @@
   padding: clamp(.75rem, 2vw, 1.875rem);
 }
 
-.deck-live .slide-shell { min-height: min(58vh, 560px); }
 .live-canvas { margin: .5rem .5rem 0; }
 .live-console { grid-template-columns: minmax(0, 1fr); align-items: start; }
 
 .deck-tools, .deck-action-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
 .deck-action-row { justify-content: space-between; row-gap: .75rem; }
-.deck-edit, .pitch-form, .pitch-plan { display: grid; gap: 1rem; min-width: 0; }
-.deck-edit label, .pitch-form label { display: grid; gap: .375rem; min-width: 0; align-content: start; font-size: .875rem; font-weight: 500; }
-.deck-edit textarea, .deck-edit input, .pitch-form input { width: 100%; }
+.deck-edit { display: grid; gap: 1rem; min-width: 0; }
+.deck-edit label { display: grid; gap: .375rem; min-width: 0; align-content: start; font-size: .875rem; font-weight: 500; }
+.deck-edit textarea, .deck-edit input { width: 100%; }
 .deck-diff { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(15rem, 100%), 1fr)); gap: .75rem; overflow-wrap: anywhere; }
-.pitch-rationale { grid-column: 1 / -1; }
-.pitch-plan h3 { margin-bottom: .25rem; font-size: .8125rem; font-weight: 650; }
-.pitch-plan p, .pitch-notes p { overflow-wrap: anywhere; font-size: .9375rem; line-height: 1.55; }
-.pitch-notes p { white-space: pre-wrap; }
-
-@container (min-width: 34rem) {
-  .pitch-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .pitch-plan { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-}
+.pitch-notes p { overflow-wrap: anywhere; font-size: .9375rem; line-height: 1.55; white-space: pre-wrap; }
 
 @media (min-width: 64rem) {
   .live-console { grid-template-columns: minmax(0, 1fr) minmax(19rem, 23rem); }

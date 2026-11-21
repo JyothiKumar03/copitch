@@ -1,4 +1,5 @@
 import type { TResearchSession } from "./research";
+import type { TPresentationReadiness } from "../../shared/presentation";
 
 export type TConversionChart = {
   period: string | null;
@@ -15,6 +16,7 @@ export type TSlideTemplate =
 
 export type TSlide = {
   chart?: TConversionChart;
+  chart_period?: string;
   template?: TSlideTemplate;
   beat_id?: string;
   sentences?: { sentence_id: string; text: string; evidence_ids: string[] }[];
@@ -26,17 +28,19 @@ export type TSlide = {
   narration: string;
   evidence_ids: string[];
 };
-export type TPublicSlide = Pick<TSlide, "slide_id" | "layout" | "title" | "highlights" | "evidence_ids" | "chart" | "template">;
-export type TSlideView = { deckTitle: string; index: number; total: number; slide: TPublicSlide };
+export type TPublicSlide = Pick<TSlide, "slide_id" | "layout" | "title" | "highlights" | "evidence_ids" | "chart" | "chart_period" | "template">;
+// sources: readable source names for the slide footer (site names or file names), never internal evidence IDs.
+export type TSlideView = { deckTitle: string; index: number; total: number; slide: TPublicSlide; sources?: string[] };
 export type TPitchInput = {
   audience: string;
   duration_minutes: number;
   slide_count?: number;
   demo?: { url: string; objective: string; seconds: number; after_slide_id?: string };
 };
-export type TPitchPlan = TPitchInput & { estimated_seconds: number; rationale: string };
+export type TPitchPlan = TPitchInput & { estimated_seconds: number; rationale: string; readiness?: TPresentationReadiness };
+export type TPitchRequest = Required<Pick<TPitchInput, "slide_count">>;
 export type TSavedPitch = { deck_id: string; label: string };
-export type TPitchFormProps = { initial?: TPitchInput; pending: boolean; onPrepare: (pitch: TPitchInput) => void };
+export type TSlideCountPromptProps = { initialCount?: number; pending: boolean; onPrepare: (pitch: TPitchRequest) => void };
 export type TDeck = {
   deck_id: string;
   research_id: string;
