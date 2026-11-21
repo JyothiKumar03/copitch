@@ -8,6 +8,7 @@ import { read_csv } from "./source-csv";
 import { read_pptx } from "./source-pptx";
 import { read_ppt } from "./source-ppt";
 import { source_formats, source_limits } from "../constants/sources";
+import type { TSourceLimits } from "../constants/sources";
 import type { TSourceKind } from "../types/source";
 
 export const max_source_bytes = source_limits.bytes;
@@ -18,14 +19,14 @@ export const source_kind = (filename: string): TSourceKind => {
   throw new AppError(415, "Choose a text PDF, PowerPoint (.ppt or .pptx), or UTF-8 CSV.");
 };
 
-const read_pdf = async (bytes: Buffer): Promise<TSourceContent> => {
+const read_pdf = async (bytes: Buffer, limits: TSourceLimits = source_limits): Promise<TSourceContent> => {
   if (!bytes.subarray(0,1024).includes("%PDF-")) throw new AppError(422,"This file is not a PDF");
   const src = new URL("../workers/pdf-source.ts", import.meta.url);
   const path = existsSync(src) ? src : new URL("../src/workers/pdf-source.ts", import.meta.url);
-  const worker = new Worker(path,{ workerData:bytes });
+  const worker = new Worker(path,{ workerData:{ bytes, pages: limits.pages, characters: limits.characters } });
   try {
     return await new Promise<TSourceContent>((resolve,reject) => {
-      const timer = setTimeout(() => reject(new AppError(422,"PDF text extraction timed out")),source_limits.timeout_ms);
+      const timer = setTimeout(() => reject(new AppError(422,"PDF text extraction timed out")),limits.timeout_ms);
       worker.once("message", (reply: {content?:TSourceContent;error?:string}) => {
         clearTimeout(timer);
         if (reply.content) resolve(reply.content); else reject(new AppError(422,reply.error ?? "Unreadable PDF"));
@@ -37,13 +38,14 @@ const read_pdf = async (bytes: Buffer): Promise<TSourceContent> => {
 };
 
 const parsers = { pdf: read_pdf, ppt: read_ppt, pptx: read_pptx, csv: read_csv };
+const mib = (bytes: number) => Math.round(bytes / 1024 / 1024);
 
-export const parse_source = async (filename: string, bytes: Buffer): Promise<TUploadedSource> => {
+export const parse_source = async (filename: string, bytes: Buffer, limits: TSourceLimits = source_limits): Promise<TUploadedSource> => {
   const kind = source_kind(filename);
   if (!bytes.length) throw new AppError(422,"The file is empty");
-  if (bytes.length > max_source_bytes) throw new AppError(413,"File exceeds 8 MiB");
+  if (bytes.length > limits.bytes) throw new AppError(413,`File exceeds ${mib(limits.bytes)} MiB`);
   try {
-    const content = await parsers[kind](bytes);
+    const content = kind === "pdf" ? await read_pdf(bytes, limits) : await parsers[kind](bytes);
     if (!content.records.length) throw new AppError(422,"No extractable text or rows. Paste text or upload a text-based file.");
     return { source_id:crypto.randomUUID(), filename, kind, locations:content.records.length, ...content };
   } catch (error) {

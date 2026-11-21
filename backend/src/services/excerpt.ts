@@ -13,4 +13,14 @@ const plain = (text: string) => {
   return out;
 };
 
+// The numbers a text states, as values: "1,200.5" and "1200.5" are the same figure.
+export const numeric_tokens = (text: string) => (text.match(/(?<![\d.,])[-+]?(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)(?!\d|[.,]\d)/gu) ?? [])
+  .map(value => Number(value.replaceAll(",", "")));
+
+// Every number in a sentence appears in the passage it cites: nothing computed, rounded or estimated.
+export const numbers_stated_in = (text: string, passage: string) => {
+  const stated = numeric_tokens(passage);
+  return numeric_tokens(text).every(value => stated.includes(value));
+};
+
 export const quotes = (passage: string | undefined, excerpt: string) => !!passage && !!excerpt.trim() && plain(passage).includes(plain(excerpt));

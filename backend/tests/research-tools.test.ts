@@ -68,7 +68,7 @@ test("a page redirect cannot expand the approved site", async () => {
   expect(requests).toEqual(approved.urls);
 });
 
-test("the source tools enforce approval and turn hosted results into links only", async () => {
+test("the source tools enforce the source policy and turn hosted results into links only", async () => {
   const queries: string[] = [];
   const requests: string[] = [];
   const lookup = async (query: string) => {
@@ -88,7 +88,7 @@ test("the source tools enforce approval and turn hosted results into links only"
   const files_only = create_research_sources({ ...approved, source_policy: "files_only" }, lookup, read);
   await expect(files_only.read_page(approved.urls[0], [], signal)).rejects.toThrow("Files-only");
   await expect(files_only.search_web(approved.public_queries[0], signal)).rejects.toThrow("Files-only");
-  await expect(tools.search_web("Private title", signal)).rejects.toThrow("exact query");
+  await expect(tools.search_web("  a ", signal)).rejects.toThrow("Write a search query");
   await expect(tools.read_page("https://example.org/unseen", [], signal)).rejects.toThrow("host-approved page");
   const links = await tools.search_web(approved.public_queries[0], signal);
   expect(links).toEqual([{ url: "https://public.example/pilot", label: "Pilot", kind: "page" }]);

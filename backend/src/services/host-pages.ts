@@ -4,7 +4,8 @@ import { get as https_get } from "node:https";
 import type { RequestOptions } from "node:https";
 import { BlockList } from "node:net";
 import { public_url } from "./research";
-import { max_source_bytes, parse_source } from "./source";
+import { parse_source } from "./source";
+import { research_pdf_limits } from "../constants/sources";
 import type { TSearchHit } from "../types/research";
 
 const private_networks = new BlockList();
@@ -16,6 +17,7 @@ for (const [address, prefix] of [
 ] as const) private_networks.addSubnet(address, prefix);
 
 const max_page_bytes = 2 * 1024 * 1024;
+const download_types = new Set(["application/octet-stream", "application/force-download", "application/x-download", "application/download", "binary/octet-stream"]);
 const max_links = 40;
 export type TResearchLink = { url: string; label: string; kind: "page" | "pdf" };
 export type TPageDiscovery = { url: string; hits: TSearchHit[]; links: TResearchLink[] };
@@ -41,9 +43,10 @@ const read_page = async (url: URL, signal: AbortSignal) => {
         return;
       }
       const type = (response.headers["content-type"] ?? "").split(";")[0].trim().toLowerCase();
-      const pdf = type === "application/pdf" || (type === "application/octet-stream" && is_pdf(url.pathname));
+      // Report sites often serve PDFs as generic downloads (download.php?file=report.pdf); the body is checked below.
+      const pdf = type === "application/pdf" || download_types.has(type);
       const plain_text = type === "text/plain" && /\.txt$/i.test(url.pathname);
-      const max_bytes = pdf ? max_source_bytes : max_page_bytes;
+      const max_bytes = pdf ? research_pdf_limits.bytes : max_page_bytes;
       if (response.statusCode !== 200 || (!pdf && !plain_text && type !== "text/html") ||
           Number(response.headers["content-length"]) > max_bytes) {
         response.destroy();
@@ -61,7 +64,8 @@ const read_page = async (url: URL, signal: AbortSignal) => {
       response.once("aborted", () => reject(new Error("The page download was interrupted.")));
       response.once("end", () => {
         const body = Buffer.concat(chunks);
-        if (pdf) resolve({ pdf: body });
+        if (pdf && body.subarray(0, 1024).includes("%PDF-")) resolve({ pdf: body });
+        else if (pdf) reject(new Error("The download was not a PDF."));
         else if (plain_text) resolve({ text: body.toString("utf8") });
         else resolve({ html: body.toString("utf8") });
       });
@@ -186,7 +190,7 @@ const fetch_page = async (value: string, signal: AbortSignal, download: TDownloa
     }
     if ("pdf" in response) {
       const filename = url.pathname.split("/").at(-1) || "Document";
-      const pdf = await parse_source(is_pdf(filename) ? filename : `${filename}.pdf`, response.pdf);
+      const pdf = await parse_source(is_pdf(filename) ? filename : `${filename}.pdf`, response.pdf, research_pdf_limits);
       signal.throwIfAborted();
       const hits = pdf.records.flatMap(row => pdf_passages(row.text).map(passage => ({
         url: url.href, title: `${pdf.filename}, page ${row.number}`, passage,
@@ -233,7 +237,7 @@ const site_hosts = (value: string) => {
 const readable = 200; // characters of visible text: below this a page is a redirect shell, a parking page or empty
 
 export const read_host_page = async (
-  value: string, parent: AbortSignal, options: { try_www?: boolean; download?: TDownloadPage } = {},
+  value: string, parent: AbortSignal, options: { try_www?: boolean; download?: TDownloadPage; timeout_ms?: number } = {},
 ): Promise<TPageDiscovery> => {
   const safe = research_url(value);
   if (!safe) throw new Error("The reference must be a public HTTP or HTTPS URL.");
@@ -245,7 +249,7 @@ export const read_host_page = async (
   for (const candidate of candidates) {
     parent.throwIfAborted();
     try {
-      const page = await fetch_page(candidate, AbortSignal.any([parent, AbortSignal.timeout(10_000)]), options.download ?? read_page);
+      const page = await fetch_page(candidate, AbortSignal.any([parent, AbortSignal.timeout(options.timeout_ms ?? 10_000)]), options.download ?? read_page);
       const length = page.hits.reduce((size, hit) => size + hit.passage.length, 0);
       if (length >= readable) return page;
       if (length > longest) { best = page; longest = length; }
