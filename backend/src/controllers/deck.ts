@@ -1,5 +1,6 @@
 import type { Response } from "express";
 import type { TApiRequest } from "../types/http";
+import { AppError } from "../errors/app-error";
 import { z } from "zod";
 import { database } from "../repositories/store";
 import { session_for } from "../middleware/host-session";
@@ -21,6 +22,21 @@ const prepare_input = z.strictObject({
   }).optional(),
 });
 const preparing = new Map<string, Promise<TDeck>>();
+
+export const list_decks = (req: TApiRequest, res: Response) => {
+  const session = session_for(req);
+  if (!session) return res.status(401).json({ error: "Unauthorized" });
+  const research = z.string().uuid().safeParse(req.query.research_id);
+  if (!research.success) throw new AppError(400, "Supply a research artifact ID");
+  return res.json({ decks: database().decks.variants(session, research.data) });
+};
+
+const preview_editable = (session: string, deck_id: string) => {
+  const live = database().presentations.get(session, deck_id);
+  if (live && (live.proposal || live.pending_advance || !["paused", "completed"].includes(live.status))) {
+    throw new AppError(409, "Finish the live review and pause before changing this deck outside the presentation");
+  }
+};
 
 export const create_deck = async (req: TApiRequest, res: Response) => {
   const session = session_for(req);
@@ -75,6 +91,7 @@ export const decide_edit = (req: TApiRequest, res: Response) => {
   if (!session) return res.status(401).json({ error: "Unauthorized" });
   const parsed = z.strictObject({ decision: z.enum(["approve","reject"]) }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "Choose approve or reject" });
+  preview_editable(session, req.params.deck_id);
   return res.json(database().decks.decide(session,req.params.deck_id,req.params.proposal_id,parsed.data.decision));
 };
 
@@ -84,5 +101,6 @@ export const reorder_deck = (req: TApiRequest, res: Response) => {
   const input = z.strictObject({ base_revision: z.number().int().positive(),
     slide_ids: z.array(z.string().min(1).max(128)).min(1).max(100) }).safeParse(req.body);
   if (!input.success) return res.status(400).json({ error: "Supply the complete slide order and base revision" });
+  preview_editable(session, req.params.deck_id);
   return res.json(database().decks.reorder(session, req.params.deck_id, input.data.base_revision, input.data.slide_ids));
 };

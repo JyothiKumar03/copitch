@@ -36,6 +36,7 @@ export const live_turn_handler = (model: TLiveModel = classify_live_turn) => {
     const context = live_context(deck,slide,input,research,db.decks.recent_turns(session,id,deck.revision));
     const result = model(context,AbortSignal.timeout(30000)).then(decision => db.decks.finish_turn(session,id,input,() => {
       const checked = check_live_answer(decision,context);
+      if (checked.kind === "control" || checked.kind === "ignore") return { kind: "clarify", text: "Use the presentation controls for this action." };
       if (checked.kind !== "edit") return checked;
       const edit = edit_input.safeParse({ base_revision: input.base_revision, command_id: crypto.randomUUID(),
         slide_id: input.slide_id, changes: checked.changes });

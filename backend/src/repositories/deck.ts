@@ -5,8 +5,11 @@ import type { TLiveReply, TLiveTurnInput, TLiveTurnContext } from "../types/live
 import { estimate_pitch_seconds } from "../services/pitch";
 import { propose_slide } from "../services/deck";
 
+const pitch_variant_version = 3;
+
 export const pitch_variant_key = (pitch?: TPitchInput) => pitch
-  ? JSON.stringify([pitch.audience.normalize("NFKC").trim().replace(/\s+/gu, " ").toLowerCase(), pitch.duration_minutes, ...(pitch.slide_count || pitch.demo ? [pitch.slide_count ?? null, pitch.demo ?? null] : [])])
+  ? JSON.stringify([pitch_variant_version, pitch.audience.normalize("NFKC").trim().replace(/\s+/gu, " ").toLowerCase(),
+    pitch.duration_minutes, ...(pitch.slide_count || pitch.demo ? [pitch.slide_count ?? null, pitch.demo ?? null] : [])])
   : "";
 
 export class DeckRepository {
@@ -44,6 +47,15 @@ export class DeckRepository {
     const row = this.db.query<{id: string}, [string,string,string]>(
       "SELECT id FROM decks WHERE session=? AND research=? AND variant=?").get(session, research, variant);
     return row ? this.get(session, row.id) : undefined;
+  }
+
+  variants(session: string, research: string) {
+    return this.db.query<{ payload: string }, [string,string]>(`
+      SELECT r.payload FROM decks d JOIN deck_revisions r ON r.deck=d.id AND r.revision=d.revision
+      WHERE d.session=? AND d.research=? ORDER BY d.rowid DESC LIMIT 100`).all(session, research).map(row => {
+      const deck = JSON.parse(row.payload) as TDeck;
+      return { deck_id: deck.deck_id, label: deck.pitch?.audience ? `${deck.pitch.audience} · ${deck.pitch.duration_minutes} min` : deck.title };
+    });
   }
 
   create(session: string, snapshot: TDeck, variant = ""): TDeck {
@@ -132,14 +144,14 @@ export class DeckRepository {
     if (row) return JSON.parse(row.payload) as TEditProposal;
   }
 
-  propose(session: string, deck: string, request: TEditRequest): TEditProposal {
+  propose(session: string, deck: string, request: TEditRequest, linked?: { attribution: NonNullable<TEditProposal["attribution"]>; sources: NonNullable<TDeck["sources"]> }): TEditProposal {
     return this.db.transaction(() => {
       const current = this.get(session,deck);
       if (!current) throw new AppError(404, "Unknown deck");
       const prior = this.db.query<{request: string; payload: string}, [string,string]>(
         "SELECT request,payload FROM deck_proposals WHERE deck=? AND command=?").get(deck, request.command_id);
       // The controller normalizes field order using the edit schema before dispatch.
-      const signature = JSON.stringify(request);
+      const signature = JSON.stringify(linked ? { request, linked } : request);
       if (prior) {
         if (prior.request !== signature) throw new AppError(409, "Command ID already identifies a different edit");
         return JSON.parse(prior.payload) as TEditProposal;
@@ -147,10 +159,20 @@ export class DeckRepository {
       if (request.base_revision !== current.revision) throw new AppError(409, "Deck revision changed");
       const before = current.slides.find(slide => slide.slide_id === request.slide_id);
       if (!before) throw new AppError(404, "Unknown slide");
-      const proposal: TEditProposal = {
-        proposal_id: crypto.randomUUID(), deck_id: deck, base_revision: current.revision, slide_id: before.slide_id,
-        before, after: propose_slide(before, request.changes), status: "pending", approved_revision: null,
-      };
+      const proposal_id = crypto.randomUUID();
+      const after = propose_slide(before, request.changes);
+      const sources_added = linked && [...linked.sources, ...linked.attribution.some(item => item.evidence_id === "host")
+        ? [{ id: "H-LIVE-" + proposal_id, origin: "host" as const, location: "Host-supplied during presentation" }] : []];
+      if (sources_added?.length) {
+        const ids = sources_added.map(source => source.id);
+        after.evidence_ids = [...new Set([...after.evidence_ids, ...ids])];
+        const previous = new Set(before.sentences?.map(sentence => sentence.sentence_id));
+        for (const sentence of after.sentences ?? []) if (!previous.has(sentence.sentence_id)) {
+          sentence.evidence_ids = [...new Set([...sentence.evidence_ids, ...ids])];
+        }
+      }
+      const proposal: TEditProposal = { proposal_id, deck_id: deck, base_revision: current.revision, slide_id: before.slide_id,
+        before, after, status: "pending", approved_revision: null, ...(linked && { attribution: linked.attribution, sources_added }) };
       this.db.query("INSERT INTO deck_proposals VALUES(?,?,?,?,?)")
         .run(proposal.proposal_id, deck, request.command_id, signature, JSON.stringify(proposal));
       return proposal;
@@ -170,7 +192,8 @@ export class DeckRepository {
         const revision = current.revision + 1;
         const slides = current.slides.map(slide => slide.slide_id === proposal.slide_id ? proposal.after : slide);
         const pitch = current.pitch && { ...current.pitch, estimated_seconds: estimate_pitch_seconds(slides) + (current.pitch.demo?.seconds ?? 0) };
-        this.save_revision({ ...current, revision, slides, ...(pitch && { pitch }) });
+        const sources = proposal.sources_added?.length && [...new Map([...(current.sources ?? []), ...proposal.sources_added].map(source => [source.id, source])).values()];
+        this.save_revision({ ...current, revision, slides, ...(pitch && { pitch }), ...(sources && { sources }) });
         this.db.query("UPDATE decks SET revision=? WHERE id=?").run(revision,deck);
         proposal.approved_revision = revision;
       }

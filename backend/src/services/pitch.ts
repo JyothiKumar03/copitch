@@ -3,19 +3,12 @@ import { generateText, Output } from "ai";
 import { z } from "zod";
 import type { TDeck, TPitchInput, TSlide } from "../types/deck";
 import type { TResearchBundle } from "../types/research";
-import { compile_deck } from "./deck";
+import { compile_deck, slide_speaking_seconds } from "./deck";
 import { configured_models_for } from "./model-config";
+import { plan_verified_pitch, request_presentation_plan, verify_presentation_plan } from "./presentation-planner";
+import type { TPlanPresentation, TVerifyPresentationPlan } from "./presentation-planner";
 
-const words = new Intl.Segmenter(undefined, { granularity: "word" });
-
-const speaking_seconds = (slide: TSlide) => {
-  let word_count = 0;
-  for (const part of words.segment(slide.narration)) {
-    if (part.isWordLike) word_count++;
-  }
-  // Allow three seconds per visual for the audience to read it.
-  return 3 + Math.ceil(word_count * 60 / 135);
-};
+const speaking_seconds = (slide: TSlide) => slide_speaking_seconds(slide.narration);
 
 export const estimate_pitch_seconds = (slides: TSlide[]) =>
   slides.reduce((seconds, slide) => seconds + speaking_seconds(slide), 0);
@@ -55,7 +48,9 @@ const choose_story = async (deck: TDeck, bundle: TResearchBundle, pitch: TPitchI
   }
 };
 
-export const prepare_pitch = async (bundle: TResearchBundle, pitch: TPitchInput): Promise<TDeck> => {
+export const prepare_pitch = async (bundle: TResearchBundle, pitch: TPitchInput, planner: TPlanPresentation = request_presentation_plan,
+  verify: TVerifyPresentationPlan = verify_presentation_plan): Promise<TDeck> => {
+  if (bundle.grounding?.mode === "verified" && bundle.findings?.sections.length) return plan_verified_pitch(bundle, pitch, planner, verify);
   const deck = compile_deck(bundle);
   const story = await choose_story(deck, bundle, pitch);
   const audience = pitch.audience.trim() || story?.audience || "Audience in the confirmed brief";
