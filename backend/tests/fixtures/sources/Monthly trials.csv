@@ -1,0 +1,5 @@
+month,segment,conversions,trials,notes
+Jan,enterprise,4,20,"Small sample, observe"
+Jan,SMB,6,80,Historical data
+Jan,Overall,10,100,Published total
+Feb,enterprise,0,0,No trials
