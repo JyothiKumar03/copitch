@@ -2,9 +2,9 @@ import type { TChatRequest, TChatResponse } from "@/types/chat";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
 
-export async function sendMessage({ message, history }: TChatRequest): Promise<string> {
+export const sendMessage = async ({ message, history }: TChatRequest): Promise<string> => {
   const response = await fetch(`${API_URL}/api/chat`, {
-    method: "POST",
+    method: "POST", credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message, history }),
   });
@@ -19,4 +19,4 @@ export async function sendMessage({ message, history }: TChatRequest): Promise<s
   }
 
   return data.reply;
-}
+};
