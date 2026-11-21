@@ -50,8 +50,10 @@ const choose_story = async (deck: TDeck, bundle: TResearchBundle, pitch: TPitchI
 };
 
 export const prepare_pitch = async (bundle: TResearchBundle, pitch: TDeckPlanInput, planner: TPlanPresentation = request_presentation_plan,
-  verify: TVerifyPresentationPlan = verify_presentation_plan, layout_repair?: TDeckLayoutRepair): Promise<TDeck> => {
-  if (bundle.grounding?.mode === "verified" && bundle.findings?.sections.length) return plan_verified_pitch(bundle, pitch, planner, verify, layout_repair);
+  verify: TVerifyPresentationPlan = verify_presentation_plan, layout_repair?: TDeckLayoutRepair, signal?: AbortSignal): Promise<TDeck> => {
+  if (bundle.grounding?.mode === "verified" && bundle.findings?.sections.length) {
+    return plan_verified_pitch(bundle, pitch, planner, verify, layout_repair, signal);
+  }
   if (!("duration_minutes" in pitch)) throw new AppError(422, "Run research again to save verified context for these slides.");
   const deck = compile_deck(bundle);
   const story = await choose_story(deck, bundle, pitch);

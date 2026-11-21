@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { create_api } from "../src/app";
-import { stream_context_markdown, verify_graph_document } from "../src/services/research-graphs";
+import { stream_context_markdown, verify_graph_document, verify_sourced_chart } from "../src/services/research-graphs";
 import type { TGraphVerifier } from "../src/services/research-graphs";
 import type { TEvidence } from "../src/types/research";
 import { serve_api } from "./helpers/serve-api";
@@ -114,7 +114,17 @@ test("a malformed or mixed-window proposal can use only a verified same-marker t
   expect(output.markdown).not.toContain("999");
   expect(output.markdown).not.toContain("TOTAL");
   expect((await verify_graph_document("", evidence, pass_review, signal())).graph_count).toBe(0);
+  const sourced = await verify_sourced_chart(evidence, pass_review, signal());
+  expect(sourced?.graphs).toHaveLength(1);
+  expect(sourced?.graphs[0].graph.data.map(({ label }) => label)).toEqual(["Widgets", "Gadgets"]);
   expect((await verify_graph_document(malformed, evidence, async review => review.units.map(({ id }) => ({ id, decision: "unsupported" })), signal())).graph_count).toBe(0);
+});
+
+test("an incomplete multi-chart check preserves the independently verified comparison", async () => {
+  const output = await verify_graph_document(wrap(bars) + "\n\n" + wrap({ ...bars, name: "Second comparison" }), sources,
+    async review => review.units.slice(0, 3).map(({ id }) => ({ id, decision: "supported" })), signal());
+  expect(output.graph_count).toBe(1);
+  expect(output.markdown).not.toContain("Second comparison");
 });
 
 test("an independently checked partial comparison never publishes missing or misattributed points", async () => {

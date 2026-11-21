@@ -137,6 +137,6 @@ test("chart and prose retain independent decisions, including after checkpoint r
     expect(result.pitch_markdown!.includes("Proposed narrative.")).toBe(rejected === "pitch-chart");
     expect(restored.pitch_markdown).toBe(result.pitch_markdown);
     expect(restored.grounding).toEqual(result.grounding);
-    expect(verified).toBe(1);
+    expect(verified).toBe(rejected === "missing-id" ? 2 : 1);
   }
 });
