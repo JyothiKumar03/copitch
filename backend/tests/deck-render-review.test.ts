@@ -81,3 +81,13 @@ test("existing duration-based callers still use the previous preparation path", 
   });
   expect(result).toBe(deck);
 });
+
+test("visual review cannot publish a shorter deck even when its layout is valid", async () => {
+  let rendered = false;
+  await expect(prepare_reviewed_deck(bundle, { slide_count: 10 }, {
+    prepare: async () => deck,
+    render: async () => { rendered = true; return { issues: [], screenshot }; },
+    inspect: async () => [],
+  })).rejects.toThrow("Only 1 of 10 requested slides passed review");
+  expect(rendered).toBe(false);
+});

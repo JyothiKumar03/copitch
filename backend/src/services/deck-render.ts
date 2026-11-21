@@ -3,14 +3,7 @@ import type { Browser } from "playwright";
 import { z } from "zod";
 import { AppError } from "../errors/app-error";
 import type { TDeck, TDeckLayoutIssue } from "../types/deck";
-
-// The audience sees where a slide's facts come from as site or file names, matching the frontend's slide footer.
-export const source_labels = (deck: TDeck, evidence_ids: string[]) => [...new Set(evidence_ids.flatMap(id => {
-  const source = deck.sources?.find(item => item.id === id);
-  if (!source || source.origin === "host") return [];
-  if (source.url) { try { return [new URL(source.url).hostname.replace(/^www\./u, "")]; } catch { return []; } }
-  return [source.location.split(",")[0].trim()];
-}))].slice(0, 3);
+import { publicSourceLabels as public_source_labels } from "../../../shared/presentation";
 
 export const visual_issue = z.enum(["overflow", "collision", "unreadable_text", "visual_hierarchy", "chart_legibility"]);
 export const layout_issue = z.strictObject({
@@ -40,7 +33,8 @@ const shared_browser = () => {
   return browser;
 };
 
-export const render_deck = async (deck: TDeck): Promise<TDeckRender> => {
+export const render_deck = async (deck: TDeck, signal?: AbortSignal): Promise<TDeckRender> => {
+  signal?.throwIfAborted();
   if (active_reviews >= 2) throw new AppError(503, "The slide renderer is busy. Try again shortly.");
   active_reviews++;
   try {
@@ -48,7 +42,10 @@ export const render_deck = async (deck: TDeck): Promise<TDeckRender> => {
     const session = await (await shared_browser()).newContext({
       viewport: { width: 1280, height: 960 }, serviceWorkers: "block",
     });
+    const stop = () => { void session.close().catch(() => undefined); };
     try {
+      signal?.addEventListener("abort", stop, { once: true });
+      signal?.throwIfAborted();
       await session.route("**/*", route => {
         const url = new URL(route.request().url());
         return url.origin === address.origin && (url.pathname === address.pathname || url.pathname.startsWith("/_next/"))
@@ -58,7 +55,7 @@ export const render_deck = async (deck: TDeck): Promise<TDeckRender> => {
       const response = await page.goto(address.href, { waitUntil: "domcontentloaded", timeout: 15_000 });
       if (!response?.ok() || new URL(page.url()).origin !== address.origin) throw new Error("Slide render page unavailable");
       const views = deck.slides.map(({ slide_id, layout, title, highlights, evidence_ids, chart, chart_period, template }, index) => ({
-        deckTitle: deck.title, index, total: deck.slides.length, sources: source_labels(deck, evidence_ids),
+        deckTitle: deck.title, index, total: deck.slides.length, sources: public_source_labels(deck.sources, evidence_ids),
         slide: { slide_id, layout, title, highlights, evidence_ids, chart, chart_period, template },
       }));
       await page.waitForFunction(() => "setDeckRenderViews" in globalThis, undefined, { timeout: 8_000 });
@@ -75,8 +72,12 @@ export const render_deck = async (deck: TDeck): Promise<TDeckRender> => {
       }
       const screenshot = await report.screenshot({ type: "jpeg", quality: 85, timeout: 8_000 });
       return { issues, screenshot };
-    } finally { await session.close(); }
+    } finally {
+      signal?.removeEventListener("abort", stop);
+      await session.close();
+    }
   } catch (error) {
+    signal?.throwIfAborted();
     if (process.env.TRACE_LOGS === "1") console.log(JSON.stringify({ operation: "presentation.render_failure",
       error_kind: error instanceof Error ? error.name : "unknown" }));
     throw new AppError(503, "The slide renderer is unavailable. Try again shortly.");
