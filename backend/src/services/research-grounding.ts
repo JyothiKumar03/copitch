@@ -147,9 +147,14 @@ export const verify_draft = async (draft: TResearchDraft, evidence: TEvidence[],
   }
   if (coverage_brief) review.coverage = coverage_payload(review, evidence, coverage_brief, previous_findings);
   on_verify?.();
-  const deadline = AbortSignal.timeout(20000);
+  const deadline = AbortSignal.timeout(90_000);
   try {
-    const result = await provider.verify(review, AbortSignal.any([signal, deadline]));
+    const check = () => provider.verify!(review, AbortSignal.any([signal, deadline]));
+    // One malformed structured reply should not withhold a whole verified brief. Retry once before giving up.
+    const result = await check().catch(error => {
+      if (signal.aborted || deadline.aborted) throw error;
+      return check();
+    });
     const verdicts = Array.isArray(result) ? result : result.verdicts;
     const decisions = new Map(verdicts.map(v => [v.id,v.decision]));
     if (signal.aborted || verdicts.length !== review.units.length || decisions.size !== review.units.length ||

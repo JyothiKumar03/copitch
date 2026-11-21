@@ -176,3 +176,19 @@ test("reported table values use the explicit magnitude legend on the same source
   expect(result.decisions?.get("paragraph-0-1")).toBe("unsupported");
   expect(result.decisions?.get("paragraph-0-2")).toBe("unsupported");
 });
+
+test("one malformed checker reply is retried before the brief is withheld", async () => {
+  const evidence: TEvidence[] = [{ id: "M1", origin: "material", location: "Notes", passage: material }];
+  const draft: TResearchDraft = { title: "Enterprise trials", gaps: [], sections: [
+    { heading: "Conversion", paragraphs: [{ prose: "Four of twenty enterprise trials converted.", support: [{ evidence_id: "M1", excerpt: "Four of twenty" }] }] },
+  ] };
+  let calls = 0;
+  const provider: TResearchProvider = { ...source(draft), verify: async review => {
+    calls++;
+    if (calls === 1) throw Error("No object generated: could not parse the response.");
+    return review.units.map(unit => ({ id: unit.id, decision: "supported" as const }));
+  } };
+  const result = await verify_draft(draft, evidence, [], provider, AbortSignal.timeout(2_000));
+  expect(calls).toBe(2);
+  expect(result.prose).toBe(true);
+});
