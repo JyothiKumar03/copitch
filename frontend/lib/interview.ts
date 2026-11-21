@@ -1,10 +1,10 @@
 import { apiBase, request } from "./research";
 import type { TResearchSession } from "@/types/research";
 
-const interview = async (session: TResearchSession, action: "transcribe" | "speech" | "connect", body: FormData | string, signal: AbortSignal) => {
+const interview = async (session: TResearchSession, action: "connect", body: string, signal: AbortSignal) => {
   const response = await fetch(`${apiBase}/api/sessions/${encodeURIComponent(session.session_id)}/interview/${action}`, {
     method: "POST", credentials: "include", signal, cache: "no-store", body,
-    headers: { ...(session.token && { Authorization: `Bearer ${session.token}` }), ...(typeof body === "string" && { "Content-Type": action === "connect" ? "application/sdp" : "application/json" }) },
+    headers: { ...(session.token && { Authorization: `Bearer ${session.token}` }), "Content-Type": "application/sdp" },
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
@@ -13,24 +13,16 @@ const interview = async (session: TResearchSession, action: "transcribe" | "spee
   return response;
 };
 
-export const transcribeAudio = async (session: TResearchSession, audio: Blob, signal: AbortSignal) => {
-  const data = new FormData();
-  const extension = { "audio/mp4": "mp4", "audio/ogg": "ogg", "audio/wav": "wav" }[audio.type.split(";")[0]] ?? "webm";
-  data.set("audio", audio, `interview.${extension}`);
-  const response = await interview(session, "transcribe", data, signal);
-  const result = await response.json();
-  if (typeof result.text !== "string" || !result.text.trim()) throw new Error("No speech was recognized. Try again or type your brief.");
-  return result.text.trim() as string;
+export const closeVoice = async (session: TResearchSession, lease: string) => {
+  await request(`/api/sessions/${encodeURIComponent(session.session_id)}/interview/voice-control`, session, { kind: "close", lease });
 };
 
-export const speakQuestion = async (session: TResearchSession, text: string, signal: AbortSignal, progressTurnId?: string) => {
-  return interview(session, "speech", JSON.stringify({ text, progress_turn_id: progressTurnId }), signal);
+export const connectInterview = async (session: TResearchSession, sdp: string, signal: AbortSignal) => {
+  const response = await interview(session, "connect", sdp, signal);
+  const lease = response.headers.get("X-Voice-Lease");
+  if (!lease) throw new Error("The voice conversation could not connect.");
+  return { lease, sdp: await response.text() };
 };
-
-
-export const connectInterview = async (session: TResearchSession, sdp: string, signal: AbortSignal) =>
-  (await interview(session, "connect", sdp, signal)).text();
-
 
 export const readProgress = async (session: TResearchSession, jobId: string, message: string) => {
   const turnId = crypto.randomUUID();

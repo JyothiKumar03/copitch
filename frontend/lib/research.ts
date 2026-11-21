@@ -1,4 +1,4 @@
-import type { TArchivedPitch, TBriefInput, TInterviewStart, TUploadedSource, TSavedBrief, TInterviewMessage, TResearchJob, TResearchBrief, TResearchSession, TResearchWorkspace } from "@/types/research";
+import type { TInterviewStart, TUploadedSource, TSavedBrief, TResearchJob, TResearchSession, TResearchWorkspace } from "@/types/research";
 
 export const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
 
@@ -28,39 +28,8 @@ const researchPath = (session: TResearchSession) => {
   return `/api/sessions/${encodeURIComponent(session.session_id)}/research`;
 };
 
-export const clarifyBrief = async (session: TResearchSession, input: TBriefInput): Promise<TResearchBrief> => {
-  return (await request(researchPath(session) + "/brief", session, input)).json();
-};
-
-export const runResearch = async (session: TResearchSession, briefId: string, retry = false,
-  approvalText?: string): Promise<TResearchJob & { history: TInterviewMessage[] }> => {
-  return (await request(researchPath(session), session, { brief_id: briefId, confirmed: true, retry, approval_text: approvalText },
-    { headers: { Prefer: "respond-async" } })).json();
-};
-
 export const queryJob = async (session: TResearchSession, jobId: string, signal: AbortSignal): Promise<TResearchJob> => {
   return (await request(researchPath(session) + "/jobs/" + encodeURIComponent(jobId), session, undefined, { signal })).json();
-};
-
-export const activeJob = (briefId?: string): string | null => {
-  try {
-    const saved = JSON.parse(sessionStorage.getItem("equal-ai.research.job") ?? "null");
-    return saved && saved.brief_id === briefId && typeof saved.job_id === "string" ? saved.job_id : null;
-  } catch { return null; }
-};
-export const rememberJob = (job: TResearchJob) => {
-  try { sessionStorage.setItem("equal-ai.research.job", JSON.stringify({ job_id: job.job_id, brief_id: job.brief_id })); } catch { /* Keep polling in memory. */ }
-};
-
-export const downloadResearch = async (session: TResearchSession, researchId: string) => {
-  const path = researchPath(session) + "/" + encodeURIComponent(researchId) + "/presentation.md";
-  const response = await request(path, session);
-  const url = URL.createObjectURL(await response.blob());
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = "presentation.md";
-  link.click();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
 
 const hostSessionKey = "equal-ai.research.host-session";
@@ -101,21 +70,6 @@ export const startInterview = async (session: TResearchSession): Promise<TInterv
   return (await request(`/api/sessions/${encodeURIComponent(session.session_id)}/interview/start`, session, {})).json();
 };
 
-export const interviewHistory = (): TInterviewMessage[] => {
-  const session = savedSession();
-  if (!session) return [];
-  try {
-    const turns = JSON.parse(sessionStorage.getItem("equal-ai.interview." + session.session_id) ?? "[]");
-    return Array.isArray(turns) ? turns.filter(turn => (turn?.role === "host" || turn?.role === "assistant") && typeof turn.text === "string") : [];
-  } catch { return []; }
-};
-
-export const saveInterviewHistory = (turns: TInterviewMessage[]) => {
-  const session = savedSession();
-  if (!session) return;
-  try { sessionStorage.setItem("equal-ai.interview." + session.session_id, JSON.stringify(turns)); } catch { /* Continue the conversation in memory. */ }
-};
-
 export const uploadSource = async (session: TResearchSession, file: File): Promise<TUploadedSource> => {
   const form = new FormData();
   form.set("file", file, file.name);
@@ -134,13 +88,13 @@ const sourceDraftKey = (briefId?: string) => {
   return session && `equal-ai.sources.${session.session_id}.${briefId ?? "initial"}`;
 };
 
-export const restoreSourceSelection = (brief?: TSavedBrief | null): TUploadedSource[] => {
+export const restoreSourceSelection = (brief?: TSavedBrief | null, selected?: TUploadedSource[]): TUploadedSource[] => {
   try {
     const key = sourceDraftKey(brief?.brief_id);
     const draft = key && JSON.parse(sessionStorage.getItem(key) ?? "null");
     if (Array.isArray(draft) && draft.every(item => typeof item?.source_id === "string" && typeof item.filename === "string")) return draft;
   } catch { /* Use the accepted selection when browser storage is unavailable. */ }
-  return brief?.sources ?? [];
+  return selected ?? brief?.sources ?? [];
 };
 
 export const saveSourceSelection = (briefId: string | undefined, sources: TUploadedSource[]) => {
@@ -148,19 +102,4 @@ export const saveSourceSelection = (briefId: string | undefined, sources: TUploa
     const key = sourceDraftKey(briefId);
     if (key) sessionStorage.setItem(key, JSON.stringify(sources));
   } catch { /* The host can still use this selection for the current turn. */ }
-};
-
-export const archivedPitches = (): TArchivedPitch[] => {
-  const session = savedSession();
-  if (!session) return [];
-  try {
-    const items: unknown = JSON.parse(sessionStorage.getItem("copitch.pitch-history." + session.session_id) ?? "[]");
-    return Array.isArray(items) ? items.filter(item => typeof item?.researchId === "string" && Number.isInteger(item?.afterTurn)) : [];
-  } catch { return []; }
-};
-
-export const saveArchivedPitches = (pitches: TArchivedPitch[]) => {
-  const session = savedSession();
-  if (!session) return;
-  try { sessionStorage.setItem("copitch.pitch-history." + session.session_id, JSON.stringify(pitches)); } catch { /* Keep this tab's history in memory. */ }
 };

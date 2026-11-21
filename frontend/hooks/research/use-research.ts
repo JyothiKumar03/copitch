@@ -2,9 +2,9 @@
 
 import { useRef } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { startInterview, uploadSource, queryJob, getOrCreateSession, savedSession, restoreWorkspace, downloadResearch } from "@/lib/research";
-import { fetchSourceCalls, sendStudioTurn } from "@/lib/studio-turns";
-import type { TResearchJob, TResearchSession, TTurnInput } from "@/types/research";
+import { startInterview, uploadSource, queryJob, getOrCreateSession, savedSession, restoreWorkspace } from "@/lib/research";
+import { applyStudioSources, fetchSourceCalls, sendStudioTurn } from "@/lib/studio-turns";
+import type { TResearchJob, TResearchSession, TStudioSources, TTurnInput } from "@/types/research";
 
 export const useResearch = (project: string, restored?: TResearchJob | null) => {
   const polling = !!savedSession()?.token || typeof EventSource === "undefined";
@@ -18,6 +18,7 @@ export const useResearch = (project: string, restored?: TResearchJob | null) => 
   };
   const start = useMutation({ mutationFn: async () => startInterview(await getSession()) });
   const turn = useMutation({ mutationFn: async (input: TTurnInput) => sendStudioTurn(await getSession(), input) });
+  const applySources = useMutation({ mutationFn: async (scope: TStudioSources) => applyStudioSources(await getSession(), scope) });
   const upload = useMutation({ mutationFn: async (file: File) => uploadSource(await getSession(), file) });
   const calls = useQuery({
     queryKey: ["source-calls", project],
@@ -33,8 +34,7 @@ export const useResearch = (project: string, restored?: TResearchJob | null) => 
     refetchInterval: query => polling && ["queued", "running"].includes(query.state.data?.status ?? "queued") ? 1000 : false,
     retry: 1,
   });
-  const download = useMutation({ mutationFn: async (researchId: string) => downloadResearch(await getSession(), researchId) });
-  return { start, turn, upload, calls, download, getSession, job };
+  return { start, turn, applySources, upload, calls, getSession, job };
 };
 
 export const useSavedWorkspace = () => useQuery({

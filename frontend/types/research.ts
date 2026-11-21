@@ -1,15 +1,8 @@
 import type { TInterviewLanguage } from "../../shared/languages";
 
 export type TResearchSession = { session_id: string; token?: string };
+export type TContextArtifactProps = { project: string; researchId: string; getSession: () => Promise<TResearchSession> };
 export type TSourcePolicy = "files_only" | "public_search";
-export type TBriefInput = {
-  message: string;
-  source_policy: TSourcePolicy;
-  materials: string;
-  urls: string[];
-  brief_id?: string;
-  source_ids?: string[];
-};
 export type TResearchBrief = {
   brief_id: string;
   summary: string;
@@ -24,12 +17,28 @@ export type TResearchResult = {
   gaps: string[];
 };
 
-export type TResearchMemoProps = { markdown: string };
-export type TMemoCitation = { id: string; label: string; href?: string; detail?: string };
 export type TSavedBrief = TResearchBrief & { source_ids?: string[]; sources?: TUploadedSource[]; source_policy: TSourcePolicy; materials: string; urls: string[] };
+export type TStudioPhase = "interview" | "proposed" | "researching" | "done";
+export type TResearchProposal = {
+  proposal_id: string;
+  summary: string;
+  queries: string[];
+  urls: string[];
+  source_policy: TSourcePolicy;
+};
+export type TProposalChoice = "approve" | "edit";
 export type TResearchWorkspace = {
+  phase?: TStudioPhase;
+  proposal?: TResearchProposal | null;
+  state?: {
+    reply_language: string | null;
+    proposal_turn_id?: string | null;
+    materials: string;
+    source_ids: string[];
+    urls?: string[];
+    source_policy?: TSourcePolicy;
+  };
   history?: TInterviewMessage[];
-  pending_question?: TStudioQuestion | null;
   activities?: TTurnActivity[];
   sources?: TUploadedSource[];
   context?: {
@@ -46,14 +55,18 @@ export type TResearchJob = {
   activity?: TResearchActivity[];
   job_id: string;
   brief_id: string;
-  status: "queued" | "running" | "completed" | "failed" | "superseded";
+  status: "queued" | "running" | "completed" | "failed" | "needs_input" | "superseded";
   completed_lookups: number;
+  tool_steps?: number;
+  research_passes?: number;
+  read_pages?: number;
   result?: TResearchResult;
   error?: string;
 };
 
 export type TInterviewStart = { greeting: string; workspace: TResearchWorkspace };
-export type TInterviewMessage = { role: "host" | "assistant"; text: string; turn_id?: string; created_at?: number; intent?: string; answer_to?: string; option_id?: string };
+export type TInterviewMessage = { role: "host" | "assistant"; text: string; turn_id?: string; created_at?: number; intent?: string; answer_to?: string; option_id?: string;
+  voice_items?: string[] };
 
 export type TUploadedSource = {
   source_id: string;
@@ -65,13 +78,12 @@ export type TUploadedSource = {
 export type TResearchActivity = {
   sequence: number;
   kind: "queued" | "started" | "resumed" | "lookup_requested" | "search_completed" | "page_opened" |
-    "lookup_failed" | "lookup_empty" | "sources_saved" | "draft_started" | "verification_started" |
-    "verified" | "fallback" | "completed" | "failed" | "superseded";
+    "lookup_failed" | "lookup_empty" | "sources_saved" | "draft_started" | "verification_started" | "verification_skipped" |
+    "verified" | "fallback" | "completed" | "failed" | "needs_input" | "superseded";
   label: string;
 };
 export type TInstrumentState = "ready" | "connecting" | "listening" | "recording" | "transcribing" | "thinking" | "speaking" | "researching" | "complete";
 
-export type TArchivedPitch = { researchId: string; afterTurn: number };
 
 export type TSourceCall = {
   call_id: string;
@@ -84,13 +96,19 @@ export type TSourceCall = {
   error: string | null;
 };
 
+export type TStudioSources = {
+  source_ids: string[];
+  source_policy: TSourcePolicy;
+  urls: string[];
+  materials: string;
+  expected_proposal_id: string | null;
+};
+
 export type TTurnInput = {
   turn_id: string;
   replace_scope?: boolean;
   answer_to?: string;
-  heard_question_id?: string;
-  heard_turn_id?: string;
-  option_id?: string;
+  option_id?: TProposalChoice;
   input: "typed" | "speech";
   message: string;
   brief_id?: string;
@@ -100,14 +118,4 @@ export type TTurnInput = {
   materials?: string;
 };
 
-export type TTurnActivity = { turn_id: string; tool: string; status: string; result: string; question?: TStudioQuestion };
-
-export type TStudioQuestion = {
-  request_id: string;
-  turn_id: string;
-  kind: "subject" | "audience" | "decision" | "source_url" | "reference" | "approval";
-  question: string;
-  options: { id: string; label: string }[];
-  allow_free_text: boolean;
-  brief_id: string | null;
-};
+export type TTurnActivity = { turn_id: string; tool: string; status: string; result: string };
