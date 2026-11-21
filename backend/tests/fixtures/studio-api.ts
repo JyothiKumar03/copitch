@@ -1,6 +1,8 @@
 import { research_handlers } from "../../src/controllers/research";
+import { create_studio_turn_handler } from "../../src/controllers/studio-turn";
 import { api_error } from "../../src/middleware/api-error";
 import { database } from "../../src/repositories/store";
+import { create_interview_router } from "../../src/routes/interview";
 import { chart_candidates } from "../../src/services/pitch-chart";
 import type { TResearchProvider } from "../../src/types/research";
 import { ResearchWorker } from "../../src/workers/research";
@@ -28,11 +30,23 @@ const provider: TResearchProvider = {
   verify: async review => review.units.map(unit => ({ id: unit.id, decision: "supported" })),
 };
 
-const fixture = create_api();
+const worker = new ResearchWorker(database, () => provider);
+const turn = create_studio_turn_handler({
+  ensure_research: () => {}, wake: job_id => worker.wake(job_id),
+  provider: {
+    propose: async ({message}) => ({
+      intent: /revenue/i.test(message) ? "brief" : "unsupported", language: "en",
+      subject: /revenue/i.exec(message)?.[0] ?? null, audience: /board/i.exec(message)?.[0] ?? null,
+      decision: /approve the pilot/i.exec(message)?.[0] ?? null, fact: null, instruction: null, source_phrase: null, source_url: null,
+    }),
+    excerpts: async (_message, evidence) => ({ citations: evidence.slice(0, 2).map(item => ({ evidence_id: item.id, excerpt: item.passage.slice(0, 240) })) }),
+  },
+});
+const fixture = create_api(create_interview_router(fetch, turn));
 const handlers = research_handlers(() => provider);
 fixture.post("/api/sessions/:session_id/research/brief", handlers.review);
 fixture.post("/api/sessions/:session_id/research", handlers.build);
 fixture.use(app);
 fixture.use(api_error);
-new ResearchWorker(database, () => provider).start();
+worker.start();
 fixture.listen(Number(process.argv[3]), "127.0.0.1");

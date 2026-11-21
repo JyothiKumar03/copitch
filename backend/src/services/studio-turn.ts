@@ -69,7 +69,10 @@ const language_request = (text: string): TInterviewLanguage | undefined => {
 };
 
 const affirmative = /^(?:yes|yeah|हाँ|हां|haan|han|जी|ji|correct|that's right|सही है)[.!।]?$/iu;
-const confirm_source = /^(?:yes[, ]+)?(?:confirm (?:this |the )?(?:url|address)|पते की पुष्टि करें)[.!।]?$/iu;
+const confirm_source = (text: string) =>
+  /^(?:yes[, ]+)?(?:confirm (?:this |the )?(?:url|address)|(?:that(?:'s| is)|this is|it is) (?:the )?(?:correct|right) (?:website|site|url|address|domain))[.!।]?$/iu.test(text) ||
+  /^(?:हाँ|हां)[, ]+(?:यह|यही|वह) सही (?:वेबसाइट|साइट|पता|डोमेन) है[.!।]?$/u.test(text) ||
+  /^पते की पुष्टि करें[.!।]?$/u.test(text);
 const approve_research = /^(?:yes[, ]+)?(?:please )?(?:start (?:the )?research(?:ing)?|go ahead(?: and start(?: the)? research)?|run (?:the )?research|approve (?:the )?research|research (?:this|it)|शोध शुरू कर(?:ो|ें| दीजिए)|shodh shuru karo|research shuru karo)[.!।]?$/iu;
 const retry_research = /^(?:please )?(?:retry (?:the )?research|फिर से शोध शुरू करो)[.!।]?$/iu;
 const file_only = /^(?:please )?(?:files only|only (?:use )?my (?:files|materials)|use only (?:(?:the )?(?:uploaded|attached) files|my (?:files|materials))|no (?:web|public) search)\b|^(?:केवल|सिर्फ) (?:मेरी )?(?:फ़ाइलें|फाइलें)/iu;
@@ -96,6 +99,11 @@ const quoted = (text: string, value: string | null | undefined) => {
   return quote && quote.length <= 280 && text.toLowerCase().includes(quote.toLowerCase()) ? quote : undefined;
 };
 
+const source_filename = (text: string) => /\.(?:pdf|pptx?|csv)(?:["'`.?!।]*)$/iu.test(text);
+
+const scope_reply = (summary: string, question: string) => summary === question ? question :
+  summary.slice(0, Math.max(0, spoken_text_limit - question.length - 2)) + "\n\n" + question;
+
 export const initial_studio_context = (brief?: TResearchBrief): TStudioContext => ({
   language_preference: null, entities: { subject: null, audience: null, decision: null, urls: brief?.urls ?? [], facts: [] },
   pending: null, source_policy: brief?.source_policy ?? "public_search", source_ids: brief?.sources?.map(source => source.source_id) ?? [],
@@ -107,9 +115,10 @@ const brief_for_context = (input: TStudioTurnInput, context: TStudioContext, lan
   const wording = phrases[language];
   const { subject, audience, decision, facts, urls } = context.entities;
   const lines = [[wording.prefix, subject], [wording.to, audience], [wording.ask, decision]].flatMap(([label, text]) => text ? [`${label}: ${text}`] : []);
+  if (context.instructions?.length) lines.push(...context.instructions);
   const summary = lines.join(". ") || wording.subject;
   const question = context.pending ? wording.type_url : !subject ? wording.subject : !audience ? wording.audience : !decision ? wording.decision : null;
-  const reply = [...new Set([summary, question ?? wording.ready])].join("\n\n");
+  const reply = scope_reply(summary, question ?? wording.ready);
   return {
     brief_id: crypto.randomUUID(), summary, question, messages: [...lines, ...facts],
     history: [...history, { role: "host", text: input.message }, { role: "assistant", text: reply }],
@@ -151,11 +160,12 @@ export const run_studio_turn = async (db: SessionStore, session: string, input: 
   const explicit_approval = open_question?.kind === "approval" && option?.id === "approve";
   const consent = explicit_approval || affirmative.test(input.message) || approve_research.test(input.message) || retry_research.test(input.message);
   const url = option ? undefined : literal_url(input.message);
-  const selected_policy = file_only.test(input.message) ? "files_only" : public_search.test(input.message) ? "public_search" : undefined;
+  const selected_policy = file_only.test(input.message) || /(?:^|[.!?]\s+)(?:please )?use only [^.!?]+\.(?:pdf|pptx?|csv)\b/iu.test(input.message)
+    ? "files_only" : public_search.test(input.message) ? "public_search" : undefined;
   const is_meta = /^(?:what|which) language\b|^(?:तुम|आप) कौन सी भाषा/iu.test(input.message);
   const is_greeting = /^(?:hi|hey|hello|नमस्ते|नमस्कार)[!।.]?$/iu.test(input.message);
   const initial_intent = chosen ? "language" : is_meta ? "meta" : is_greeting ? "greeting" : explicit_approval ? "approval" : option ? "clarify" :
-    confirm_source.test(input.message) ? "url_confirmation" : consent ? "approval" :
+    confirm_source(input.message) ? "url_confirmation" : consent ? "approval" :
     selected_policy || input.replace_scope ? "scope" : direct_status.test(input.message) ? "status" : direct_file_question(input.message) ? "file_question" : undefined;
   const ids = [...new Set(input.source_ids ?? context.source_ids)];
   const files = db.sources.selected(session, ids);
@@ -201,7 +211,7 @@ export const run_studio_turn = async (db: SessionStore, session: string, input: 
   if (intent === "greeting") return done(wording.greeting);
   if (intent === "meta") return done(is_meta ? LANGUAGE_OPTIONS[language].label : wording.meta);
   if (intent === "status") return done(current_job ? progress_reply(current_job, language) : wording.no_job);
-  if (open_question && !answer_target && ((input.input === "speech" && consent) || affirmative.test(input.message) || confirm_source.test(input.message))) {
+  if (open_question && !answer_target && ((input.input === "speech" && consent) || affirmative.test(input.message) || confirm_source(input.message))) {
     return done(language === "hi" ? "जिस सवाल का जवाब देना है, उसे स्क्रीन पर चुनें या पूरा सवाल सुनें।" :
       "Choose the question on screen or listen to it before answering.");
   }
@@ -244,7 +254,7 @@ export const run_studio_turn = async (db: SessionStore, session: string, input: 
   const candidate_url = url ?? proposed_url;
   const pending = context.pending;
   const confirmed_pending = answer_target?.kind === "source_url" && (option?.id === "confirm" ||
-    affirmative.test(input.message) || confirm_source.test(input.message));
+    affirmative.test(input.message) || confirm_source(input.message));
   const discard_pending = answer_target?.kind === "source_url" && (option?.id === "discard" || /^(?:no|नहीं|nahi)[.!।]?$/iu.test(input.message));
   const replacing = input.replace_scope || explicit_scope.test(input.message) || selected_policy !== undefined;
   if (active && !replacing && (candidate_url || ["brief", "scope", "correction", "revision", "clarify"].includes(intent))) return done(wording.active);
@@ -253,15 +263,15 @@ export const run_studio_turn = async (db: SessionStore, session: string, input: 
     context.pending = { url: candidate_url, phrase: spoken_phrase ?? input.message };
     return ask_for("source_url", wording.url + candidate_url);
   }
-  if (pending && !candidate_url && !confirmed_pending && !selected_policy && !discard_pending) {
-    intent = "url_confirmation";
-    return open_question?.kind === "source_url" ? done(wording.type_url) : ask_for("source_url", wording.type_url);
-  }
-  if (!candidate_url && !pending && context.entities.urls.length && /^(?:it is|it's|no,? (?:it|that) is)\b/iu.test(input.message) &&
-      ["scope", "url_confirmation"].includes(history.at(-1)?.intent ?? "")) {
+  if (!candidate_url && /^(?:it is|it's|no,? (?:it|that) is)\b/iu.test(input.message) &&
+      (pending || (context.entities.urls.length && ["scope", "url_confirmation"].includes(history.at(-1)?.intent ?? "")))) {
     intent = "url_confirmation";
     context.reference = input.message.replace(/^(?:it is|it's|no,? (?:it|that) is)\s*/iu, "").replace(/[.।]+$/u, "").slice(0, 280);
     return ask_for("reference", language === "hi" ? "क्या यह स्रोत का पता है या पिच का विषय?" : "Is that the source address or the pitch subject?");
+  }
+  if (pending && !candidate_url && !confirmed_pending && !selected_policy && !discard_pending && option?.id !== "subject") {
+    intent = "url_confirmation";
+    return open_question?.kind === "source_url" || open_question?.kind === "reference" ? done(wording.type_url) : ask_for("source_url", wording.type_url);
   }
   if (!pending && !candidate_url && intent === "approval") {
     if (current_job && !retry_research.test(input.message)) return done(progress_reply(current_job, language));
@@ -292,7 +302,8 @@ export const run_studio_turn = async (db: SessionStore, session: string, input: 
     context.entities.urls = [...new Set([...previous_urls, ...(removal ? [] : [confirmed_url])])].slice(-url_selection_limit);
   }
   if (!confirmed_url || (!pending && proposal?.intent === "brief")) {
-    const subject = quoted(input.message, proposal?.subject);
+    const self_subject = /\b(?:deck|pitch|presentation)\b.{0,90}?\b(?:about|on)\s+(me|myself)\b/iu.exec(input.message)?.[1];
+    const subject = quoted(input.message, proposal?.subject) ?? self_subject;
     const audience = quoted(input.message, proposal?.audience);
     const decision = quoted(input.message, proposal?.decision);
     const fact = quoted(input.message, proposal?.fact);
@@ -301,7 +312,9 @@ export const run_studio_turn = async (db: SessionStore, session: string, input: 
       context.reference = undefined;
       close_question();
     }
-    if (subject && !literal_url(subject)) context.entities.subject = subject;
+    if (subject && !literal_url(subject) && !source_filename(subject) && !files.some(file => file.filename.toLowerCase() === subject.toLowerCase())) {
+      context.entities.subject = subject;
+    }
     if (audience) context.entities.audience = audience;
     if (decision) context.entities.decision = decision;
     if (answers_field) {
@@ -312,6 +325,8 @@ export const run_studio_turn = async (db: SessionStore, session: string, input: 
     }
     if (fact) context.entities.facts = [...new Set([...context.entities.facts, fact])].slice(-6);
   }
+  const instruction = quoted(input.message, proposal?.instruction);
+  if (instruction) context.instructions = [...new Set([...(context.instructions ?? []), instruction])].slice(-6);
   context.source_policy = selected_policy ?? input.source_policy ?? context.source_policy;
   if (input.urls && !confirmed_url && input.input === "typed") {
     const explicit = input.urls.map(public_url);
@@ -329,5 +344,5 @@ export const run_studio_turn = async (db: SessionStore, session: string, input: 
   const kind = context.pending ? "source_url" : !context.entities.subject ? "subject" : !context.entities.audience ? "audience" :
     !context.entities.decision ? "decision" : "approval";
   const question = brief.question ?? wording.ready;
-  return ask_for(kind, question, [...new Set([brief.summary, question])].join("\n\n"), brief);
+  return ask_for(kind, question, scope_reply(brief.summary, question), brief);
 };

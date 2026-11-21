@@ -45,6 +45,7 @@ export type TStudioContext = {
   reviewable_brief_id: string | null;
   ask?: TStudioAsk | null;
   reference?: string;
+  instructions?: string[];
 };
 
 export type TStudioActivity = {

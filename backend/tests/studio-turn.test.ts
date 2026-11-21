@@ -6,7 +6,7 @@ import type { TStudioProposal } from "../src/services/studio-intent";
 import type { TStudioTurnInput } from "../src/types/studio-turn";
 
 const proposed = (intent: TStudioProposal["intent"], data: Partial<TStudioProposal> = {}): TStudioProposal => ({
-  intent, language: "en", subject: null, audience: null, decision: null, fact: null, source_phrase: null, source_url: null, ...data,
+  intent, language: "en", subject: null, audience: null, decision: null, fact: null, instruction: null, source_phrase: null, source_url: null, ...data,
 });
 
 const studio = () => {
@@ -19,6 +19,7 @@ const studio = () => {
       propose: async ({ message }: { message: string }) => {
         if (message === "Make a deck about me.") return proposed("brief", { subject: "me" });
         if (message === "It is JK-IFNA.") return proposed("correction", { subject: "JK-IFNA" });
+        if (message.includes("pilot-bookings.csv")) return proposed("brief", { subject: "pilot-bookings.csv", instruction: "Show a line chart" });
         if (message === "Could you read the PDF?") return proposed("file_question");
         if (message === "Does any file confirm a moon mission?") return proposed("file_question");
         if (message === "What's on the slide?") return proposed("file_question");
@@ -85,9 +86,18 @@ test("spoken addresses need confirmation, and source corrections preserve the su
   const guessed = pending()!;
   expect(guessed.kind).toBe("source_url");
   expect(interview_workspace(session, db).context?.entities.urls).toEqual([]);
+  db.studio.offer_question(session, guessed.turn_id);
+  db.studio.acknowledge_question(session, guessed.request_id, guessed.turn_id);
   await send("It is JK-IFNA.", { input: "speech" });
+  const reference = pending()!;
+  expect(reference.kind).toBe("reference");
   expect(interview_workspace(session, db).context?.entities.subject).toBe("me");
-  await send("No, the source is jk-ai.in", { answer_to: guessed.request_id });
+  await send("Yes", { input: "speech", heard_question_id: guessed.request_id, heard_turn_id: guessed.turn_id });
+  expect(pending()?.request_id).toBe(reference.request_id);
+  expect(interview_workspace(session, db).context?.entities.urls).toEqual([]);
+  await send("It's the source address", { answer_to: reference.request_id, option_id: "source", heard_question_id: guessed.request_id, heard_turn_id: guessed.turn_id });
+  expect(pending()?.kind).toBe("source_url");
+  await send("No, the source is jk-ai.in", { answer_to: pending()?.request_id });
   const recovered = interview_workspace(session, db);
   expect(recovered.context?.entities).toMatchObject({ subject: "me", urls: ["https://jk-ai.in/"] });
   expect(recovered.context?.pending).toBeNull();
@@ -98,13 +108,27 @@ test("spoken addresses need confirmation, and source corrections preserve the su
   expect(interview_workspace(session, db).context?.pending?.url).toBe("https://jk-ai.in/");
   db.studio.offer_question(session, confirm.turn_id);
   db.studio.acknowledge_question(session, confirm.request_id, confirm.turn_id);
-  await send("Yes, confirm this URL.", { input: "speech" });
+  await send("Yes, but change the website.", { input: "speech" });
+  expect(interview_workspace(session, db).context?.pending?.url).toBe("https://jk-ai.in/");
+  await send("Yes, that is the correct website.", { input: "speech" });
   expect(interview_workspace(session, db).context?.pending).toBeNull();
   await send("Use other-site.in", { input: "speech" });
   const discard = pending()!;
   db.studio.offer_question(session, discard.turn_id);
   db.studio.acknowledge_question(session, discard.request_id, discard.turn_id);
   await send("No.", { input: "speech" });
+  expect(interview_workspace(session, db).context?.entities.urls).toEqual(["https://jk-ai.in/"]);
+  expect(jobs).toEqual([]);
+});
+
+test("a fully heard source question accepts the Hindi affirmative without starting research", async () => {
+  const { db, session, jobs, send, pending } = studio();
+  await send("Hindi");
+  await send("मेरी वेबसाइट jk-ai.in है।", { input: "speech" });
+  const question = pending()!;
+  db.studio.offer_question(session, question.turn_id);
+  db.studio.acknowledge_question(session, question.request_id, question.turn_id);
+  await send("हाँ, यही सही वेबसाइट है।", { input: "speech" });
   expect(interview_workspace(session, db).context?.entities.urls).toEqual(["https://jk-ai.in/"]);
   expect(jobs).toEqual([]);
 });
@@ -124,4 +148,14 @@ test("file replies use only project-scoped verified excerpts and their source lo
   const foreign = crypto.randomUUID();
   db.sources.save("another-project", "pdf", { source_id: foreign, filename: "Private.pdf", kind: "pdf", locations: 1, records: [], gaps: [] });
   await expect(send("Could you read the PDF?", { source_ids: [foreign] })).rejects.toThrow("Unknown research source");
+});
+
+test("a supplied filename guides source scope without replacing a missing topic", async () => {
+  const { db, session, send, pending } = studio();
+  await send("Prepare a pitch. Use only pilot-bookings.csv. Show a line chart.");
+  const workspace = interview_workspace(session, db);
+  expect(workspace.context?.entities.subject).toBeNull();
+  expect(pending()?.kind).toBe("subject");
+  expect(workspace.context?.source_policy).toBe("files_only");
+  expect(workspace.brief?.summary).toContain("Show a line chart");
 });
