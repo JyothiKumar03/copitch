@@ -1,13 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import { ArrowDownToLine, ArrowLeft, ArrowRight, FileCode2, ListOrdered, LockKeyhole, PencilLine, Play, SlidersHorizontal } from "lucide-react";
+import { ArrowDownToLine, ArrowLeft, ArrowRight, ListOrdered, LockKeyhole, PencilLine, Play, SlidersHorizontal } from "lucide-react";
 import { usePresentation } from "@/hooks/deck/use-presentation";
 import { useDeck } from "@/hooks/deck/use-deck";
 import { exportDeck } from "@/lib/export-deck";
 import { slideSource } from "@/lib/slide-source";
-import type { TDeckWorkspaceProps, TPitchInput } from "@/types/deck";
-import { PitchForm } from "./PitchForm";
+import type { TDeckWorkspaceProps, TPitchRequest } from "@/types/deck";
+import { SlideCountPrompt } from "./SlideCountPrompt";
 import { SlideOrder } from "./SlideOrder";
 import { Slide } from "./Slide";
 import { SlideDiff } from "./SlideDiff";
@@ -20,10 +20,12 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
+import { MAX_PRESENTATION_SLIDES } from "../../../shared/presentation";
 import "./stage.css";
 
-export const DeckWorkspace = (props: TDeckWorkspaceProps) => {
-  const { order, downloadPlan, deck, pitches, reopen, refresh, variantsError, proposal, prepare, edit, decision } = useDeck(props);
+export const DeckWorkspace = (props: TDeckWorkspaceProps & { backToConversation: () => void; onPreviewReady: (researchId: string) => void }) => {
+  const { onPreviewReady, researchId } = props;
+  const { order, deck, pitches, reopen, refresh, variantsError, proposal, prepare, edit, decision } = useDeck(props);
   const [preparingVariant, setPreparingVariant] = useState(false);
   const [orderIds, setOrderIds] = useState<string[] | null>(null);
   const [index, setIndex] = useState(0);
@@ -40,6 +42,7 @@ export const DeckWorkspace = (props: TDeckWorkspaceProps) => {
   const { mutate: refreshDeck } = refresh;
   const deckId = deck?.deck_id;
   const refreshRevision = useCallback(() => { if (deckId) refreshDeck(deckId); }, [deckId, refreshDeck]);
+  useEffect(() => { if (deckId) onPreviewReady(researchId); }, [deckId, onPreviewReady, researchId]);
   useEffect(() => {
     const heading = previewHeading.current;
     if (!heading || previewFocusRequest === lastPreviewFocus.current) return;
@@ -47,13 +50,13 @@ export const DeckWorkspace = (props: TDeckWorkspaceProps) => {
     heading.focus({ preventScroll: true });
     heading.scrollIntoView({ block: "start", behavior: "instant" });
   }, [deck, previewFocusRequest]);
-  const error = order.error ?? downloadPlan.error ?? reopen.error ?? refresh.error ?? decision.error ?? edit.error ?? prepare.error ?? variantsError;
+  const error = order.error ?? reopen.error ?? refresh.error ?? decision.error ?? edit.error ?? prepare.error ?? variantsError;
   const navigate = (direction: number) => setIndex(i => Math.max(0, Math.min((deck?.slides.length ?? 1) - 1, i + direction)));
   const resetPreview = () => {
-    setOrderIds(null); order.reset(); downloadPlan.reset(); setIndex(0); setEditing(false); setPreparingVariant(false);
+    setOrderIds(null); order.reset(); setIndex(0); setEditing(false); setPreparingVariant(false);
     edit.reset(); decision.reset(); requestPreviewFocus();
   };
-  const preparePitch = (pitch?: TPitchInput) => prepare.mutate(pitch, { onSuccess: resetPreview });
+  const preparePitch = (pitch: TPitchRequest) => prepare.mutate(pitch, { onSuccess: resetPreview });
   const busy = !!orderIds || order.isPending || prepare.isPending || reopen.isPending || runtime.pending || editing || !!proposal || decision.isPending;
   const pitchPicker = pitches.length > (deck ? 1 : 0) && (
     <label className="grid min-w-0 gap-1.5 text-sm font-medium">Prepared presentations
@@ -64,38 +67,29 @@ export const DeckWorkspace = (props: TDeckWorkspaceProps) => {
     </label>
   );
 
-  if (deck && runtime.active) return <LiveDeck deck={deck} runtime={runtime} refreshRevision={refreshRevision} />;
+  if (deck && runtime.active) return <LiveDeck deck={deck} runtime={runtime} refreshRevision={refreshRevision}
+    backToConversation={props.backToConversation} />;
   if (!deck || !slide) return (
-    <section className="deck-workspace text-foreground">
-      <Card className="shadow-sm">
-        <CardHeader>
-          <h2 className="font-display text-3xl leading-tight tracking-tight">Prepare your presentation</h2>
-        </CardHeader>
-        <CardContent className="grid gap-5">
-          <PitchForm pending={busy} onPrepare={preparePitch} />
-          <div className="grid justify-items-start gap-3 border-t border-border pt-4">
-            {pitchPicker}
-            <Button variant="outline" size="sm" type="button" disabled={busy} onClick={() => preparePitch()}>Open original research slides</Button>
-          </div>
-          {error && <p role="alert" className="text-sm text-destructive">{error.message}</p>}
-        </CardContent>
-      </Card>
-    </section>
+    <div className="chat-turn assistant grid gap-2">
+      <small>copitch</small>
+      <SlideCountPrompt pending={busy} onPrepare={preparePitch} />
+      {pitchPicker}
+      {error && <p role="alert" className="text-sm text-destructive">{error.message}</p>}
+    </div>
   );
   const beginEdit = () => {
     if (!slide) return;
     setTitle(slide.title); setPoints(slide.highlights.join("\n")); setNotes(slide.narration); setEditing(true);
   };
   const highlights = points.split("\n").map(point => point.trim()).filter(Boolean);
-  const validChanges = !!title.trim() && !!notes.trim() && highlights.length > 0 && highlights.length <= 4 &&
-    highlights.every(point => point.length <= 240) && (title.trim() !== slide.title || notes.trim() !== slide.narration ||
-    JSON.stringify(highlights) !== JSON.stringify(slide.highlights));
+  const highlightsChanged = highlights.length !== slide.highlights.length || highlights.some((point, i) => point !== slide.highlights[i]);
+  const validChanges = !!title.trim() && !!notes.trim() && highlights.length <= 4 &&
+    highlights.every(point => point.length <= 240) && (!highlightsChanged || highlights.length > 0) &&
+    (title.trim() !== slide.title || notes.trim() !== slide.narration || highlightsChanged);
   const restoreCursor = (next: typeof deck) => {
     const nextIndex = next.slides.findIndex(item => item.slide_id === slide.slide_id);
     setIndex(Math.max(0, nextIndex)); setOrderIds(null); order.reset();
   };
-  const demo = deck.pitch?.demo;
-  const anchorIndex = demo ? deck.slides.findIndex(item => item.slide_id === demo.after_slide_id) : -1;
   const locked = busy;
   return (
     <Dialog open={editing && !proposal} onOpenChange={open => { if (!open && !edit.isPending) setEditing(false); }}>
@@ -122,7 +116,6 @@ export const DeckWorkspace = (props: TDeckWorkspaceProps) => {
               setExportError(null);
               void exportDeck(deck).catch(() => setExportError("The offline presentation could not be downloaded. Try again."));
             }}><ArrowDownToLine size={15} aria-hidden="true" />Download offline slides</Button>
-            <Button size="sm" variant="ghost" disabled={downloadPlan.isPending || !!orderIds} onClick={() => downloadPlan.mutate()}><FileCode2 size={15} aria-hidden="true" />{downloadPlan.isPending ? "Downloading…" : "Download plan (JSON)"}</Button>
           </div>
         </CardContent>
       </Card>
@@ -142,22 +135,19 @@ export const DeckWorkspace = (props: TDeckWorkspaceProps) => {
       <Card>
         <CardContent className="grid gap-4">
           {pitchPicker}
-          {deck.pitch && <div className="pitch-plan">
-            <div><h3>Audience</h3><p>{deck.pitch.audience}</p></div>
-            <div><h3>Speaking time</h3><p>{Math.floor(deck.pitch.estimated_seconds / 60)}m {Math.round(deck.pitch.estimated_seconds % 60)}s estimated · {deck.pitch.duration_minutes} min requested</p></div>
-            <div><h3>Slides</h3><p>{deck.slides.length} prepared{deck.pitch.slide_count ? " · " + deck.pitch.slide_count + " requested" : ""}</p></div>
-            {demo && <div className="pitch-rationale"><h3>Demo cue · {demo.seconds}s</h3>
-              <p>{anchorIndex >= 0 ? `After slide ${anchorIndex + 1}, “${deck.slides[anchorIndex].title}”` : "Placement not specified"}</p>
-              <p>{demo.objective}</p><p className="break-all">{demo.url}</p>
-            </div>}
-            <div className="pitch-rationale"><h3>Story rationale</h3><p>{deck.pitch.rationale}</p></div>
-          </div>}
+          {deck.pitch?.slide_count !== undefined && deck.pitch.slide_count !== deck.slides.length &&
+            <p className="text-sm text-muted-foreground">{deck.slides.length} of {deck.pitch.slide_count} requested slides supported by the evidence.</p>}
+          {deck.pitch?.readiness?.status === "limited" && deck.pitch.readiness.reason &&
+            <p className="text-sm text-muted-foreground">{deck.pitch.readiness.reason}</p>}
+          {deck.pitch?.readiness?.status === "limited" && deck.pitch.readiness.gaps.length > 0 && <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+            {deck.pitch.readiness.gaps.map(gap => <li key={gap}>{gap}</li>)}
+          </ul>}
           <Collapsible open={preparingVariant} onOpenChange={setPreparingVariant}>
             <CollapsibleTrigger asChild>
-              <Button size="sm" variant="outline" type="button" disabled={locked}><SlidersHorizontal size={15} aria-hidden="true" />{preparingVariant ? "Close pitch settings" : "Change audience or duration"}</Button>
+              <Button size="sm" variant="outline" type="button" disabled={locked}><SlidersHorizontal size={15} aria-hidden="true" />{preparingVariant ? "Close slide count" : "Change slide count"}</Button>
             </CollapsibleTrigger>
             <CollapsibleContent className="pt-4">
-              <PitchForm key={deck.deck_id} initial={deck.pitch} pending={locked} onPrepare={preparePitch} />
+              <SlideCountPrompt key={deck.deck_id} initialCount={Math.min(deck.pitch?.slide_count ?? deck.slides.length, MAX_PRESENTATION_SLIDES)} pending={locked} onPrepare={preparePitch} />
             </CollapsibleContent>
           </Collapsible>
         </CardContent>
@@ -177,11 +167,11 @@ export const DeckWorkspace = (props: TDeckWorkspaceProps) => {
         <form className="deck-edit" onSubmit={event => {
           event.preventDefault();
           edit.mutate({ command_id: crypto.randomUUID(), base_revision: deck.revision, slide_id: slide.slide_id,
-            changes: { title: title.trim(), highlights, narration: notes.trim() } },
+            changes: { title: title.trim(), ...(highlightsChanged && { highlights }), narration: notes.trim() } },
           { onSuccess: () => setEditing(false) });
         }}>
           <label>Slide title<Input required maxLength={160} value={title} onChange={e => setTitle(e.target.value)} /></label>
-          <label>Highlights (1–4 lines, up to 240 characters each)<Textarea rows={3} value={points} onChange={e => setPoints(e.target.value)} /></label>
+          <label>Highlights (up to 4 lines, 240 characters each)<Textarea rows={3} value={points} onChange={e => setPoints(e.target.value)} /></label>
           <label>Speaker notes<Textarea required maxLength={12000} rows={3} value={notes} onChange={e => setNotes(e.target.value)} /></label>
           {edit.error && <p role="alert" className="text-sm text-destructive">{edit.error.message}</p>}
           <DialogFooter>
