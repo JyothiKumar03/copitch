@@ -12,24 +12,51 @@ const ink = "17251C";
 const paper = "F5F5EC";
 const greens = { deep: "182D20", mid: "44634B", light: "DCF0D2" };
 const evidence = "794E19";
+const note_length = 150;
+const sentences = new Intl.Segmenter(undefined, { granularity: "sentence" });
+const words = new Intl.Segmenter(undefined, { granularity: "word" });
+const statement_end = /[.!。！]["'’”»)\]]*$/u;
+const navigation_marks = />>|(?:^|\s)[›»](?:\s|$)|(?:[^|]+\|){2}/u;
+const dependent_opening = /^(?:if not|if so|otherwise|as mentioned|see also)\b/iu;
+const normal_text = (text: string) => [...text].filter(char => char >= " " || char === "\n").join("").replace(/\s+/gu, " ").trim();
 const clean = (text: string, length: number) => {
-  const normalized = [...text].filter(char => char >= " " || char === "\n").join("").replace(/\s+/gu, " ").trim();
+  const normalized = normal_text(text);
   if (normalized.length <= length) return normalized;
   return normalized.slice(0, length - 1).trimEnd() + "…";
+};
+
+const excerpt = (text: string) => {
+  if (text.length <= note_length) return text;
+  let end = 0;
+  for (const { index, segment, isWordLike } of words.segment(text)) {
+    if (index + segment.length >= note_length) break;
+    if (isWordLike) end = index + segment.length;
+  }
+  return end ? text.slice(0, end) + "…" : "";
 };
 
 const selected_facts = (facts: string[], goal: string, audience: string) => {
   const tokens = (text: string) => new Set(text.toLowerCase().match(/\p{L}{4,}/gu) ?? []);
   const terms = tokens(goal + " " + audience);
-  return [...new Set(facts.map(fact => clean(fact, 150)).filter(Boolean))]
+  return facts
     .map(text => ({ text, matches: [...tokens(text)].filter(term => terms.has(term)).length }))
-    .sort((left, right) => right.matches - left.matches).slice(0, 3).map(item => item.text);
+    .sort((left, right) => Number(statement_end.test(right.text)) - Number(statement_end.test(left.text)) ||
+      right.matches - left.matches).slice(0, 3).map(item => item.text);
 };
 
 const page_facts = (page: TCaptureSlide) => {
   const comparable = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N} ]/gu, "").replace(/\s+/gu, " ").trim();
-  const headings = [page.title, ...page.title.split(/\s+[|–—-]\s+/u)].map(comparable);
-  return page.facts.filter(fact => !headings.includes(comparable(fact)));
+  const headings = new Set([page.title, ...page.title.split(/\s+[|–—-]\s+/u)].map(comparable));
+  return [...new Set(page.facts.flatMap(source => {
+    const text = normal_text(source);
+    if (headings.has(comparable(text)) || navigation_marks.test(text)) return [];
+    const useful = [...sentences.segment(text)].map(({ segment }) => segment.trim()).filter(line =>
+      !dependent_opening.test(line) && [...words.segment(line)].filter(word => word.isWordLike).length >= 5);
+    const statements = useful.filter(line => statement_end.test(line));
+    // A page can expose an excerpt or an unpunctuated list item. Keep enough context to distinguish prose from a label.
+    const candidates = statements.length ? statements : useful.filter(line => line.length >= 100 && !/[?？]["'’”»)]*$/u.test(line));
+    return candidates.map(excerpt).filter(Boolean);
+  }))];
 };
 
 const image_frame = (x: number, y: number, w: number, h: number) => {
@@ -107,7 +134,7 @@ export const export_website_powerpoint = async ({ url, audience, goal, pages, at
     const image = "image/jpeg;base64," + page.screenshot.toString("base64");
     slide.addImage({ data: image, ...image_frame(.55, 1.60, 8.24, 5.22),
       altText: "Captured page for " + clean(page.title, 90) });
-    const facts = planned ? page.facts.map(fact => clean(fact, 150)) : selected_facts(page.facts, goal, audience);
+    const facts = planned ? page.facts : selected_facts(page.facts, goal, audience);
     if (facts.length) {
       slide.addText("What the page shows", { ...fields, x: 9.23, y: 1.76, w: 3.45, h: .46, fontSize: 18, bold: true, color: greens.mid });
       for (const [index, fact] of facts.entries()) slide.addText(fact, { ...fields, x: 9.23, y: 2.38 + index * 1.18,
