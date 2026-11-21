@@ -10,7 +10,7 @@ from pathlib import Path
 import httpx
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 MAX_AUDIO_BYTES = 8 * 1024 * 1024
@@ -156,21 +156,48 @@ async def speech(request: Request) -> Response:
     text = payload.get("text") if isinstance(payload, dict) else None
     if not isinstance(text, str) or not 1 <= len(text.strip()) <= 1600:
         return error_response("Invalid question", 400)
-    result = await provider_request(
-        request, "audio/speech", json={
+    client = request.app.state.provider
+    upstream = client.build_request(
+        "POST", "audio/speech", headers={"Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}"}, json={
             "model": os.getenv("OPENAI_SPEECH_MODEL", "gpt-4o-mini-tts"),
             "voice": os.getenv("OPENAI_SPEECH_VOICE", "alloy"),
             "instructions": LANGUAGES[requested_language(request)]["speech_instructions"],
             "input": text, "response_format": "mp3",
         },
     )
-    if isinstance(result, Response):
-        return result
-    if not result.content or result.headers.get("content-type", "").split(";")[0] not in {
-        "audio/mpeg", "audio/mp3", "application/octet-stream",
-    }:
+    try:
+        result = await client.send(upstream, stream=True)
+    except httpx.RequestError:
+        return error_response("Voice provider is unavailable", 503)
+    if not result.is_success:
+        await result.aclose()
+        return error_response("Voice provider capacity exceeded" if result.status_code == 429 else "Voice provider request failed",
+                              429 if result.status_code == 429 else 502)
+    if result.headers.get("content-type", "").split(";")[0] not in {"audio/mpeg", "audio/mp3", "application/octet-stream"}:
+        await result.aclose()
         return error_response("Voice provider returned invalid audio", 502)
-    return Response(result.content, media_type="audio/mpeg", headers=NO_STORE)
+    chunks = result.aiter_bytes()
+    try:
+        first = await anext(chunks, b"")
+    except httpx.RequestError:
+        first = b""
+    if not first or len(first) > MAX_AUDIO_BYTES:
+        await result.aclose()
+        return error_response("Voice provider returned invalid audio", 502)
+
+    async def audio_stream():
+        size = len(first)
+        try:
+            yield first
+            async for chunk in chunks:
+                size += len(chunk)
+                if size > MAX_AUDIO_BYTES:
+                    raise ValueError("Voice output exceeds the audio limit")
+                yield chunk
+        finally:
+            await result.aclose()
+
+    return StreamingResponse(audio_stream(), media_type="audio/mpeg", headers=NO_STORE)
 
 
 def create_app(transport: httpx.AsyncBaseTransport | None = None) -> Starlette:

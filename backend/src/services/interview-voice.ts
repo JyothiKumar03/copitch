@@ -48,6 +48,7 @@ export const call_voice_worker = async (
   operation: "speech" | "transcribe" | "connect", content_type: string, body: Blob | string,
   fetch_worker: (url:string, options:RequestInit) => Promise<Response> = fetch,
   language: TInterviewLanguage = DEFAULT_LANGUAGE,
+  client_signal?: AbortSignal,
 ) => {
   const token = process.env.VOICE_WORKER_TOKEN?.trim();
   let base: URL;
@@ -56,7 +57,8 @@ export const call_voice_worker = async (
     if (!["http:","https:"].includes(base.protocol) || base.username || base.password || base.search || base.hash) throw new Error();
   } catch { throw new AppError(503,"Interview voice worker is unavailable"); }
   if (!token) throw new AppError(503,"Interview voice worker is unavailable");
-  const signal = AbortSignal.timeout(45000);
+  const timeout = AbortSignal.timeout(45000);
+  const signal = client_signal ? AbortSignal.any([client_signal, timeout]) : timeout;
   try {
     const response = await fetch_worker(base.href.replace(/\/$/,"") + "/" + operation,{
       method:"POST", redirect:"error", signal, body,
@@ -80,10 +82,11 @@ export const call_voice_worker = async (
       return { kind: "sdp" as const, sdp };
     }
     if (operation === "speech") {
-      if (mime !== "audio/mpeg") throw invalid;
-      const audio = await bounded_body(response,max_recording_bytes,invalid);
-      if (!audio.length) throw invalid;
-      return { kind: "audio" as const, bytes: audio };
+      if (mime !== "audio/mpeg" || !response.body || Number(response.headers.get("Content-Length")) > max_recording_bytes) {
+        await response.body?.cancel();
+        throw invalid;
+      }
+      return { kind: "audio" as const, stream: response.body };
     }
     if (mime !== "application/json") throw invalid;
     const bytes = await bounded_body(response,256 * 1024,invalid);

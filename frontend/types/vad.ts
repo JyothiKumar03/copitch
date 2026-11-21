@@ -5,6 +5,7 @@ export type TGateEvent = { kind: "onset" | "feedback" } | { kind: "end"; frames:
 export type THandsFreeOptions = {
   onFinal: (text: string, turnId: string) => void;
   language?: TInterviewLanguage;
+  onReplyPlayback?: (turnId: string, state: "playing" | "completed" | "interrupted") => void;
   suspended?: boolean;
 };
 export type THandsFreeCapture = {

@@ -4,11 +4,12 @@ import { connectInterview } from "../interview";
 import type { TGetSession } from "@/types/interview";
 
 type TStreamCallbacks = {
-  onStart: () => void;
+  onStart: (itemId: string) => void;
   onEnd: () => void;
   onInterim: (text: string) => void;
   onFinal: (text: string, turnId: string) => void;
   onWarning: (message: string) => void;
+  onEmpty: (itemId: string) => void;
   onFailure: (message: string) => void;
 };
 
@@ -56,7 +57,7 @@ export const openRealtimeInterview = async (getSession: TGetSession, signal: Abo
       configured = transcription?.language;
       updateLanguage();
     }
-    if (event.type === "input_audio_buffer.speech_started") callbacks.onStart();
+    if (event.type === "input_audio_buffer.speech_started" && typeof event.item_id === "string") callbacks.onStart(event.item_id);
     if (event.type === "input_audio_buffer.speech_stopped") callbacks.onEnd();
     if (event.type === "error") { fail(); return; }
     turns.handle(event);

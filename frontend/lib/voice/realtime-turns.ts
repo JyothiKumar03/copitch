@@ -2,6 +2,7 @@ type TCallbacks = {
   onInterim: (text: string) => void;
   onFinal: (text: string, turnId: string) => void;
   onWarning: (message: string) => void;
+  onEmpty: (itemId: string) => void;
 };
 type TItem = { id: string; turnId: string; interim: string; final?: string; committed: boolean; updated: number };
 const maxChars = 6000;
@@ -34,6 +35,7 @@ export const createRealtimeTurns = (callbacks: TCallbacks) => {
       if (item) {
         forget(item.id);
         if (item.final) callbacks.onFinal(item.final, item.turnId);
+        else callbacks.onEmpty(item.id);
       }
     }
     showInterim();

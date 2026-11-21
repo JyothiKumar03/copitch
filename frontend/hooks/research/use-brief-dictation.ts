@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { playReply } from "@/lib/voice/reply-playout";
 import { openRealtimeInterview } from "@/lib/voice/realtime-interview";
 import type { THandsFreeOptions } from "@/types/vad";
 import { speakQuestion, transcribeAudio } from "@/lib/interview";
@@ -20,6 +21,7 @@ export const useBriefDictation = (getSession: TGetSession, options?: THandsFreeO
   const capture = useRef<AbortController | null>(null);
   const playback = useRef<AbortController | null>(null);
   const player = useRef<HTMLAudioElement | null>(null);
+  const replyId = useRef<string | undefined>(undefined);
   const objectUrl = useRef("");
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const hostSpeaking = useRef(false);
@@ -45,10 +47,18 @@ export const useBriefDictation = (getSession: TGetSession, options?: THandsFreeO
   const stopPlayback = () => {
     setSpeaking(false);
     playback.current?.abort();
-    player.current?.pause();
+    const activePlayer = player.current;
     player.current = null;
+    const stoppedId = replyId.current;
+    replyId.current = undefined;
+    if (activePlayer) {
+      activePlayer.pause();
+      activePlayer.removeAttribute("src");
+      activePlayer.load();
+    }
     if (objectUrl.current) URL.revokeObjectURL(objectUrl.current);
     objectUrl.current = "";
+    if (stoppedId && mounted.current) settings.current.options?.onReplyPlayback?.(stoppedId, "interrupted");
   };
 
   const mounted = useRef(false);
@@ -163,11 +173,16 @@ export const useBriefDictation = (getSession: TGetSession, options?: THandsFreeO
       const active = await openRealtimeInterview(settings.current.getSession, controller.signal, {
         onStart: () => { hostSpeaking.current = true; stopPlayback(); setPhase("recording"); },
         onEnd: () => { hostSpeaking.current = false; setPhase("transcribing"); },
+        onEmpty: () => { if (!hostSpeaking.current && !controller.signal.aborted) setPhase("idle"); },
         onInterim: text => { if (!controller.signal.aborted) setInterimTranscript(text); },
-        onWarning: message => { if (!controller.signal.aborted) { setError(message); setPhase("idle"); } },
+        onWarning: message => {
+          if (controller.signal.aborted) return;
+          setError(message);
+          if (!hostSpeaking.current) setPhase("idle");
+        },
         onFinal: (text, turnId) => {
           if (!controller.signal.aborted) {
-            setPhase("idle");
+              if (!hostSpeaking.current) setPhase("idle");
             if (queued.current >= 24) {
               setError("The voice queue is full. Please finish the pending messages and repeat this turn.");
             } else if (text) {
@@ -212,16 +227,25 @@ export const useBriefDictation = (getSession: TGetSession, options?: THandsFreeO
     stopPlayback(); setError("");
     const controller = new AbortController();
     playback.current = controller;
+    replyId.current = progressTurnId;
     try {
-      const blob = await speakQuestion(await getSession(), question, controller.signal, progressTurnId);
+      const response = await speakQuestion(await getSession(), question, controller.signal, progressTurnId);
       if (controller.signal.aborted) return;
-      objectUrl.current = URL.createObjectURL(blob);
-      const audio = new Audio(objectUrl.current);
+      const audio = new Audio();
       player.current = audio;
-      audio.onplaying = () => { if (player.current === audio) setSpeaking(true); };
+      audio.onplaying = () => {
+        if (player.current !== audio || controller.signal.aborted) return;
+        setSpeaking(true);
+        if (progressTurnId) settings.current.options?.onReplyPlayback?.(progressTurnId, "playing");
+      };
       audio.onpause = () => { if (player.current === audio) setSpeaking(false); };
-      audio.onended = () => { if (player.current === audio) stopPlayback(); };
-      await audio.play();
+      audio.onended = () => {
+        if (player.current !== audio || controller.signal.aborted) return;
+        replyId.current = undefined;
+        if (progressTurnId) settings.current.options?.onReplyPlayback?.(progressTurnId, "completed");
+        stopPlayback();
+      };
+      await playReply(response, audio, controller.signal, url => { objectUrl.current = url; audio.src = url; });
     } catch {
       if (!controller.signal.aborted) { stopPlayback(); setError("Question audio could not play. Read the question or replay it."); }
     }

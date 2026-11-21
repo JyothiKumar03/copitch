@@ -24,7 +24,7 @@ export const transcribeAudio = async (session: TResearchSession, audio: Blob, si
 };
 
 export const speakQuestion = async (session: TResearchSession, text: string, signal: AbortSignal, progressTurnId?: string) => {
-  return (await interview(session, "speech", JSON.stringify({ text, progress_turn_id: progressTurnId }), signal)).blob();
+  return interview(session, "speech", JSON.stringify({ text, progress_turn_id: progressTurnId }), signal);
 };
 
 
