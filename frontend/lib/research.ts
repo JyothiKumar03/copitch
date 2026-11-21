@@ -15,7 +15,7 @@ export const request = async (path: string, session?: TResearchSession, body?: u
   });
   if (!response.ok) {
     const detail = await response.json().catch(() => null);
-    throw new Error(typeof detail?.error === "string" ? detail.error : `Research request failed (${response.status})`);
+    throw Object.assign(new Error(typeof detail?.error === "string" ? detail.error : `Research request failed (${response.status})`), { status: response.status });
   }
   return response;
 };
