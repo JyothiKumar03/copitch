@@ -7,7 +7,7 @@ export const metadata: Metadata = { title: "Pitch studio" };
 const ResearchPage = async ({ searchParams }: { searchParams: Promise<{ project?: string }> }) => (
   <>
     <SiteHeader inStudio />
-    <main className="mx-auto w-full max-w-7xl px-4 pb-10 pt-4 text-foreground sm:px-8 sm:pb-10 lg:px-12">
+    <main className="mx-auto w-full max-w-360 px-4 pb-10 pt-5 text-foreground sm:px-8 sm:pt-7 lg:px-10">
       <ProjectStudio projectId={(await searchParams).project} />
     </main>
   </>

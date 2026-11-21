@@ -6,6 +6,7 @@ import type { TSpeechRecognition } from "@/types/speech";
 import type { TChatMessage } from "@/types/chat";
 import { useSendMessage } from "@/hooks/chat/use-send-message";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 
 export const VoiceAssistant = () => {
@@ -107,10 +108,10 @@ export const VoiceAssistant = () => {
   }, [listening]);
 
   return (
-    <section aria-label="Practice conversation" className="overflow-hidden rounded-sm border border-border bg-card text-foreground">
+    <Card role="region" aria-label="Practice conversation" className="overflow-hidden">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4 sm:px-8">
         <h2 className="font-display text-2xl">Conversation</h2>
-        <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
+        <label className="inline-flex min-h-9 cursor-pointer items-center gap-2 rounded-md border border-border px-3 text-sm text-muted-foreground">
           <input type="checkbox" className="size-4 accent-primary" checked={speakReplies}
             onChange={event => { setSpeakReplies(event.target.checked); if (!event.target.checked) window.speechSynthesis?.cancel(); }} />
           Read replies aloud
@@ -154,6 +155,6 @@ export const VoiceAssistant = () => {
           <Button type="submit" disabled={busy || !input.trim()}>Send message <ArrowUp size={16} aria-hidden="true" /></Button>
         </div>
       </form>
-    </section>
+    </Card>
   );
 };
