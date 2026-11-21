@@ -1,11 +1,14 @@
 "use client";
 
-import { ConversionChart } from "./ConversionChart";
+import { PublicSlide } from "./Slide";
 import { useAudienceView } from "@/hooks/deck/use-audience";
-import { slideDensity, stageStyle } from "@/lib/stage-style";
+import { useStagePaint } from "@/hooks/deck/use-stage-paint";
+import { stageStyle } from "@/lib/stage-style";
 
 export const AudienceStage = () => {
   const { token, view } = useAudienceView();
+  const frame = view.data;
+  useStagePaint(token, frame && !view.error ? { sequence: frame.sequence, revision: frame.revision, slide_id: frame.slide.slide_id } : undefined);
   if (!token || view.error || !view.data) {
     const message = !token ? "Open the audience link shared by your presenter." : view.error?.message ?? "Connecting to the presentation…";
     return <main className="grid min-h-dvh place-items-center bg-background px-6 py-12 text-foreground">
@@ -18,13 +21,6 @@ export const AudienceStage = () => {
   const { deck_title, slide, index, total } = view.data;
   return <main className="min-h-dvh bg-background p-2 sm:p-4">
     <style>{stageStyle}</style>
-    <section className="slide-shell" style={{ minHeight: "calc(100dvh - 2rem)" }} data-layout={slide.layout}
-      data-density={slideDensity(slide.title, slide.highlights)} aria-label={`Slide ${index + 1} of ${total}`}>
-      <div className="slide-top"><span>{deck_title}</span><span>{index + 1} / {total}</span></div>
-      <h3>{slide.title}</h3>
-      {!!slide.highlights.length && <ul>{slide.highlights.map((line, i) => <li key={i}>{line}</li>)}</ul>}
-      {slide.chart && <ConversionChart chart={slide.chart} />}
-      {!!slide.evidence_ids.length && <footer>Sources · {slide.evidence_ids.join(", ")}</footer>}
-    </section>
+    <PublicSlide className="audience-slide" view={{ deckTitle: deck_title, slide, index, total }} />
   </main>;
 };
