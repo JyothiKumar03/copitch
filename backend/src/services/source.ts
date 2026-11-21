@@ -6,8 +6,17 @@ import type { TSourceContent, TUploadedSource } from "../types/source";
 import type { TEvidence } from "../types/research";
 import { read_csv } from "./source-csv";
 import { read_pptx } from "./source-pptx";
+import { read_ppt } from "./source-ppt";
+import { source_formats, source_limits } from "../constants/sources";
+import type { TSourceKind } from "../types/source";
 
-export const max_source_bytes = 8 * 1024 * 1024;
+export const max_source_bytes = source_limits.bytes;
+
+export const source_kind = (filename: string): TSourceKind => {
+  const extension = filename.split(".").at(-1)?.toLowerCase();
+  if (extension && Object.hasOwn(source_formats, extension)) return extension as TSourceKind;
+  throw new AppError(415, "Choose a text PDF, PowerPoint (.ppt or .pptx), or UTF-8 CSV.");
+};
 
 const read_pdf = async (bytes: Buffer): Promise<TSourceContent> => {
   if (!bytes.subarray(0,1024).includes("%PDF-")) throw new AppError(422,"This file is not a PDF");
@@ -16,7 +25,7 @@ const read_pdf = async (bytes: Buffer): Promise<TSourceContent> => {
   const worker = new Worker(path,{ workerData:bytes });
   try {
     return await new Promise<TSourceContent>((resolve,reject) => {
-      const timer = setTimeout(() => reject(new AppError(422,"PDF text extraction timed out")),15000);
+      const timer = setTimeout(() => reject(new AppError(422,"PDF text extraction timed out")),source_limits.timeout_ms);
       worker.once("message", (reply: {content?:TSourceContent;error?:string}) => {
         clearTimeout(timer);
         if (reply.content) resolve(reply.content); else reject(new AppError(422,reply.error ?? "Unreadable PDF"));
@@ -27,13 +36,14 @@ const read_pdf = async (bytes: Buffer): Promise<TSourceContent> => {
   } finally { await worker.terminate(); }
 };
 
+const parsers = { pdf: read_pdf, ppt: read_ppt, pptx: read_pptx, csv: read_csv };
+
 export const parse_source = async (filename: string, bytes: Buffer): Promise<TUploadedSource> => {
-  const kind = filename.split(".").at(-1)?.toLowerCase();
-  if (kind !== "pdf" && kind !== "pptx" && kind !== "csv") throw new AppError(415,"Choose a text PDF, PPTX or UTF-8 CSV");
+  const kind = source_kind(filename);
   if (!bytes.length) throw new AppError(422,"The file is empty");
   if (bytes.length > max_source_bytes) throw new AppError(413,"File exceeds 8 MiB");
   try {
-    const content = kind === "pdf" ? await read_pdf(bytes) : kind === "pptx" ? await read_pptx(bytes) : read_csv(bytes);
+    const content = await parsers[kind](bytes);
     if (!content.records.length) throw new AppError(422,"No extractable text or rows. Paste text or upload a text-based file.");
     return { source_id:crypto.randomUUID(), filename, kind, locations:content.records.length, ...content };
   } catch (error) {
@@ -44,7 +54,7 @@ export const parse_source = async (filename: string, bytes: Buffer): Promise<TUp
 
 export const source_evidence = (source: TUploadedSource): TEvidence[] => {
   const prefix = parseInt(createHash("sha256").update(source.source_id).digest("hex").slice(0,12),16);
-  const unit = { pptx:"slide", pdf:"page", csv:"CSV row" }[source.kind];
+  const unit = source_formats[source.kind].location;
   return source.records.map(row => ({
     id: "F" + prefix + String(row.number).padStart(5,"0"), source_id: source.source_id, origin:"material",
     location: `${source.filename}, ${unit} ${row.number}`, passage:row.text, ...(row.numeric_series && {numeric_series:row.numeric_series}), ...(row.metric && { metric:row.metric }),

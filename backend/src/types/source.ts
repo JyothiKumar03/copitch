@@ -1,4 +1,16 @@
-export type TSourceKind = "pdf" | "pptx" | "csv";
+import type { source_formats } from "../constants/sources";
+
+export type TSourceKind = keyof typeof source_formats;
+export type TParserCall = {
+  call_id: string;
+  filename: string;
+  tool: (typeof source_formats)[TSourceKind]["tool"];
+  status: "running" | "succeeded" | "failed";
+  started_at: string;
+  finished_at: string | null;
+  source: TSourceSummary | null;
+  error: string | null;
+};
 export type TSourceSummary = { source_id: string; filename: string; kind: TSourceKind; locations: number };
 export type TConversionMetric = {
   month: string | null; segment: string | null; numerator: number; denominator: number; ratio: number | null;

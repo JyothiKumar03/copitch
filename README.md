@@ -34,6 +34,8 @@ bun run docker:up
 bun run docker:down
 ```
 
+The API image includes the Java reader for legacy PowerPoint uploads. For native development, use Compose to exercise `.ppt` ingestion, or set `COPITCH_PPT_READER` to a compatible local runtime directory containing `bin/java`, the compiled `classes/SlideText.class` and the Apache POI dependencies under `lib/`.
+
 ## Chat and long-running sessions
 
 Set `OPENAI_API_KEY` and `OPENAI_TEXT_MODELS` in the backend process environment. The latter accepts a JSON array in fallback order. Replace the model placeholder with an ID available to your account. Omit temperature for models that require their own sampling defaults.
