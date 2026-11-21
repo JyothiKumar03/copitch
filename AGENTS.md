@@ -10,3 +10,9 @@ Read docs/product.md for user-visible behavior, docs/architecture.md for session
 - Run the affected workspace typecheck and lint, then verify the affected product gate with its fixture. For cross-workspace changes also run the root build. Report which gates actually ran and any missing credentials or hardware.
 
 Use snake_case for backend functions, methods and wire fields. Prefix application type aliases with T (for example TModelConfig). Frontend functions use camelCase. Preserve spelling required by external SDKs at the adapter boundary.
+
+## Git workflow
+
+- Keep each commit message at 200 characters or fewer. Start it with `feat:`, `fix:`, `refactor:`, `chore:`, `updater:`, or `release:`.
+- Use `master` for releases and `dev` for integration. Name work branches `jk/<type>/<descriptive-name>` using one of the commit message types, for example `jk/feat/pitch-artifact`.
+- Commit frequently in cohesive changes. Aim for 3–5 related files per commit. A focused change can be a single file. Include up to 10 files when the feature needs them in one commit.
