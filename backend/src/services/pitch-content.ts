@@ -3,7 +3,7 @@ import type { TResearchBundle } from "../types/research";
 
 export const pitch_content = (bundle: TResearchBundle): TPitchContent => {
   const script = bundle.grounding?.mode === "verified" ? bundle.pitch_script : undefined;
-  const labels = { opening: "Opening", point: "Talking point", close: "Closing ask" };
+  const labels = { opening: "Opening", point: "Talking point", close: "Closing" };
   const passages = script?.length ? script.map(item => ({
     label: labels[item.purpose], text: item.prose,
     evidence_ids: [...new Set(item.support.map(ref => ref.evidence_id))],

@@ -10,13 +10,25 @@ export const pitch_markdown = (bundle: TResearchBundle): string => {
   const content = pitch_content(bundle);
   const evidence = new Map((bundle.evidence ?? []).filter(e => /^[A-Z]\d+$/.test(e.id)).map(e => [e.id,e]));
   const used = new Set<string>();
-  const lines = ["# " + plain(content.title), "", content.format === "script" ? "Pitch script" : "Source-backed talking points", ""];
-  for (const passage of content.passages) {
-    if (!passage.evidence_ids.length || !passage.evidence_ids.every(id => evidence.has(id))) continue;
-    lines.push("## " + plain(passage.label),"",plain(passage.text) + " " + passage.evidence_ids.map(footnote).join(" "), "");
-    for (const id of passage.evidence_ids) used.add(id);
+  let has_supported_content = false;
+  const cited = (text: string, ids: string[], neutral = false) => {
+    if ((!ids.length && !neutral) || !ids.every(id => evidence.has(id))) return;
+    has_supported_content ||= ids.length > 0;
+    const visible = ids.filter(id => evidence.get(id)?.origin !== "host");
+    for (const id of visible) used.add(id);
+    return plain(text) + (visible.length ? " " + visible.map(footnote).join(" ") : "");
+  };
+  // The document the host keeps (who or what the pitch is about, section by section), then what they will say.
+  const lines = ["# " + plain(content.title), ""];
+  for (const section of bundle.findings?.sections ?? []) {
+    const paragraphs = section.paragraphs.flatMap(paragraph => cited(paragraph.prose, [...new Set(paragraph.support.map(ref => ref.evidence_id))]) ?? []);
+    if (paragraphs.length) lines.push("## " + plain(section.heading), "", ...paragraphs.flatMap(paragraph => [paragraph, ""]));
   }
-  if (!used.size) lines.push("There are no verified talking points for this scope. Add supporting material and refine the brief.","");
+  if (content.format === "script") {
+    const talk = content.passages.flatMap(passage => { const text = cited(passage.text, passage.evidence_ids, true); return text ? ["### " + plain(passage.label), "", text, ""] : []; });
+    if (talk.length) lines.push("## Talk track", "", ...talk);
+  }
+  if (!has_supported_content) lines.push("There are no verified talking points for this scope. Add supporting material and refine the brief.","");
   const chart = artifact_chart(bundle,used);
   if (chart && chart.data.every(item => evidence.has(item.evidence_id))) {
     const chart_ids = [...new Set(chart.data.map(item => item.evidence_id))];

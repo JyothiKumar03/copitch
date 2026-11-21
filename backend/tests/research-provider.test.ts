@@ -35,3 +35,19 @@ test("reading a supplied URL requires a completed action on that page and an att
     if (expected) expect(results[0]?.passage).toBe(passage);
   }
 });
+
+test("discovery runs one native web search and returns source URLs without generated findings", async () => {
+  const url = "https://example.org/pilot";
+  const openai = createOpenAI({ apiKey: "fixture", fetch: async (_input, request) => {
+    const body = JSON.parse(String(request?.body));
+    expect(body.max_tool_calls).toBe(1);
+    expect(body.tools).toEqual([expect.objectContaining({ type: "web_search" })]);
+    return Response.json({ id: "resp_1", model: "fixture", created_at: 1, status: "completed", output: [
+      { type: "web_search_call", id: "ws_1", status: "completed", action: { type: "search", query: "Public pilot outcomes",
+        sources: [{ type: "url", url }] } },
+    ], usage: { input_tokens: 30, output_tokens: 20 } });
+  } });
+  const provider = research_provider({ model: "fixture", provider: "openai", max_output_tokens: 512, tool_providers: [] }, openai);
+  const hits = await provider.lookup("Public pilot outcomes", undefined, AbortSignal.timeout(1000), undefined, "discovery");
+  expect(hits).toEqual([{ url, title: url, passage: "" }]);
+});

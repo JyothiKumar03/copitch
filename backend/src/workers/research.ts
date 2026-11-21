@@ -34,7 +34,7 @@ export class ResearchWorker {
         const brief = db.current_brief(lease.session_id);
         jobs.assert_owner(lease);
         if (!brief || brief.brief_id !== lease.brief_id) throw new Error("Research scope changed");
-        const signal = AbortSignal.any([abort.signal,AbortSignal.timeout(90000)]);
+        const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(brief.studio_version === 2 ? 240_000 : 90_000)]);
         const bundle = await build_research(brief,this.provider(),signal,() => jobs.assert_owner(lease),
           lease.checkpoint,state => jobs.checkpoint(lease,state),
           db.sources.selected(lease.session_id, brief.sources?.map(s => s.source_id) ?? []),
@@ -45,6 +45,11 @@ export class ResearchWorker {
         jobs.complete(lease,bundle);
         job_trace({ ...correlation, operation: "research.attempt", status: "completed", duration_ms: elapsed() });
       } catch (error) {
+        if (error instanceof AppError && error.status === 422) {
+          jobs.request_input(lease, error.message);
+          job_trace({ ...correlation, operation: "research.attempt", status: "needs_input", duration_ms: elapsed() });
+          return;
+        }
         job_trace({ ...correlation, operation: "research.attempt", status: "interrupted", duration_ms: elapsed() });
         jobs.fail(lease,error instanceof AppError && error.status === 503 ? error.message : "Research worker failed");
       } finally {

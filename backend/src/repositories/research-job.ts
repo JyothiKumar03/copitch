@@ -90,16 +90,24 @@ export class ResearchJobRepository {
 
   get(session: string, id: string): TResearchJob | undefined {
     const row = this.db.query<{
-      job_id:string;brief_id:string;status:TResearchJob["status"];completed_lookups:number;error:string|null;payload:string|null;
+      job_id:string;brief_id:string;status:TResearchJob["status"];completed_lookups:number;tool_steps:number|null;
+      research_passes:number|null;read_pages:number|null;error:string|null;payload:string|null;
     },[string,string]>(`SELECT j.job_id,j.brief_id,j.status,j.error,
-      COALESCE(json_extract(j.checkpoint,'$.completed_lookups'),0) AS completed_lookups,b.payload
+      COALESCE(json_extract(j.checkpoint,'$.completed_lookups'),0) AS completed_lookups,
+      json_extract(j.checkpoint,'$.collection.lookup_attempts') AS tool_steps,
+      json_extract(j.checkpoint,'$.collection.pass') AS research_passes,
+      COALESCE(json_extract(j.checkpoint,'$.collection.read_pages'), CASE WHEN json_type(j.checkpoint,'$.collection.targets')='array' THEN
+        (SELECT COUNT(DISTINCT COALESCE(json_extract(value,'$.canonical_url'),json_extract(value,'$.value')))
+         FROM json_each(j.checkpoint,'$.collection.targets')
+         WHERE json_extract(value,'$.kind')='read' AND json_array_length(value,'$.evidence_ids')>0) END) AS read_pages,b.payload
       FROM research_jobs j LEFT JOIN research_bundles b ON b.session=j.session_id AND b.brief=j.brief_id AND j.status='completed'
       WHERE j.session_id=? AND j.job_id=?`).get(session,id);
     if (!row) return;
-    const {payload,error,...state} = row;
+    const {payload,error,tool_steps,research_passes,read_pages,...state} = row;
     const activity = this.db.query<TResearchActivity,[string]>(
       "SELECT sequence,kind,label FROM research_activity WHERE job_id=? ORDER BY sequence").all(id);
-    const job = { ...state,activity };
+    const job = { ...state, activity, ...(tool_steps !== null && { tool_steps }), ...(research_passes !== null && { research_passes }),
+      ...(read_pages !== null && { read_pages }) };
     if (payload) {
       const {research_id,markdown,gaps} = JSON.parse(payload) as TResearchBundle;
       return { ...job, result:{research_id,markdown,gaps} };
@@ -159,6 +167,15 @@ export class ResearchJobRepository {
         .run(bundle.research_id,lease.session_id,lease.brief_id,JSON.stringify(bundle));
       this.append(lease.job_id,"completed","Saved the research report and its source index.");
       this.db.query("UPDATE research_jobs SET status='completed',lease_token=NULL,lease_until=NULL WHERE job_id=?").run(lease.job_id);
+    }).immediate();
+  }
+
+  request_input(lease: TResearchLease, message: string) {
+    this.db.transaction(() => {
+      this.assert_owner(lease);
+      this.db.query("UPDATE research_jobs SET status='needs_input',error=?,lease_token=NULL,lease_until=NULL WHERE job_id=?")
+        .run(message, lease.job_id);
+      this.append(lease.job_id, "needs_input", message);
     }).immediate();
   }
 
