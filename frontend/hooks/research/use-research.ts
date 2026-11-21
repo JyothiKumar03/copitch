@@ -29,7 +29,8 @@ export const useResearch = (briefId?: string, restored?: TResearchJob | null) =>
     mutationFn: async (input: TBriefInput) => clarifyBrief(await getSession(), input),
   });
   const research = useMutation({
-    mutationFn: async (input: { briefId: string; retry: boolean }) => runResearch(await getSession(), input.briefId, input.retry),
+    mutationFn: async (input: { briefId: string; retry: boolean; approvalText: string }) =>
+      runResearch(await getSession(), input.briefId, input.retry, input.approvalText),
     onSuccess: watchJob,
 
   });

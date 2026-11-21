@@ -113,9 +113,9 @@ const Interview = ({ initial }: { initial: TResearchWorkspace }) => {
   const confirm = (text: string) => {
     if (!brief || !canConfirm) return;
     voice.stopPlayback();
-    research.mutate({ briefId: brief.brief_id, retry: failed }, { onSuccess() {
+    research.mutate({ briefId: brief.brief_id, retry: failed, approvalText: text }, { onSuccess(accepted) {
       setMessage(""); setPendingVoiceReview(false);
-      addTurns({ role: "host", text }, { role: "assistant", text: "I’m researching the scope you approved." });
+      setHistory(accepted.history); saveInterviewHistory(accepted.history);
     } });
   };
   const send = (text: string, replaceRunningScope = false) => {
@@ -137,7 +137,7 @@ const Interview = ({ initial }: { initial: TResearchWorkspace }) => {
         setChangingScope(false);
         const reply = next.spoken_prompt ?? next.question ?? "The scope is ready. Should I start researching?";
         if (result && !archived.some(item => item.researchId === result.research_id)) {
-          const items = [...archived, { researchId: result.research_id, afterTurn: Math.max(0, (brief?.history?.length || history.length) - 1) }];
+          const items = [...archived, { researchId: result.research_id, afterTurn: Math.max(0, history.length - 1) }];
           setArchived(items); saveArchivedPitches(items);
         }
         setBrief({ ...next, materials, source_ids: sourceIds, sources, source_policy: policy, urls }); setSavedResearch(null); setMessage("");
@@ -259,7 +259,7 @@ const Interview = ({ initial }: { initial: TResearchWorkspace }) => {
               {brief.source_policy === "public_search" && !!brief.urls.length && <div><h3 className="text-sm font-semibold">Requested pages</h3><ul className="mt-1 list-disc pl-5">{brief.urls.map((url, i) => <li className="break-all" key={i}>{url}</li>)}</ul></div>}
               {!!brief.public_queries.length && <div><h3 className="text-sm font-semibold">Proposed public searches</h3><ul className="mt-1 list-disc pl-5">{brief.public_queries.map((query, i) => <li key={i}>{query}</li>)}</ul></div>}
               {failed && <p role="alert" className="text-destructive">{currentJob.error ?? "Research failed. Retry or refine the brief."}</p>}
-              {canConfirm && <Button disabled={voice.phase !== "idle" || !!message.trim()} onClick={() => confirm("Start researching.")}>{failed ? "Retry research" : "Start researching"}</Button>}
+              {canConfirm && <Button disabled={voice.phase !== "idle" || !!message.trim()} onClick={() => confirm(failed ? "Retry research." : "Start researching.")}>{failed ? "Retry research" : "Start researching"}</Button>}
             </section>}
 
           {result && <section ref={artifact} aria-label="Pitch response" className="space-y-5 border-t border-border p-5 sm:p-7">

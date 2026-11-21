@@ -21,7 +21,10 @@ const brief_input = z.object({
   source_ids: z.array(z.string().uuid()).max(6).optional(),
   urls: z.array(z.string().max(2048).refine(value => Boolean(public_url(value)))).max(8).optional(),
 });
-const build_input = z.object({ brief_id: z.string().uuid(), confirmed: z.literal(true), retry: z.boolean().optional() });
+const build_input = z.object({
+  brief_id: z.string().uuid(), confirmed: z.literal(true), retry: z.boolean().optional(),
+  approval_text: z.string().trim().min(1).max(6000).optional(),
+});
 
 const configured_provider = (purpose: "interview" | "research") => {
   const [model] = configured_models_for(purpose);
@@ -75,11 +78,18 @@ export const research_handlers = (get_provider: (purpose: "interview" | "researc
       const jobs = db.research_jobs;
       // Verify configuration before accepting new work. Already saved reports remain accessible offline.
       if (!db.research_by_brief(session,brief.brief_id)) get_provider("research");
-      let job = jobs.enqueue(session,brief.brief_id,input.data.retry);
+      const question = input.data.approval_text ?? "Start researching.";
+      const answer = /[\u0900-\u097f]/u.test(question + brief.summary)
+        ? "मैं आपके स्वीकृत दायरे पर शोध कर रहा हूँ।" : "I’m researching the scope you approved.";
+      let job = jobs.enqueue(session, brief.brief_id, input.data.retry, {
+        after_turn: brief_history(brief).length, question, answer,
+      });
       bind_job_trace(res, job.job_id);
       worker.wake(job.job_id);
       if (req.get("Prefer")?.split(",").some(value => value.trim() === "respond-async")) {
-        return res.status(job.status === "completed" ? 200 : 202).json(job);
+        return res.status(job.status === "completed" ? 200 : 202).json({
+          ...job, history: interview_brief(brief, session).history,
+        });
       }
       // Keep the original response contract for existing clients. Disconnection ends only this wait.
       while (job.status === "running" || job.status === "queued") {

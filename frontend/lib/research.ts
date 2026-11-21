@@ -32,8 +32,9 @@ export const clarifyBrief = async (session: TResearchSession, input: TBriefInput
   return (await request(researchPath(session) + "/brief", session, input)).json();
 };
 
-export const runResearch = async (session: TResearchSession, briefId: string, retry = false): Promise<TResearchJob> => {
-  return (await request(researchPath(session), session, { brief_id: briefId, confirmed: true, retry },
+export const runResearch = async (session: TResearchSession, briefId: string, retry = false,
+  approvalText?: string): Promise<TResearchJob & { history: TInterviewMessage[] }> => {
+  return (await request(researchPath(session), session, { brief_id: briefId, confirmed: true, retry, approval_text: approvalText },
     { headers: { Prefer: "respond-async" } })).json();
 };
 

@@ -73,8 +73,13 @@ export class SessionStore {
   }
   earlier_artifacts(session: string, current_brief: string) {
     return this.db.query<{ research_id: string; after_turn: number }, [string, string]>(
-      `SELECT id AS research_id, MAX(0, COALESCE(json_array_length(payload, '$.confirmed_brief.history'), 1) - 1) AS after_turn
-       FROM research_bundles WHERE session=? AND brief<>? ORDER BY rowid`
+      `WITH snapshots AS (
+         SELECT id, session, rowid AS sequence, COALESCE(json_array_length(payload, '$.confirmed_brief.history'), 1) AS turns
+         FROM research_bundles WHERE session=? AND brief<>?
+       )
+       SELECT id AS research_id, MAX(0, turns - 1 + 2 * (
+         SELECT COUNT(*) FROM research_progress_turns t WHERE t.session_id=snapshots.session AND t.after_turn<=turns
+       )) AS after_turn FROM snapshots ORDER BY sequence`
     ).all(session, current_brief);
   }
   save_research(session: string, bundle: TResearchBundle) {

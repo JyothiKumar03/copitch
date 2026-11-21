@@ -62,7 +62,8 @@ export class ResearchJobRepository {
       "SELECT answer FROM research_progress_turns WHERE session_id=? AND turn_id=?").get(session, turn_id)?.answer;
   }
 
-  enqueue(session: string, brief: string, retry = false): TResearchJob {
+  enqueue(session: string, brief: string, retry = false,
+    approval?: { after_turn: number; question: string; answer: string }): TResearchJob {
     return this.db.transaction(() => {
       const current = this.db.query("SELECT 1 FROM research_briefs WHERE session=? AND id=?").get(session,brief);
       if (!current) throw new AppError(409, "Brief revision is stale");
@@ -76,6 +77,9 @@ export class ResearchJobRepository {
       if (inserted.changes) {
         this.append(row.job_id,bundle ? "completed" : "queued",bundle ? "Loaded the saved research report." : "Research queued.");
       } else if (retried && retried.changes) this.append(row.job_id,"queued","Research queued for retry.");
+      if (approval && (inserted.changes || (retried && retried.changes))) {
+        this.record_progress(session, row.job_id, crypto.randomUUID(), approval.after_turn, approval.question, approval.answer);
+      }
       return this.get(session,row.job_id)!;
     }).immediate();
   }
