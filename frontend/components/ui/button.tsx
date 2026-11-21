@@ -4,13 +4,13 @@ import type { ComponentProps } from "react";
 import { cn } from "@/lib/utils";
 
 export const buttonVariants = cva(
-  "inline-flex shrink-0 items-center justify-center gap-2 rounded-md border font-semibold leading-none transition-[background-color,color,border-color,box-shadow,translate] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive motion-safe:active:translate-y-px motion-reduce:transition-none [&_svg]:pointer-events-none [&_svg]:shrink-0",
+  "inline-flex shrink-0 items-center justify-center gap-2 rounded-md border font-semibold leading-none transition-[background-color,color,border-color,box-shadow,translate] duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive motion-safe:hover:-translate-y-px motion-safe:active:translate-y-px motion-reduce:transition-none [&_svg]:pointer-events-none [&_svg]:shrink-0",
   {
     variants: {
       variant: {
-        default: "border-transparent bg-primary text-primary-foreground hover:bg-studio-dark",
+        default: "border-transparent bg-primary text-primary-foreground hover:bg-primary-hover",
         outline: "border-input bg-transparent text-foreground hover:bg-accent hover:text-accent-foreground",
-        secondary: "border-transparent bg-secondary text-secondary-foreground hover:bg-muted",
+        secondary: "border-transparent bg-secondary text-secondary-foreground hover:bg-accent",
         destructive: "border-transparent bg-destructive text-destructive-foreground hover:bg-destructive/90",
         ghost: "border-transparent text-foreground hover:bg-accent hover:text-accent-foreground",
         link: "border-transparent text-primary underline-offset-4 hover:underline",

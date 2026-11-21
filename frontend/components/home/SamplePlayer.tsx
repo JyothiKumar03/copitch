@@ -26,18 +26,18 @@ export const SamplePlayer = () => {
   };
 
   return (
-    <div className="bg-studio-dark px-4 py-3.5 text-studio-light sm:px-5">
+    <div className="bg-card px-3 py-2.5 text-foreground sm:px-4">
       <audio ref={player} src="/studio/sample-pitch.mp3" preload="none"
         onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)}
         onEnded={() => { setPlaying(false); setElapsed(0); }}
         onTimeUpdate={event => setElapsed(event.currentTarget.currentTime)} />
       <div className="flex items-center gap-3 sm:gap-4">
         <Button type="button" variant="outline" size="icon" onClick={togglePlayback} aria-label={playing ? "Pause sample pitch" : "Play sample pitch"}
-          className="rounded-full border-studio-light/65 text-studio-light hover:bg-white/10 hover:text-studio-light focus-visible:outline-white">
+          className="size-10 rounded-full border-input text-primary hover:bg-accent hover:text-primary">
           {playing ? <Pause size={16} fill="currentColor" aria-hidden="true"/> : <Play size={16} fill="currentColor" aria-hidden="true" className="ml-0.5"/>}
         </Button>
-        <div className="shrink-0"><p className="text-sm font-semibold leading-tight">Sample pitch</p><p className="mt-1 text-xs text-studio-light/75">AI narration</p></div>
-        <svg viewBox="0 0 272 32" preserveAspectRatio="none" className="mx-1 h-8 min-w-0 flex-1" aria-hidden="true">
+        <div className="shrink-0"><p className="text-sm font-semibold leading-tight">Sample narration</p></div>
+        <svg viewBox="0 0 272 32" preserveAspectRatio="none" className="mx-1 h-8 min-w-0 flex-1 text-primary/55" aria-hidden="true">
           {sampleAudio.waveform.map((height, i) => (
             <rect key={i} x={i * 4} y={(32 - height) / 2} width="2" height={height} rx="1" fill="currentColor"
               opacity={i / sampleAudio.waveform.length < elapsed / sampleAudio.duration ? 1 : 0.55}/>
