@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { AppError } from "../errors/app-error";
+import { record_studio_update } from "../services/studio-events";
 import type { TResearchBundle } from "../types/research";
 import type { TActivityKind, TResearchActivity, TResearchCheckpoint, TResearchJob, TResearchLease } from "../types/research-job";
 
@@ -28,6 +29,9 @@ export class ResearchJobRepository {
   private append(id: string, kind: TActivityKind, label: string) {
     this.db.query(`INSERT INTO research_activity(job_id,sequence,kind,label)
       SELECT ?,COALESCE(MAX(sequence),0)+1,?,? FROM research_activity WHERE job_id=?`).run(id,kind,label,id);
+    const job = this.db.query<{session_id: string}, [string]>(
+      "SELECT session_id FROM research_jobs WHERE job_id=?").get(id);
+    if (job) record_studio_update(this.db, job.session_id, "job", id);
   }
 
   record(lease: TResearchLease, kind: TActivityKind, label: string) {
