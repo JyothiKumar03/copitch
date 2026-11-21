@@ -1,5 +1,5 @@
 import type { TInterviewMessage } from "@/types/research";
-import { LIVE_BACKCHANNEL_MS } from "../../shared/voice-transcript";
+import { isLiveHostTail as isLateHostCaption, LIVE_BACKCHANNEL_MS } from "../../shared/voice-transcript";
 
 export type TVoiceCaption = { speaker: "host" | "agent"; text: string; id: string; final: boolean };
 type TVoiceFragment = { speaker: TVoiceCaption["speaker"]; delta: string; start?: number; end?: number; eventId?: string };
@@ -16,8 +16,7 @@ export const readVoiceFragment = (value: unknown): TVoiceFragment | null => {
   return { speaker, delta: value.delta, start, end, eventId };
 };
 
-export const isLateHostCaption = (start: number | undefined, hostUntil: number | undefined, agentUntil: number | undefined) =>
-  start !== undefined && hostUntil !== undefined && agentUntil !== undefined && start <= hostUntil && start <= agentUntil;
+export { isLateHostCaption };
 
 export const committedVoiceIds = (history: TInterviewMessage[]) => new Set(history.flatMap(turn => turn.voice_items ?? []));
 export const pendingVoiceCaptions = (captions: TVoiceCaption[], committed: ReadonlySet<string>) =>

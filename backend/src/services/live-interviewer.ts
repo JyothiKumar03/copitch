@@ -3,7 +3,7 @@ import type { TVoiceAction } from "./studio-turn";
 import { action_inputs, pitch_intent } from "../types/studio-turn";
 import type { TStudioTurn } from "../types/studio-turn";
 import { live_tool } from "./prompts";
-import { LIVE_BACKCHANNEL_MS, LIVE_EXCHANGE_IDLE_MS } from "../../../shared/voice-transcript";
+import { isLiveHostTail as is_live_host_tail, LIVE_BACKCHANNEL_MS, LIVE_EXCHANGE_IDLE_MS } from "../../../shared/voice-transcript";
 
 // Turns the Live session's event stream into saved exchanges and controller-checked actions. The Live model hears and
 // speaks on its own; this module only records what was said and decides what the delegated tool calls may change.
@@ -179,11 +179,12 @@ export const create_live_interviewer = (hooks: TLiveHooks) => {
     } else if (event.type === "session.input_transcript.delta" && event.delta) {
       const start = event.start_ms ?? 0;
       // The last input token and the start of a reply can overlap on the provider clock.
-      const late_tail = event.start_ms !== undefined && host_until !== undefined && start <= host_until && start <= agent_until;
+      const late_tail = is_live_host_tail(event.start_ms, host_until, agent_until);
       // The host spoke after the agent finished reading the plan, so the whole plan was audible before any reply.
       let resolves_approval = false;
       let matches_approval = false;
-      if (!late_tail && reading?.spoken_until !== undefined) {
+      // The caption gap only affects grouping. Plan approval retains its strict timestamp boundary.
+      if (reading?.spoken_until !== undefined && !is_live_host_tail(event.start_ms, host_until, agent_until, 0)) {
         const pending = pending_start?.reading === reading ? pending_start : undefined;
         resolves_approval = !!pending;
         const heard = event.start_ms !== undefined && start >= reading.spoken_until;

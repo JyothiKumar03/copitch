@@ -60,6 +60,35 @@ test("a late host token on the same provider clock keeps the start of the reply"
   f.live.close();
 });
 
+test("real English caption boundaries preserve a reply prefix while the final host token arrives", async () => {
+  const cases = [
+    {
+      host: "Would you ask me the most important planning", host_start: 2400, host_end: 7000,
+      prefix: " Who’s", agent_start: 7200, boundary: 7400, host_tail: " question?", next: " your audience for this talk?",
+    },
+    {
+      host: "My audience is the volunteers who run the reading", host_start: 28200, host_end: 32800,
+      prefix: " Got it", agent_start: 32800, boundary: 33000, host_tail: " club", next: ". What’s the main thing?",
+    },
+  ];
+  for (const sample of cases) {
+    const recorded: TLiveExchange[] = [];
+    const live = create_live_interviewer({ send: () => {}, close: () => {}, record: value => recorded.push(value), heard: () => {},
+      act: () => { throw new Error("Transcript deltas cannot act"); } });
+    const input = (delta: string, start_ms: number, end_ms: number) => live.receive({ type: "session.input_transcript.delta", delta, start_ms, end_ms });
+    const output = (delta: string, start_ms: number, end_ms: number) => live.receive({ type: "session.output_transcript.delta", delta, start_ms, end_ms });
+    try {
+      await input(sample.host, sample.host_start, sample.host_end);
+      await output(sample.prefix, sample.agent_start, sample.boundary);
+      await input(sample.host_tail, sample.boundary, sample.boundary + 200);
+      await output(sample.next, sample.boundary, sample.boundary + 200);
+    } finally { live.close(); }
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]).toMatchObject({ host: sample.host + sample.host_tail,
+      agent: sample.prefix.trimStart() + sample.next, voice_reply: "agent:" + sample.agent_start });
+  }
+});
+
 test("a plan proposal goes through the controller and the model is told exactly what was saved", async () => {
   const f = setup(() => ({ phase: "proposed", proposal, turn_id: "turn-1" }));
   await f.host("Research jk-ai.in for a bank pitch about me.", 100);

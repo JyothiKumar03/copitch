@@ -17,6 +17,24 @@ test("late host tokens fill the host draft while the assistant keeps replying", 
   ]);
 });
 
+test("real provider gaps of 400 ms and 200 ms keep each reply's first caption and its identity", () => {
+  const cases = [
+    { hostEnd: 7000, agentStart: 7200, boundary: 7400, prefix: " Who’s", hostTail: " question?", next: " your audience for this talk?" },
+    { hostEnd: 32800, agentStart: 32800, boundary: 33000, prefix: " Got it", hostTail: " club", next: ". What’s the main thing?" },
+  ];
+  for (const sample of cases) {
+    const buffer = createVoicePreview("live-recording");
+    feed(buffer, "host", "Synthetic input", sample.hostEnd - 200, sample.hostEnd, "host-first");
+    feed(buffer, "agent", sample.prefix, sample.agentStart, sample.boundary, "agent-first");
+    expect(feed(buffer, "host", sample.hostTail, sample.boundary, sample.boundary + 200, "host-final")).toBe("tail");
+    feed(buffer, "agent", sample.next, sample.boundary, sample.boundary + 200, "agent-continued");
+    expect(buffer.captions().map(({ id, text }) => [id, text])).toEqual([
+      ["live:live-recording:" + (sample.hostEnd - 200), "Synthetic input" + sample.hostTail],
+      ["agent:live-recording:" + sample.agentStart, sample.prefix + sample.next],
+    ]);
+  }
+});
+
 test("completed captions stay visible until the exact exchange is saved, including repeated wording on a new call", () => {
   const buffer = createVoicePreview("call-2");
   feed(buffer, "host", "Review the trial results.", 1000, 1800, "one");
