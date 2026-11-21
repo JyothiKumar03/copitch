@@ -111,8 +111,8 @@ const Interview = ({ initial }: { initial: TResearchWorkspace }) => {
         setAnswerTo(null);
         if (payload.option_id) composer.current?.focus();
         setReplacingScope(false); setLanguage(next.context?.language_preference ?? reply.language);
-        setPolicy(next.context?.source_policy ?? next.brief?.source_policy ?? policy);
-        setUrls(next.context?.entities?.urls ?? next.brief?.urls ?? urls);
+        setPolicy(current => current === payload.source_policy ? next.context?.source_policy ?? next.brief?.source_policy ?? current : current);
+        setUrls(current => JSON.stringify(current) === JSON.stringify(payload.urls) ? next.context?.entities?.urls ?? next.brief?.urls ?? current : current);
         saveSourceSelection(next.brief?.brief_id, sources);
         if (wantsVoice.current) void voice.readQuestion(reply.text, payload.turn_id);
       },

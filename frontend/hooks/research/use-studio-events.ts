@@ -33,13 +33,20 @@ export const useStudioEvents = (session: TResearchSession | null) => {
         if (value.kind === "conversation") schedule(["host-workspace"]);
       } catch { /* Reconciliation on reconnect also covers interrupted events. */ }
     };
+    let fallback: ReturnType<typeof setInterval> | undefined;
     const reconcile = () => schedule(["source-calls", "research-job", "host-workspace"]);
+    const ready = () => { clearInterval(fallback); fallback = undefined; reconcile(); };
+    const disconnected = () => {
+      if (!fallback) fallback = setInterval(() => { if (navigator.onLine) reconcile(); }, 5000);
+    };
+    stream.addEventListener("error", disconnected);
     stream.addEventListener("studio", update);
-    stream.addEventListener("ready", reconcile);
+    stream.addEventListener("ready", ready);
     return () => {
-      clearTimeout(timer);
+      clearTimeout(timer); clearInterval(fallback);
       stream.removeEventListener("studio", update);
-      stream.removeEventListener("ready", reconcile);
+      stream.removeEventListener("ready", ready);
+      stream.removeEventListener("error", disconnected);
       stream.close();
     };
   }, [client, project, token]);

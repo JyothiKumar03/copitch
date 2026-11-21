@@ -51,7 +51,8 @@ export const PitchChart = ({ chart }: { chart: TPitchChart }) => {
               <tr key={index} className="border-t border-border/70 align-top">
                 <th scope="row" className="py-1.5 pr-2 font-normal">{point.label}</th>
                 <td className="py-1.5 pr-2 tabular-nums">{formatValue(point.value, point.unit)}{point.numerator !== undefined && point.denominator !== undefined && <span className="block text-xs text-muted-foreground">{point.numerator} of {point.denominator}</span>}</td>
-                <td className="py-1.5 break-all text-muted-foreground">{point.evidence_id}</td>
+                <td className="py-1.5"><a href={"#user-content-fn-" + point.evidence_id.toLowerCase()} title={point.evidence_id}
+                  aria-label={"View source for " + point.label} className="text-primary underline underline-offset-2">View source</a></td>
               </tr>
             ))}</tbody>
           </table>

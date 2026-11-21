@@ -10,10 +10,14 @@ export const PitchFileViewer = ({ onClose, ...props }: TPitchContentProps & { on
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const el = dialog.current;
+    const opener = document.activeElement;
     el?.showModal();
-    return () => el?.close();
+    return () => {
+      el?.close();
+      if (opener instanceof HTMLElement && opener.isConnected) opener.focus({ preventScroll: true });
+    };
   }, []);
-  return <dialog ref={dialog} aria-label="Pitch artifact" onCancel={onClose}
+  return <dialog ref={dialog} aria-label="Pitch artifact" onCancel={event => { event.preventDefault(); onClose(); }}
     className="m-auto max-h-[90dvh] w-[min(56rem,94vw)] overflow-auto rounded-lg border border-border bg-card text-foreground shadow-xl backdrop:bg-black/40">
     <div className="flex justify-end p-2">
       <Button variant="ghost" size="sm" onClick={onClose} aria-label="Close artifact"><X size={18} />Close</Button>
