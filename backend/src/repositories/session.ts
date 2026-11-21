@@ -1,3 +1,9 @@
+import { AccountRepository } from "./accounts";
+import { SourceRepository } from "./source";
+import { AudienceRepository } from "./audience";
+import { ResearchJobRepository } from "./research-job";
+import { DeckRepository } from "./deck";
+import { ContinuationStore } from "./continuation";
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -8,9 +14,22 @@ import type { TRun, TSessionEvent } from "../types/session";
 // A single backend process owns this store. SQLite serializes each checkpoint and terminal event.
 export class SessionStore {
   private db: Database;
+  readonly accounts: AccountRepository;
+  readonly sources: SourceRepository;
+  readonly audience: AudienceRepository;
+  readonly continuations: ContinuationStore;
+  readonly research_jobs: ResearchJobRepository;
+  readonly decks: DeckRepository;
   constructor(path: string) {
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
     this.db = new Database(path, { create: true, strict: true });
+    this.accounts = new AccountRepository(this.db);
+    this.sources = new SourceRepository(this.db);
+    this.audience = new AudienceRepository(this.db);
+    this.continuations = new ContinuationStore(this.db);
+    this.continuations.recover();
+    this.research_jobs = new ResearchJobRepository(this.db);
+    this.decks = new DeckRepository(this.db);
     this.db.exec(`
       PRAGMA journal_mode=WAL;
       CREATE TABLE IF NOT EXISTS ai_sessions (id TEXT PRIMARY KEY, token_hash TEXT NOT NULL);
@@ -26,6 +45,9 @@ export class SessionStore {
     const interrupted = this.db.query<{ id: string }, []>("SELECT id FROM ai_runs WHERE status='running'").all();
     for (const row of interrupted) this.finish(row.id, { type: "failed", reason: "Server restarted before completion" });
   }
+  check_ready() {
+    this.db.query("SELECT 1 FROM research_jobs LIMIT 1").get();
+  }
   current_brief(session: string): TResearchBrief | undefined {
     const row = this.db.query<{payload: string}, [string]>("SELECT payload FROM research_briefs WHERE session=?").get(session);
     if (row) return JSON.parse(row.payload) as TResearchBrief;
@@ -35,6 +57,7 @@ export class SessionStore {
       if (this.current_brief(session)?.brief_id !== expected) return false;
       this.db.query("INSERT OR REPLACE INTO research_briefs(session,id,payload) VALUES(?,?,?)")
         .run(session, brief.brief_id, JSON.stringify(brief));
+      this.research_jobs.supersede(session, brief.brief_id);
       return true;
     })();
   }
@@ -47,6 +70,12 @@ export class SessionStore {
     const row = this.db.query<{payload: string}, [string,string]>(
       "SELECT payload FROM research_bundles WHERE session=? AND id=?").get(session,id);
     if (row) return JSON.parse(row.payload) as TResearchBundle;
+  }
+  earlier_artifacts(session: string, current_brief: string) {
+    return this.db.query<{ research_id: string; after_turn: number }, [string, string]>(
+      `SELECT id AS research_id, MAX(0, COALESCE(json_array_length(payload, '$.confirmed_brief.history'), 1) - 1) AS after_turn
+       FROM research_bundles WHERE session=? AND brief<>? ORDER BY rowid`
+    ).all(session, current_brief);
   }
   save_research(session: string, bundle: TResearchBundle) {
     return this.db.transaction(() => {

@@ -1,79 +1,84 @@
 import { createHash, randomBytes } from "node:crypto";
-import type { Context } from "hono";
-import { streamSSE } from "hono/streaming";
+import { once } from "node:events";
+import { setTimeout as delay } from "node:timers/promises";
+import type { Request, Response } from "express";
 import { z } from "zod";
-import { SessionStore } from "../repositories/session";
+import { AppError } from "../errors/app-error";
+import { session_for } from "../middleware/host-session";
+import { database } from "../repositories/store";
 import { create_model_step } from "../services/ai-sdk";
-import { configured_models } from "../services/model-config";
+import { configured_models_for } from "../services/model-config";
 import { SessionRunner } from "../services/session-runner";
 
-let store: SessionStore | undefined;
-export const database = () => store ??= new SessionStore(process.env.AI_SESSION_DB ?? "./data/ai-sessions.sqlite");
-const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const runs = new Map<string, AbortController>();
 const input = z.object({ message: z.string().trim().min(1).max(8000), context: z.string().max(60000).default("") });
 
-export function create_session(c: Context) {
+export const create_session = (_req: Request, res: Response) => {
   const session_id = crypto.randomUUID();
   const token = randomBytes(32).toString("base64url");
-  database().add_session(session_id, hash(token));
-  c.header("Cache-Control", "no-store");
-  return c.json({ session_id, token }, 201);
-}
+  database().add_session(session_id, createHash("sha256").update(token).digest("hex"));
+  res.set("Cache-Control","no-store").status(201).json({ session_id, token });
+};
 
-export function session_for(c: Context) {
-  const id = c.req.param("session_id");
-  const token = c.req.header("Authorization")?.match(/^Bearer ([\w-]+)$/)?.[1];
-  return id && token && database().authorized(id, hash(token)) ? id : null;
-}
-
-export async function start_run(c: Context) {
-  const session = session_for(c);
-  if (!session) return c.json({ error: "Unauthorized" }, 401);
-  const parsed = input.safeParse(await c.req.json().catch(() => undefined));
-  if (!parsed.success) return c.json({ error: "Invalid message or context" }, 400);
-  const models = configured_models();
-  if (!process.env.OPENAI_API_KEY || !models.length) return c.json({ error: "Configure OPENAI_API_KEY and OPENAI_TEXT_MODELS" }, 503);
+export const start_run = (req: Request, res: Response) => {
+  const session = session_for(req);
+  if (!session) throw new AppError(401,"Unauthorized");
+  const parsed = input.safeParse(req.body);
+  if (!parsed.success) throw new AppError(400,"Invalid message or context");
+  const models = configured_models_for("chat");
+  if (!process.env.OPENAI_API_KEY || !models.length) throw new AppError(503,"Configure OPENAI_API_KEY and OPENAI_TEXT_MODELS");
   const db = database();
   const run_id = db.start(session, parsed.data.message, parsed.data.context);
-  if (!run_id) return c.json({ error: "Session already has an active run" }, 409);
+  if (!run_id) throw new AppError(409,"Session already has an active run");
   const abort = new AbortController();
   runs.set(run_id, abort);
   const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(120000)]);
   const runner = new SessionRunner(session, db, create_model_step(models));
   void runner.execute(run_id, signal).catch(() => db.finish(run_id, { type: "failed", reason: "Session execution failed" }))
     .finally(() => runs.delete(run_id));
-  return c.json({ run_id }, 202);
-}
+  res.status(202).json({ run_id });
+};
 
-export function cancel_run(c: Context) {
-  const session = session_for(c);
-  if (!session) return c.json({ error: "Unauthorized" }, 401);
-  const id = c.req.param("run_id") ?? "";
-  if (!database().get(session, id)) return c.json({ error: "Unknown run" }, 404);
+export const cancel_run = (req: Request, res: Response) => {
+  const session = session_for(req);
+  if (!session) throw new AppError(401,"Unauthorized");
+  const id = req.params.run_id;
+  if (typeof id !== "string" || !database().get(session,id)) throw new AppError(404,"Unknown run");
   runs.get(id)?.abort();
-  return c.body(null, 204);
-}
+  res.status(204).end();
+};
 
-export function run_events(c: Context) {
-  const session = session_for(c);
-  if (!session) return c.json({ error: "Unauthorized" }, 401);
-  const id = c.req.param("run_id") ?? "";
+export const run_events = async (req: Request, res: Response) => {
+  const session = session_for(req);
+  if (!session) throw new AppError(401,"Unauthorized");
+  const id = req.params.run_id;
   const db = database();
-  if (!db.get(session, id)) return c.json({ error: "Unknown run" }, 404);
-  const after = Number(c.req.header("Last-Event-ID") ?? 0);
-  if (!Number.isSafeInteger(after) || after < 0) return c.json({ error: "Invalid event cursor" }, 400);
-  return streamSSE(c, async stream => {
-    let cursor = after;
-    while (!stream.aborted) {
-      const rows = db.events(id, cursor);
+  if (typeof id !== "string" || !db.get(session,id)) throw new AppError(404,"Unknown run");
+  let cursor = Number(req.get("Last-Event-ID") ?? 0);
+  if (!Number.isSafeInteger(cursor) || cursor < 0) throw new AppError(400,"Invalid event cursor");
+  const closed = new AbortController();
+  const disconnect = () => closed.abort();
+  res.once("close",disconnect);
+  res.set({ "Content-Type":"text/event-stream; charset=utf-8", "Cache-Control":"no-cache",
+    Connection:"keep-alive", "X-Accel-Buffering":"no" });
+  res.flushHeaders();
+  try {
+    while (!closed.signal.aborted) {
+      const rows = db.events(id,cursor);
       for (const row of rows) {
-        await stream.writeSSE({ id: String(row.seq), data: row.event });
+        if (!res.write(`id: ${row.seq}\ndata: ${row.event}\n\n`)) {
+          await once(res,"drain",{ signal:closed.signal });
+        }
         cursor = row.seq;
       }
       if (rows.length) continue;
-      if (db.get(session, id)?.status !== "running") return;
-      await stream.sleep(150);
+      if (db.get(session,id)?.status !== "running") break;
+      await delay(150,undefined,{ signal:closed.signal });
     }
-  });
-}
+  } catch (error) {
+    if (!closed.signal.aborted) throw error;
+  } finally {
+    res.off("close",disconnect);
+    if (!res.destroyed) res.end();
+  }
+};
