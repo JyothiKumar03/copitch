@@ -1,3 +1,8 @@
+import type { TPresentationReadiness } from "../../../shared/presentation";
+
+export { MAX_PRESENTATION_SLIDES } from "../../../shared/presentation";
+export type { TPresentationReadiness } from "../../../shared/presentation";
+
 export type TSlideLayout = "headline" | "evidence" | "takeaway";
 
 export type TConversionChart = {
@@ -17,6 +22,7 @@ export type TDeckSentence = { sentence_id: string; text: string; evidence_ids: s
 
 export type TSlide = {
   chart?: TConversionChart;
+  chart_period?: string;
   slide_id: string;
   layout: TSlideLayout;
   title: string;
@@ -35,7 +41,12 @@ export type TPitchInput = {
   slide_count?: number;
   demo?: { url: string; objective: string; seconds: number; after_slide_id?: string };
 };
-export type TPitchMetadata = TPitchInput & { estimated_seconds: number; rationale: string };
+export type TDeckPlanInput = TPitchInput | { slide_count: number };
+export type TPitchMetadata = TPitchInput & {
+  estimated_seconds: number;
+  rationale: string;
+  readiness?: TPresentationReadiness;
+};
 
 export type TDeck = {
   pitch?: TPitchMetadata;
@@ -46,7 +57,16 @@ export type TDeck = {
   slides: TSlide[];
   sources?: { id: string; origin: "host" | "material" | "public"; location: string; url?: string }[];
   grounding_mode?: "verified" | "source_extracts";
+  render_review?: { rounds: number; status: "passed" };
 };
+
+export type TDeckLayoutIssue = {
+  slide_id: string;
+  issue: "overflow" | "collision" | "unreadable_text" | "visual_hierarchy" | "chart_legibility";
+  viewport?: string;
+  note?: string;
+};
+export type TDeckLayoutRepair = { deck: TDeck; issues: TDeckLayoutIssue[] };
 
 export type TSlideChanges = Partial<Pick<TSlide, "layout" | "title" | "highlights" | "narration" | "template">>;
 

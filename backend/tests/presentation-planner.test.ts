@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { createOpenAI } from "@ai-sdk/openai";
 import { estimate_pitch_seconds, prepare_pitch } from "../src/services/pitch";
-import { presentation_plan_provider, presentation_plan_review } from "../src/services/presentation-planner";
+import { presentation_plan_provider, presentation_plan_review, template_supported } from "../src/services/presentation-planner";
+import type { TPlanPresentation } from "../src/services/presentation-planner";
 import { research_provider } from "../src/services/research-provider";
 import { pitch_variant_key } from "../src/repositories/deck";
 import { SessionStore } from "../src/repositories/session";
@@ -14,6 +15,7 @@ const leadership = "Jordan led the onboarding team in 2025.";
 const support = (evidence_id: string, excerpt: string) => [{ evidence_id, excerpt }];
 const spoken = (text: string, ...evidence_ids: string[]) => ({ text, evidence_ids });
 const verified = async () => true;
+const ready = { status: "ready", reason: "The notes establish results and responsibilities.", gaps: [] };
 const config: TModelCandidate = { provider: "openai", model: "fake", max_output_tokens: 1024, tool_providers: [] };
 const saved: TResearchBundle = {
   brief_id: "brief", research_id: "research", markdown: "Saved report", gaps: [],
@@ -55,7 +57,7 @@ test("production planner sends structured candidate text and a second call verif
       ({ id: unit.id, decision: "supported", reason: null })) };
     if (fields.beats) {
       const template = fields.beats.items.properties.template;
-      expect(template.anyOf).toHaveLength(9);
+      expect(template.anyOf).toHaveLength(10);
       expect(template.oneOf).toBeUndefined();
       expect(input).toContain(results.replaceAll("\n", "\\n"));
     } else {
@@ -170,7 +172,7 @@ test("a rejected introduction cannot discard the consecutive verified beats", as
     ["slide-2", "Documented leadership", "headline"], ["slide-3", "Pilot participation", "takeaway"],
   ]);
   expect(deck.slides[0].sentences?.[0].sentence_id).toBe("beat-2-sentence-1");
-  expect(deck.pitch?.rationale).toContain("consecutive slides with checked content");
+  expect(deck.pitch?.rationale).toContain("slides with checked content");
   expect(JSON.stringify(deck)).not.toContain("won an award");
 });
 
@@ -202,7 +204,7 @@ test("planner falls back to the saved talk track and enforces time even with a r
   const deck = await prepare_pitch(saved, { audience: "", duration_minutes: 1, slide_count: 20 }, unavailable);
   expect(deck.pitch?.audience).toBe("New team");
   expect(deck.slides).toHaveLength(4);
-  expect(deck.pitch?.rationale).toContain("fewer supported beats");
+  expect(deck.pitch?.rationale).toContain("4 of 20 requested slides");
   expect(deck.pitch?.estimated_seconds).toBeLessThanOrEqual(60);
   await expect(prepare_pitch(saved, { audience: "", duration_minutes: 1, slide_count: 1,
     demo: { url: "https://portfolio.example/", objective: "Show the pilot", seconds: 60 } }, unavailable)).rejects.toThrow("No approved narration fits");
@@ -210,7 +212,7 @@ test("planner falls back to the saved talk track and enforces time even with a r
 
 test("Module 2 plans narration from verified context when no talk track has been saved", async () => {
   const deck = await prepare_pitch({ ...saved, pitch_script: undefined }, { audience: "", duration_minutes: 1 }, async context => {
-    expect(context.talk_track.map(item => item.narration)).toEqual([results, leadership]);
+    expect(context.talk_track?.map(item => item.narration)).toEqual([results, leadership]);
     return { rationale: "Lead with the documented project results.", beats: [
       { title: "Pilot results", highlights: ["Alpha recorded 42 pilots."], evidence_ids: ["P1"],
         sentences: [spoken("Alpha recorded 42 pilots. Beta recorded 51 pilots.", "P1")],
@@ -244,4 +246,203 @@ test("preparing the same settings uses the updated planner without dropping a sa
   expect(current.deck_id).not.toBe(previous.deck_id);
   expect(store.decks.get("owner", previous.deck_id)).toEqual(previous);
   expect(store.decks.for_research("owner", saved.research_id, key)?.deck_id).toBe(current.deck_id);
+});
+
+test("render-reviewed count variants leave earlier count-only decks and legacy cache keys accessible", async () => {
+  const store = new SessionStore(":memory:");
+  const pitch = { slide_count: 2 };
+  const draft = await prepare_pitch(saved, pitch, async () => undefined);
+  const previous = store.decks.create("owner", { ...draft, pitch: { ...draft.pitch!, readiness: undefined } },
+    JSON.stringify([4, "context_slides", 2]));
+  const key = pitch_variant_key(pitch);
+  expect(store.decks.for_research("owner", saved.research_id, key)).toBeUndefined();
+  const reviewed = store.decks.create("owner", {
+    ...draft, deck_id: crypto.randomUUID(), render_review: { status: "passed", rounds: 1 },
+  }, key);
+  expect(store.decks.get("owner", previous.deck_id)?.slides).toEqual(previous.slides);
+  expect(store.decks.variants("owner", saved.research_id).map(item => item.deck_id)).toEqual([reviewed.deck_id, previous.deck_id]);
+  expect(store.decks.for_research("owner", saved.research_id, key)?.render_review).toEqual({ status: "passed", rounds: 1 });
+  expect(pitch_variant_key()).toBe("");
+  expect(pitch_variant_key({ audience: "New team", duration_minutes: 1 })).toBe(JSON.stringify([3, "new team", 1]));
+});
+
+test("count-only planning uses saved findings and exact archived chart values", async () => {
+  const graph = { name: "Pilot counts", description: "A comparison of pilot counts in 2025.", type: "bar" as const, data: [
+    { label: "Alpha", unit: "pilots", period: "2025", value: 42, evidence_id: "P1" },
+    { label: "Beta", unit: "pilots", period: "2025", value: 51, evidence_id: "P1" },
+  ] };
+  const project = { ...saved, verified_graphs: [{ graph_id: "graph-1", graph, evidence_ids: ["P1"] }] };
+  const historical = { ...saved, context_markdown: `## Context\n\n<graph>${JSON.stringify(graph)}</graph>\n\nGraph sources [^P1]` };
+  const deck = await prepare_pitch(project, { slide_count: 2 }, async context => {
+    expect(context.slide_count).toBe(2);
+    expect(context.audience).toBeUndefined();
+    expect(context.speaking_seconds).toBeUndefined();
+    expect(context.brief).toBeUndefined();
+    expect(context.talk_track).toBeUndefined();
+    expect(context.context_assessment).toMatchObject({ title: saved.findings.title, objective: "Know who led the pilots" });
+    expect(context.available_graphs).toEqual([{ graph_id: "graph-1", graph, evidence_ids: ["P1"] }]);
+    return { readiness: ready, rationale: "Open with the counts, then introduce the lead.", beats: [
+      { title: "Pilot counts", highlights: [], evidence_ids: ["P1"], sentences: [spoken("Both teams ran more than forty pilots.", "P1")],
+        template: { type: "saved_graph", graph_id: "graph-1" } },
+      { title: "Leadership", highlights: [leadership], evidence_ids: ["P2"], sentences: [spoken(leadership, "P2")],
+        template: { type: "bullet_slide" } },
+    ] };
+  }, verified);
+  expect(deck.slides).toHaveLength(2);
+  expect(deck.slides[0]).toMatchObject({ highlights: [], chart_period: "2025", narration: "Both teams ran more than forty pilots.",
+    template: { type: "bar_chart", unit: "pilots", points: [{ label: "Alpha", value: 42 }, { label: "Beta", value: 51 }] } });
+  expect(deck.pitch?.audience).toBe("");
+  expect(deck.pitch?.readiness).toEqual({ ...ready, basis: "model" });
+  expect(deck.pitch?.estimated_seconds).toBe(estimate_pitch_seconds(deck.slides));
+  const fallback = await prepare_pitch(historical, { slide_count: 2 }, async () => undefined);
+  expect(fallback.pitch?.readiness?.basis).toBe("verified_findings");
+  expect(fallback.slides[0]).toMatchObject({ chart_period: "2025",
+    template: { type: "bar_chart", unit: "pilots", points: [{ label: "Alpha", value: 42 }, { label: "Beta", value: 51 }] } });
+  expect(fallback.slides[0].highlights).toHaveLength(2);
+  const reviewed_text = await prepare_pitch(project, { slide_count: 2 }, async () => ({ readiness: ready, rationale: "Introduce the lead and then summarize pilots.",
+    beats: [
+      { title: "Leadership", highlights: [leadership], evidence_ids: ["P2"], sentences: [spoken(leadership, "P2")],
+        template: { type: "title_card" } },
+      { title: "Pilot work", highlights: ["Alpha recorded 42 pilots."], evidence_ids: ["P1"],
+        sentences: [spoken("Alpha recorded 42 pilots.", "P1")], template: { type: "bullet_slide" } },
+    ],
+  }), verified);
+  expect(reviewed_text.slides[0].template).toEqual({ type: "title_card" });
+  expect(reviewed_text.slides[1]).toMatchObject({ highlights: ["Alpha recorded 42 pilots."], narration: "Alpha recorded 42 pilots.",
+    chart_period: "2025", template: { type: "bar_chart", unit: "pilots", points: [{ label: "Alpha", value: 42 }, { label: "Beta", value: 51 }] } });
+  const legacy = await prepare_pitch(project, { audience: "Team", duration_minutes: 1, slide_count: 2 }, async () => undefined);
+  expect(legacy.slides.every(slide => slide.template?.type !== "bar_chart")).toBe(true);
+  expect(legacy.pitch?.estimated_seconds).toBeLessThanOrEqual(60);
+});
+
+test("count-only fallback omits procedural content from saved findings, sources, and talk track", async () => {
+  const instructions = "The presentation should avoid unsupported assertions. The host asked for a short pitch.";
+  const source = { ...saved.evidence[1], passage: instructions + "\n" + leadership };
+  const project = { ...saved, pitch_script: [{ purpose: "point" as const, prose: instructions, support: support("P2", instructions) }],
+    findings: { title: saved.findings.title, sections: [
+      { heading: "Guardrails", paragraphs: [{ prose: instructions, support: support("P2", instructions) }] },
+      ...saved.findings.sections,
+    ] },
+    evidence: [saved.evidence[0], source],
+  };
+  const deck = await prepare_pitch(project, { slide_count: 3 }, async context => {
+    expect(JSON.stringify(context)).not.toContain(instructions);
+    return { readiness: ready, rationale: "Describe what the teams presented.", beats: [
+      { title: "Pilot results", highlights: [results], evidence_ids: ["P1"], sentences: [spoken(instructions, "P2")],
+        template: { type: "bullet_slide" } },
+    ] };
+  }, async () => { throw new Error("Procedural narration must be rejected before review"); });
+  expect(JSON.stringify(deck)).not.toContain(instructions);
+  expect(deck.slides.map(slide => slide.narration)).toEqual([results, leadership]);
+  expect(deck.pitch?.rationale).toContain("2 of 3 requested slides");
+});
+
+const three_distinct_beats = [
+  { title: "Alpha's pilots", highlights: ["Alpha recorded 42 pilots."], evidence_ids: ["P1"], sentences: [spoken("Alpha recorded 42 pilots.", "P1")] },
+  { title: "Beta's pilots", highlights: ["Beta recorded 51 pilots."], evidence_ids: ["P1"], sentences: [spoken("Beta recorded 51 pilots.", "P1")] },
+  { title: "Onboarding leadership", highlights: [leadership], evidence_ids: ["P2"], sentences: [spoken(leadership, "P2")] },
+].map(beat => ({ ...beat, template: { type: "bullet_slide" } }));
+
+test("repair targets the requested count after partial verification even when there are fewer research paragraphs", async () => {
+  let attempts = 0;
+  const deck = await prepare_pitch(saved, { slide_count: 3 }, async context => {
+    attempts++;
+    if (attempts === 2) {
+      expect(context.findings).toHaveLength(2);
+      expect(context.review_feedback?.join(" ")).toContain("retained 1 of 3 requested slides");
+      expect(context.review_feedback?.join(" ")).toContain("reach 3 distinct slides");
+      expect(context.review_feedback?.join(" ")).toContain("Use the stated facts");
+    }
+    return { readiness: attempts === 1 ? { ...ready, status: "limited" } : ready,
+      rationale: "Use the pilot results and leadership notes.", beats: three_distinct_beats };
+  }, async () => attempts === 1 ? { verified_slide_ids: ["slide-2"], feedback: ["Use the stated facts."] } : true);
+  expect(attempts).toBe(2);
+  expect(deck.slides.map(slide => slide.title)).toEqual(three_distinct_beats.map(beat => beat.title));
+  expect(deck.pitch?.readiness?.status).toBe("ready");
+});
+
+test("an unrepaired single slide does not hide the wider verified research coverage", async () => {
+  let attempts = 0;
+  const deck = await prepare_pitch(saved, { slide_count: 3 }, async () => {
+    attempts++;
+    return { readiness: { ...ready, status: "limited" }, rationale: "Pilot and team research.",
+      beats: three_distinct_beats };
+  }, async () => ({ verified_slide_ids: ["slide-2"], feedback: ["Use the stated facts."] }));
+  expect(attempts).toBe(2);
+  expect(deck.slides.map(slide => slide.title)).toEqual(["Pilot results", "Leadership"]);
+  expect(deck.pitch?.readiness).toMatchObject({ status: "limited", basis: "verified_findings",
+    reason: "Some rewritten slides did not pass fact-checking. This draft uses the saved verified findings." });
+});
+
+test("whole saved context and research gaps inform readiness before a slide can be built", async () => {
+  const detail = "The source reports the onboarding team reviewed sixty customer applications. ".repeat(8) + "No approval was recorded.";
+  const project = { ...saved, gaps: ["No sponsor has confirmed the requested approval."],
+    findings: { ...saved.findings, sections: [...saved.findings.sections, {
+      heading: "Sponsor approval", paragraphs: [{ prose: detail, support: support("P3", detail) }],
+    }] },
+    evidence: [...saved.evidence, { id: "P3", origin: "host" as const, location: "Host note", passage: detail }],
+  };
+  let reviews = 0;
+  await expect(prepare_pitch(project, { slide_count: 3 }, async context => {
+    expect(context.findings.at(-1)?.text).toBe(detail);
+    expect(context.context_assessment?.known_gaps).toEqual(project.gaps);
+    return { rationale: "Wait for a sponsor decision.", beats: [], readiness: {
+      status: "insufficient", reason: "The current notes do not establish the requested decision.",
+      gaps: ["Add the sponsor decision and its date."],
+    } };
+  }, async () => { reviews++; return true; })).rejects.toThrow("Add the sponsor decision and its date.");
+  expect(reviews).toBe(0);
+});
+
+test("layout repair sends the prior visible slides and replaces them only with a fully verified candidate", async () => {
+  const pitch = { slide_count: 2 };
+  const deck = await prepare_pitch(saved, pitch, async () => undefined);
+  const layout_repair = { deck, issues: [{ slide_id: deck.slides[0].slide_id, issue: "overflow" as const,
+    viewport: "390×844", note: "First highlight runs outside the slide." }] };
+  const proposal: TPlanPresentation = async context => {
+    expect(context.layout_repair?.issues).toEqual(layout_repair.issues);
+    expect(context.layout_repair?.slides).toHaveLength(2);
+    expect(context.layout_repair?.slides[0]).not.toHaveProperty("narration");
+    return { readiness: ready, rationale: "Shorten the slide text and preserve both topics.", beats: [
+      { title: "Pilot results", highlights: ["42 Alpha pilots", "51 Beta pilots"], evidence_ids: ["P1"],
+        sentences: [spoken("Alpha recorded 42 pilots. Beta recorded 51 pilots.", "P1")], template: { type: "bullet_slide" } },
+      { title: "Leadership", highlights: [leadership], evidence_ids: ["P2"],
+        sentences: [spoken(leadership, "P2")], template: { type: "bullet_slide" } },
+    ] };
+  };
+  const revised = await prepare_pitch(saved, pitch, proposal, verified, layout_repair);
+  expect(revised.slides.map(slide => slide.slide_id)).toEqual(deck.slides.map(slide => slide.slide_id));
+  expect(revised.slides[0].highlights).toEqual(["42 Alpha pilots", "51 Beta pilots"]);
+  await expect(prepare_pitch(saved, pitch, proposal, async () => false, layout_repair)).rejects.toThrow("Keep the previous draft.");
+});
+
+test("a slide with a computed figure is dropped while the rest of the model plan is kept", async () => {
+  const deck = await prepare_pitch(saved, { slide_count: 3 }, async () => ({ readiness: ready, rationale: "Results, then the lead.", beats: [
+    { title: "Alpha recorded 42 pilots", highlights: ["Beta recorded 51 pilots."], evidence_ids: ["P1"],
+      sentences: [spoken("Alpha recorded 42 pilots, and Beta recorded 51.", "P1")], template: { type: "bullet_slide" } },
+    { title: "Beta ran 9 more pilots than Alpha", highlights: ["A gap of 9 pilots."], evidence_ids: ["P1"],
+      sentences: [spoken("That is 9 more pilots.", "P1")], template: { type: "bullet_slide" } },
+    { title: "Jordan led onboarding", highlights: [leadership], evidence_ids: ["P2"],
+      sentences: [spoken(leadership, "P2")], template: { type: "bullet_slide" } },
+  ] }), verified);
+  expect(deck.slides.map(slide => slide.title)).toEqual(["Alpha recorded 42 pilots", "Jordan led onboarding"]);
+  expect(deck.slides.map(slide => slide.layout)).toEqual(["headline", "takeaway"]);
+  expect(deck.pitch?.readiness?.basis).toBe("model");
+});
+
+test("charts are supported by real multi-figure sentences and table rows, and a swapped label is refused", () => {
+  const record = (passage: string) => [{ id: "P9", origin: "public" as const, location: "Report", passage }];
+  const sentence = record("Crude oil imports rose from 234.3 MMT in 2023-24 to 243.2 MMT in 2024-25, the ministry reported.");
+  const bars = (first: number, second: number) => ({ type: "bar_chart" as const, unit: "MMT",
+    points: [{ label: "2023-24", value: first }, { label: "2024-25", value: second }] });
+  expect(template_supported(bars(234.3, 243.2), sentence)).toBe(true);
+  expect(template_supported(bars(243.2, 234.3), sentence)).toBe(false);
+  expect(template_supported({ ...bars(234.3, 243.2), unit: "USD million" }, sentence)).toBe(false);
+  expect(template_supported(bars(234.3, 243.2),
+    record("Crude oil imports are forecast at 234.3 MMT in 2023-24 and about 243.2 MMT in 2024-25."))).toBe(false);
+  const table = record("Year | Crude imports (MMT) | Exports (MMT)\nFY 2022-23 | 232.7 | 0.5\nFY 2023-24 | 234.3 | 0.6");
+  expect(template_supported({ type: "line_chart", unit: "MMT",
+    points: [{ label: "FY 2022-23", value: 232.7 }, { label: "FY 2023-24", value: 234.3 }] }, table)).toBe(true);
+  expect(template_supported({ type: "metric_grid", metrics: [{ label: "Crude imports FY 2023-24", value: "234.3 MMT" }] }, table)).toBe(true);
+  expect(template_supported({ type: "metric_grid", metrics: [{ label: "Crude imports FY 2023-24", value: "250 MMT" }] }, table)).toBe(false);
 });

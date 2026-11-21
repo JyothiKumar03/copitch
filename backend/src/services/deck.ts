@@ -25,8 +25,8 @@ const chart_schema = z.object({ period: z.string().nullable(), rows: z.array(z.o
   label: z.string(), numerator: z.number().int().nonnegative(), denominator: z.number().int().nonnegative(), evidence_id: z.string(),
 })).min(1).max(4) });
 const chart_template_fields = {
-  unit: z.string().trim().max(24).refine(is_plain_text, "Use plain text in slide fields"),
-  points: z.array(z.strictObject({ label: plain_text(72), value: z.number().finite() })).min(2).max(8),
+  unit: z.string().trim().max(32).refine(is_plain_text, "Use plain text in slide fields"),
+  points: z.array(z.strictObject({ label: plain_text(100), value: z.number().finite() })).min(2).max(12),
 };
 // Use a regular union so the provider JSON schema contains the supported anyOf keyword.
 export const slide_template_schema = z.union([
@@ -48,7 +48,8 @@ export const live_edit_input = edit_input.extend({
     .refine(value => Object.keys(value).length > 0, "Supply an edit"),
 });
 const slide_schema = z.strictObject({
-  ...fields, chart: chart_schema.optional(), slide_id: z.string().min(1), evidence_ids: z.array(z.string().min(1)),
+  ...fields, highlights: fields.highlights.min(0), chart: chart_schema.optional(), chart_period: plain_text(64).optional(),
+  slide_id: z.string().min(1), evidence_ids: z.array(z.string().min(1)),
   template: slide_template_schema.optional(), beat_id: z.string().min(1).optional(), estimated_seconds: z.number().int().positive().optional(),
   sentences: z.array(z.strictObject({ sentence_id: z.string().min(1), text: plain_text(1800), evidence_ids: z.array(z.string().min(1)) })).optional(),
 });
@@ -122,7 +123,10 @@ export const compile_deck = (bundle: TResearchBundle): TDeck => {
 
 export const propose_slide = (before: TSlide, changes: TSlideChanges): TSlide => {
   const merged = { ...before, ...changes };
-  if (changes.template) delete merged.chart;
+  if (changes.template && JSON.stringify(changes.template) !== JSON.stringify(before.template)) {
+    delete merged.chart;
+    delete merged.chart_period;
+  }
   if (changes.narration !== undefined && changes.narration !== before.narration) {
     delete merged.sentences;
     if (before.sentences) {

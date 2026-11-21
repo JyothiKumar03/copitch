@@ -1,7 +1,8 @@
 import { createOpenAI } from "@ai-sdk/openai";
 import { generateText, Output } from "ai";
 import { z } from "zod";
-import type { TDeck, TPitchInput, TSlide } from "../types/deck";
+import { AppError } from "../errors/app-error";
+import type { TDeck, TDeckLayoutRepair, TDeckPlanInput, TPitchInput, TSlide } from "../types/deck";
 import type { TResearchBundle } from "../types/research";
 import { compile_deck, slide_speaking_seconds } from "./deck";
 import { configured_models_for } from "./model-config";
@@ -48,9 +49,10 @@ const choose_story = async (deck: TDeck, bundle: TResearchBundle, pitch: TPitchI
   }
 };
 
-export const prepare_pitch = async (bundle: TResearchBundle, pitch: TPitchInput, planner: TPlanPresentation = request_presentation_plan,
-  verify: TVerifyPresentationPlan = verify_presentation_plan): Promise<TDeck> => {
-  if (bundle.grounding?.mode === "verified" && bundle.findings?.sections.length) return plan_verified_pitch(bundle, pitch, planner, verify);
+export const prepare_pitch = async (bundle: TResearchBundle, pitch: TDeckPlanInput, planner: TPlanPresentation = request_presentation_plan,
+  verify: TVerifyPresentationPlan = verify_presentation_plan, layout_repair?: TDeckLayoutRepair): Promise<TDeck> => {
+  if (bundle.grounding?.mode === "verified" && bundle.findings?.sections.length) return plan_verified_pitch(bundle, pitch, planner, verify, layout_repair);
+  if (!("duration_minutes" in pitch)) throw new AppError(422, "Run research again to save verified context for these slides.");
   const deck = compile_deck(bundle);
   const story = await choose_story(deck, bundle, pitch);
   const audience = pitch.audience.trim() || story?.audience || "Audience in the confirmed brief";

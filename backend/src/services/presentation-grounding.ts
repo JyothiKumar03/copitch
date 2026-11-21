@@ -1,5 +1,5 @@
 import type { TAttempt } from "../types/ai";
-import type { TEvidence, TGroundingUnit } from "../types/research";
+import type { TEvidence, TGroundingReview, TGroundingUnit } from "../types/research";
 import { quotes } from "./excerpt";
 import { configured_models_for } from "./model-config";
 import { research_provider } from "./research-provider";
@@ -23,7 +23,7 @@ export const verify_presentation_claims = async (claims: TPresentationClaim[], e
   const [model] = configured_models_for("live");
   if (!model || !process.env.OPENAI_API_KEY || units.length > 20) return false;
   const ids = new Set(units.flatMap(unit => unit.support.map(ref => ref.evidence_id)));
-  const review = { units, evidence: evidence.filter(record => ids.has(record.id)), gaps: [] };
+  const review: TGroundingReview = { units, evidence: evidence.filter(record => ids.has(record.id)), gaps: [], purpose: "live_presentation" };
   if (Buffer.byteLength(JSON.stringify(review), "utf8") > 48_000) return false;
   try {
     const result = await research_provider(model).verify!(review, AbortSignal.any([signal, AbortSignal.timeout(12_000)]), on_attempt);
