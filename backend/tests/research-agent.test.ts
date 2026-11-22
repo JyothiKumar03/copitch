@@ -194,6 +194,32 @@ test("slide coverage can search for a specific gap when the approved plan lists 
   expect(state.checklist[0]).toMatchObject({ status: "covered", answer: "2025", evidence_id: "P1" });
 });
 
+test("simultaneous coverage lookups share a result and retain citations", async () => {
+  const query = "official growth project opening year";
+  const source = "https://history.example/project";
+  const search = { searches: [{ item_id: "C1", query }] };
+  const read = { source_ids: ["S3"], item_id: "C1" };
+  const { step } = fixture_model_step(call(plan([opened, "number"])),
+    call(["web_search", search], ["web_search", search]),
+    call(["read_url", read], ["read_url", read], ["read_url", { source_ids: ["S1"] }]),
+    call(["record_answers", { answers: [{ item_id: "C1", evidence_id: "P1", excerpt: "opened in 2025", answer: "2025" }] }]), done());
+  const requests: string[] = [];
+  const state = await collect_research(test_input({ model_step: step,
+    presentation_coverage: { slide_count: 3, gaps: [opened], existing_findings: [participants] },
+    lookup: async ({ kind, target }) => {
+      requests.push(target);
+      await Bun.sleep(10);
+      if (kind === "search") return { hits: [], links: [{ url: source, title: "Public history" }] };
+      return { hits: target === source ? [{ url: source, title: "Public history", passage: "The project opened in 2025 in Pune." }] : [] };
+    },
+  }));
+  expect(requests.sort()).toEqual([brief.urls[0], source, query].sort());
+  expect(state.lookup_attempts).toBe(3);
+  expect(state.targets.find(target => target.value === source)).toMatchObject({ status: "read", evidence_ids: ["P1"] });
+  expect(state.read_pages).toBe(1);
+  expect(state.checklist[0]).toMatchObject({ status: "covered", evidence_id: "P1" });
+});
+
 test("worker interruption keeps the checklist and evidence for restart", async () => {
   let previous: TResearchAgentState | undefined;
   const initial = fixture_model_step(call(plan([participants, "number"]), ["read_url", { source_ids: ["S1"] }]));
@@ -265,4 +291,22 @@ test("host files keep focused scope unless the host also approved a public searc
   const { model, step } = fixture_model_step(call(plan([participants, "number"])), done(), done(), done(), done());
   await collect_research(test_input({ brief: { ...brief, urls: [] }, evidence: selected, model_step: step }));
   expect((model.doStreamCalls[0].tools ?? []).map(tool => tool.name).sort()).toEqual(["mark_unavailable", "plan_coverage", "read_url", "record_answers", "web_search"]);
+});
+
+test("answers cite attached material by its full evidence ID", async () => {
+  // Uploaded files and captured websites use IDs such as F21981747700300200013 (21 characters).
+  const material = { id: "F21981747700300200013", origin: "material" as const, location: "jk-ai.in walkthrough, page 13",
+    passage: "Home: Software Engineer / AI Engineer. 15 projects: Claude Code skills, agents and developer tools." };
+  const { step } = fixture_model_step(
+    call(plan(["How many projects has the host shipped?", "number"])),
+    call(["read_url", { source_ids: ["S1"], item_id: "C1" }]),
+    call(["record_answers", { answers: [{ item_id: "C1", evidence_id: material.id, excerpt: "15 projects: Claude Code skills",
+      answer: "The host has shipped 15 projects.", heading: "15 projects shipped" }] }]),
+    done("F21981747700300200013 states the project count."),
+    done("F21981747700300200013 states the project count."),
+    done("F21981747700300200013 states the project count."),
+  );
+  const state = await collect_research(test_input({ brief: { ...brief, urls: ["https://www.jk-ai.in/"], public_queries: [] }, evidence: [material], model_step: step,
+    lookup: async ({ target }) => ({ url: target, hits: [{ url: target, title: "Home", passage: "AI engineer for agents." }] }) }));
+  expect(state.checklist.map(item => [item.id, item.status, item.answer])).toEqual([["C1", "covered", "The host has shipped 15 projects."]]);
 });

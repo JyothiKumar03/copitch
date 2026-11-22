@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { SessionStore } from "../src/repositories/session";
 import { read_host_page, site_url } from "../src/services/host-pages";
-import { build_research } from "../src/services/research";
+import { build_research, research_report } from "../src/services/research";
 import { context_markdown } from "../src/services/context-markdown";
 import { ResearchWorker } from "../src/workers/research";
 import type { TModelStep } from "../src/types/ai";
@@ -188,6 +188,48 @@ test("a verified context is available without a saved script", async () => {
   await worker.tick(job.job_id);
   expect(db.research_jobs.get("host", job.job_id)?.status).toBe("completed");
   expect(db.research_by_brief("host", scope.brief_id)?.findings.sections[0].paragraphs[0].prose).toContain("Twelve teams enrolled.");
+});
+
+test("presentation coaching is omitted from the brief without dropping a sourced consequence", async () => {
+  const fact = "Twelve teams enrolled.";
+  const consequence = "The rollout added two support shifts.";
+  const scope: TResearchBrief = { ...brief(), source_policy: "files_only", public_queries: [], materials: `${fact} ${consequence}` };
+  const configured = provider(async () => { throw new Error("Files only"); });
+  configured.draft = async () => ({ title: "Pilot findings", gaps: [], sections: [
+    { heading: "Implications for a short live intro", paragraphs: [{ prose: fact, support: [{ evidence_id: "M1", excerpt: fact }] }] },
+    { heading: "Implications for support staffing", paragraphs: [
+      { prose: "The presenter should introduce the team using this result.", support: [{ evidence_id: "M1", excerpt: fact }] },
+      { prose: consequence, support: [{ evidence_id: "M1", excerpt: consequence }] },
+    ] },
+  ] });
+  const report = await build_research(scope, configured, AbortSignal.timeout(2_000), () => {});
+  expect(report.findings.sections).toEqual([{ heading: "Implications for support staffing", paragraphs: [
+    { prose: consequence, support: [{ evidence_id: "M1", excerpt: consequence }] },
+  ] }]);
+  expect(research_report(report)).toContain(consequence);
+});
+
+test("a rejected writer gap cannot contradict a verified research comparison", async () => {
+  const rates = "Overall conversion was 10%, including enterprise. Enterprise conversion was 20%.";
+  const bad = "Which onboarding step explains why enterprise conversion was lower?";
+  const needed = "What is the step-level breakdown of onboarding abandonment?";
+  const unreviewed = "Which other metric is missing?";
+  const scope: TResearchBrief = { ...brief(), source_policy: "files_only", public_queries: [], materials: rates };
+  const configured = provider(async () => { throw new Error("Files only"); });
+  configured.draft = async () => ({ title: "Conversion rates", gaps: [bad, needed, unreviewed], sections: [
+    { heading: "Enterprise conversion", paragraphs: [{ prose: rates, support: [{ evidence_id: "M1", excerpt: rates }] }] },
+  ] });
+  let received = false;
+  configured.verify = async ({ units, evidence }) => {
+    received ||= units.some(unit => unit.kind === "gap" && unit.text === bad) && evidence.some(row => row.passage === rates);
+    return units.filter(unit => unit.text !== unreviewed).map(unit => ({ id: unit.id,
+      decision: unit.text === bad ? "unsupported" : "supported" }));
+  };
+  const report = await build_research(scope, configured, AbortSignal.timeout(2_000), () => {});
+  expect(received).toBe(true);
+  expect(report.gaps).toEqual([needed]);
+  expect(research_report(report)).toContain(rates);
+  expect(research_report(report)).not.toContain(bad);
 });
 
 test("the context worker saves only canonical source-checked graphs with the research prose", async () => {
