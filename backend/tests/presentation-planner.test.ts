@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { createOpenAI } from "@ai-sdk/openai";
 import { estimate_pitch_seconds, prepare_pitch } from "../src/services/pitch";
 import { slide_speaking_seconds } from "../src/services/deck";
@@ -86,6 +86,113 @@ test("production planner sends structured candidate text and a second call verif
   expect(calls).toBe(2);
   expect(deck.slides[0].template).toEqual(approved.beats[0].template);
   expect(deck.pitch?.rationale).toBe(approved.rationale);
+});
+
+const approved_repair_plan = { readiness: ready, rationale: "Identify the onboarding lead.", objective_findings: [], beats: [{
+  title: "Onboarding lead", highlights: [leadership], evidence_ids: ["P2"],
+  sentences: [spoken(leadership, "P2")], template: { type: "bullet_slide" },
+}] };
+const private_repair_sentinel = "private-model-output-that-must-not-be-replayed";
+const invalid_repair_plan = JSON.stringify({ ...approved_repair_plan, rationale: private_repair_sentinel,
+  beats: [{ ...approved_repair_plan.beats[0], sentences: [] }] });
+
+const repair_response = (text: string, truncated = false) => Response.json({ id: "fixture", model: "fake", created_at: 1,
+  status: truncated ? "incomplete" : "completed",
+  ...(truncated && { incomplete_details: { reason: "max_output_tokens" } }),
+  output: [{ type: "message", role: "assistant", id: "reply", status: truncated ? "incomplete" : "completed",
+    content: [{ type: "output_text", text, annotations: [] }] }],
+  usage: { input_tokens: 300, output_tokens: 90 },
+});
+
+test("structured planning repairs schema and truncated output on the fourth attempt without replaying private model text", async () => {
+  let planning_calls = 0;
+  let review_calls = 0;
+  let original_schema: unknown;
+  let original_context: unknown;
+  const openai = createOpenAI({ apiKey: "fixture", fetch: async (_url, request) => {
+    const body = request!.body as string;
+    expect(body).not.toContain(private_repair_sentinel);
+    const wire = JSON.parse(body);
+    const input = JSON.parse(wire.input.find((turn: { role: string }) => turn.role === "user").content[0].text);
+    const fields = wire.text.format.schema.properties;
+    if (!fields.beats) {
+      review_calls++;
+      expect(input.units.some((unit: { text: string }) => unit.text === leadership)).toBe(true);
+      return repair_response(JSON.stringify({ verdicts: input.units.map((unit: { id: string }) =>
+        ({ id: unit.id, decision: "supported", reason: null })), ...(fields.omissions && { omissions: [] }) }));
+    }
+
+    planning_calls++;
+    expect(wire.store).toBe(false);
+    expect(wire.text.format.type).toBe("json_schema");
+    expect(wire.max_output_tokens).toBe(config.max_output_tokens);
+    const { review_feedback, ...context } = input;
+    if (planning_calls === 1) {
+      original_schema = wire.text.format.schema;
+      original_context = context;
+    } else {
+      expect(wire.text.format.schema).toEqual(original_schema);
+      expect(context).toEqual(original_context);
+    }
+    expect(input.slide_count).toBe(1);
+    const feedback = review_feedback?.join("\n") ?? "";
+    if (planning_calls === 2 || planning_calls === 4) expect(feedback).toContain("beats.0.sentences");
+    if (planning_calls === 3) {
+      expect(feedback).toMatch(/output limit|truncat/iu);
+      expect(feedback).toMatch(/compact|short|brief/iu);
+    }
+    if (planning_calls === 4) return repair_response(JSON.stringify(approved_repair_plan));
+    if (planning_calls === 2) return repair_response(`{"rationale":"${private_repair_sentinel}","beats":[`, true);
+    return repair_response(invalid_repair_plan);
+  } });
+
+  const deck = await prepare_pitch(saved, { slide_count: 1 }, presentation_plan_provider(config, openai),
+    presentation_plan_review(research_provider(config, openai, [])));
+  expect(planning_calls).toBe(4);
+  expect(review_calls).toBe(1);
+  expect(deck.slides).toHaveLength(1);
+  expect(deck.slides[0]).toMatchObject({ title: "Onboarding lead", narration: leadership, evidence_ids: ["P2"] });
+});
+
+test("four malformed structured plans stop before another planning call or fact check", async () => {
+  let planning_calls = 0;
+  let review_calls = 0;
+  const openai = createOpenAI({ apiKey: "fixture", fetch: async (_url, request) => {
+    planning_calls++;
+    expect(request!.body).not.toContain(private_repair_sentinel);
+    return repair_response(invalid_repair_plan);
+  } });
+  const error_log = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    await expect(prepare_pitch(saved, { slide_count: 1 }, presentation_plan_provider(config, openai), async () => {
+      review_calls++;
+      return true;
+    })).rejects.toMatchObject({ status: 503 });
+    expect(error_log.mock.calls.flat().join("\n")).not.toContain(private_repair_sentinel);
+  } finally {
+    error_log.mockRestore();
+  }
+  expect(planning_calls).toBe(4);
+  expect(review_calls).toBe(0);
+});
+
+test("initial planning and verified-slide completion share one structured output repair budget", async () => {
+  const phases: string[] = [];
+  let review_calls = 0;
+  const openai = createOpenAI({ apiKey: "fixture", fetch: async (_url, request) => {
+    const wire = JSON.parse(request!.body as string);
+    const input = JSON.parse(wire.input.find((turn: { role: string }) => turn.role === "user").content[0].text);
+    phases.push(input.completion ? "completion" : "initial");
+    if (input.completion) expect(input.completion).toMatchObject({ missing: 1, retained: [{ slide_id: "slide-1" }] });
+    return repair_response(phases.length === 2 ? JSON.stringify(approved_repair_plan) : invalid_repair_plan);
+  } });
+
+  await expect(prepare_pitch(saved, { slide_count: 2 }, presentation_plan_provider(config, openai), async () => {
+    review_calls++;
+    return true;
+  })).rejects.toMatchObject({ status: 503, verified_slides: [{ title: "Onboarding lead" }] });
+  expect(phases).toEqual(["initial", "initial", "completion", "completion", "completion"]);
+  expect(review_calls).toBe(1);
 });
 
 test("presentation planner adapts distinct visuals and natural narration to each audience", async () => {

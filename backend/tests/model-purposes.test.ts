@@ -24,6 +24,12 @@ test("models default in code with prices, and an unpriced env entry takes its kn
   expect(configured_models_for("research", custom)[0].pricing).toBeUndefined();
 });
 
+test("the default planning model has an 8000 token cap while research and browsing retain 4096", () => {
+  expect(configured_models_for("planning", "[]")[0]?.max_output_tokens).toBe(8000);
+  expect(configured_models_for("research", "[]")[0]?.max_output_tokens).toBe(4096);
+  expect(configured_models_for("browse", "[]")[0]?.max_output_tokens).toBe(4096);
+});
+
 test("models default in code with prices, and an unpriced env entry takes its known price", () => {
   const browse = configured_models_for("browse", "");
   expect(browse[0]).toMatchObject({ model: "gpt-5.6-luna", pricing: { input: 0.20, cached_input: 0.02, output: 1.20 } });

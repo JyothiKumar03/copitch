@@ -2,7 +2,8 @@ import { metered_model } from "./mission-metering";
 import { is_non_omission } from "./slide-content";
 import { log_failure } from "../middleware/trace";
 import { createOpenAI } from "@ai-sdk/openai";
-import { generateText, Output } from "ai";
+import { generateText, JSONParseError, NoObjectGeneratedError, Output, TypeValidationError } from "ai";
+import type { FinishReason, LanguageModelUsage } from "ai";
 import { z } from "zod";
 import { AppError } from "../errors/app-error";
 import { DeckPreparationError } from "./deck-preparation-failure";
@@ -12,7 +13,7 @@ import type { TDeck, TDeckLayoutIssue, TDeckLayoutRepair, TDeckPlanInput, TDeckS
 import type { TEvidence, TGroundingCoverageBrief, TGroundingOmission, TResearchBundle, TResearchProvider } from "../types/research";
 import { deck_sources, slide_speaking_seconds, slide_template_schema } from "./deck";
 import { numeric_tokens, quotes } from "./excerpt";
-import { configured_models_for } from "./model-config";
+import { configured_models_for, MAX_SLIDE_PLAN_OUTPUT_TOKENS } from "./model-config";
 import { presentation_planner } from "./prompts";
 import { verify_draft } from "./research-grounding";
 import { research_provider } from "./research-provider";
@@ -117,6 +118,7 @@ type TPlanAttempt = {
   rationale?: string;
   assessment?: TAssessment;
   unavailable?: boolean;
+  output_rejected?: boolean;
   anchors?: Map<string, string | null>;
 };
 export type TVerifyPresentationPlan = (slides: TSlide[], evidence: TEvidence[], research_id: string, signal?: AbortSignal,
@@ -383,27 +385,73 @@ export const verify_presentation_plan: TVerifyPresentationPlan = async (slides, 
     : { verified_slide_ids: [], feedback: [], unavailable: true };
 };
 
+type TPlanSchemaIssue = { path: string; code: string; limit?: number; unit?: "characters" | "items" };
+const plan_schema_issues = (error: NoObjectGeneratedError): TPlanSchemaIssue[] => {
+  const failure = error.cause;
+  if (!TypeValidationError.isInstance(failure) || !(failure.cause instanceof z.ZodError)) return [];
+  // Paths come from the declared object and array schemas. Values, messages, and extra keys may contain draft content.
+  return failure.cause.issues.slice(0, 6).map(issue => {
+    const path = issue.path.every(part => typeof part === "number" || typeof part === "string" && /^[a-z][a-z0-9_]*$/u.test(part))
+      ? issue.path.join(".") || "response" : "response";
+    const limit = issue.code === "too_big" ? issue.maximum : issue.code === "too_small" ? issue.minimum : undefined;
+    const unit = "origin" in issue && issue.origin === "string" ? "characters" : "items";
+    return { path, code: issue.code, ...(typeof limit === "number" && { limit, unit }) };
+  });
+};
+
+const can_repair_plan_output = (error: unknown): error is NoObjectGeneratedError => NoObjectGeneratedError.isInstance(error) &&
+  (error.finishReason === "length" || error.finishReason === "stop" &&
+    (TypeValidationError.isInstance(error.cause) || JSONParseError.isInstance(error.cause)));
+
+const plan_output_feedback = (error: NoObjectGeneratedError): string[] => {
+  if (error.finishReason === "length") return [
+    "The response reached the output limit. Keep the requested slide or addition count. Use at most two short highlights and one complete, cited narration sentence per slide. Keep the rationale brief and finish the JSON object.",
+  ];
+  const issues = plan_schema_issues(error);
+  if (!issues.length) return ["Return a complete JSON object matching every required field of the supplied schema."];
+  return issues.map(({ path, code, limit, unit }) => {
+    const correction = limit !== undefined ? `use ${code === "too_big" ? "at most" : "at least"} ${limit} ${unit}` :
+      code === "custom" ? "use plain audience-facing content without markup or instructions" :
+        code === "unrecognized_keys" ? "remove fields outside the declared schema" : "use the declared field type and allowed values";
+    return `Correct ${path} (${code}): ${correction}.`;
+  });
+};
+
 export const presentation_plan_provider = (config: TModelCandidate, openai = createOpenAI()): TPlanPresentation => async (context, research_id, signal) => {
   const started = performance.now();
+  const max_output_tokens = Math.min(config.max_output_tokens, MAX_SLIDE_PLAN_OUTPUT_TOKENS);
   let outcome = "failed";
-  let usage;
+  let usage: LanguageModelUsage | undefined;
+  let finish_reason: FinishReason | undefined;
+  let output_error: NoObjectGeneratedError | undefined;
   try {
     const reply = await generateText({
-      model: metered_model(config, openai.responses(config.model)), maxOutputTokens: Math.min(config.max_output_tokens, 5200),
+      model: metered_model(config, openai.responses(config.model)), maxOutputTokens: max_output_tokens,
       temperature: config.temperature, maxRetries: 0, abortSignal: bounded_signal(25_000, signal),
       providerOptions: { openai: { store: false } }, instructions: context.context_assessment
         ? presentation_planner + objective_planning_instructions : presentation_planner,
       output: Output.object({ schema: context.completion ? completion_output :
         context.context_assessment ? assessed_provider_output : planner_output }), prompt: JSON.stringify(context),
     });
-    outcome = "completed";
     usage = reply.usage;
-    return reply.output;
+    finish_reason = reply.finishReason;
+    const output = reply.output;
+    outcome = "completed";
+    return output;
+  } catch (error) {
+    if (NoObjectGeneratedError.isInstance(error)) {
+      output_error = error;
+      usage = error.usage ?? usage;
+      finish_reason = error.finishReason ?? finish_reason;
+    }
+    throw error;
   } finally {
-    if (process.env.TRACE_LOGS === "1") console.log(JSON.stringify({
-      operation: "presentation.plan", research_id, model: config.model, outcome, usage,
-      duration_ms: Math.round(performance.now() - started),
-    }));
+    const trace = { operation: "presentation.plan", research_id, model: config.model, outcome, finish_reason, max_output_tokens,
+      usage: usage && { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens,
+        reasoningTokens: usage.outputTokenDetails?.reasoningTokens }, duration_ms: Math.round(performance.now() - started) };
+    if (output_error) console.error(JSON.stringify({ ...trace, level: "error", error: output_error.name,
+      schema_issues: plan_schema_issues(output_error) }));
+    else if (process.env.TRACE_LOGS === "1") console.log(JSON.stringify(trace));
   }
 };
 
@@ -712,11 +760,28 @@ export const plan_verified_pitch = async (bundle: TResearchBundle, pitch: TDeckP
   const coverage_brief: TGroundingCoverageBrief | undefined = context.context_assessment?.objective && brief.intent ? {
     summary: speakable(brief.summary) ? brief.summary : deck_title, intent: brief.intent, messages: [],
   } : undefined;
+  let output_repairs_left = 3;
+  const request_candidate = async (initial: TPlanContext) => {
+    let request = initial;
+    for (;;) {
+      signal?.throwIfAborted();
+      try {
+        return await plan(request, bundle.research_id, signal);
+      } catch (error) {
+        signal?.throwIfAborted();
+        if (!can_repair_plan_output(error) || !output_repairs_left) throw error;
+        output_repairs_left--;
+        trace_plan(bundle.research_id, "structured_output_repair");
+        const feedback = [...plan_output_feedback(error), ...(request.review_feedback ?? [])];
+        request = { ...initial, review_feedback: [...new Set(feedback)].slice(0, 10) };
+      }
+    }
+  };
   const propose = async (request: TPlanContext): Promise<TPlanAttempt> => {
     signal?.throwIfAborted();
     const attempt: TPlanAttempt = { slides: [], verified_beats: [], feedback: [], objectives: request.objective_findings ?? [] };
     try {
-      const model_output = await plan(request, bundle.research_id, signal);
+      const model_output = await request_candidate(request);
       signal?.throwIfAborted();
       const planned = (request.completion ? completion_output : settings ? planner_output : assessed_output).safeParse(model_output);
       if (!planned.success) {
@@ -769,6 +834,10 @@ export const plan_verified_pitch = async (bundle: TResearchBundle, pitch: TDeckP
       return attempt;
     } catch (error) {
       signal?.throwIfAborted();
+      if (NoObjectGeneratedError.isInstance(error)) {
+        trace_plan(bundle.research_id, "structured_output_rejected");
+        return { ...attempt, unavailable: true, output_rejected: true };
+      }
       log_failure("presentation.plan", error, { research_id: bundle.research_id });
       trace_plan(bundle.research_id, "proposal_failed");
       return { ...attempt, unavailable: true };
@@ -789,7 +858,7 @@ export const plan_verified_pitch = async (bundle: TResearchBundle, pitch: TDeckP
   let repaired: TPlanAttempt | undefined;
   const needs_count_repair = !settings && verified_count < count;
   const can_complete = needs_count_repair && verified_count > 0 && first.assessment?.status === "ready" && !first.unavailable;
-  if (!layout_repair && ((needs_count_repair && !can_complete) || (!verified_count && first.feedback.length))) {
+  if (!first.output_rejected && !layout_repair && ((needs_count_repair && !can_complete) || (!verified_count && first.feedback.length))) {
     trace_plan(bundle.research_id, "repair_requested");
     const count_feedback = needs_count_repair ? [
       `The first plan retained ${verified_count} of ${count} requested slides. Return the entire ordered deck and reach ${count} distinct slides. Keep the verified beats and replace or fill in the missing ones. Mine the actual passages for specific independent takeaways, including ones from the same passage. Use a short text slide when the evidence does not bind a visual precisely. Keep every reporting period, estimate and qualifier. Name genuinely missing evidence in readiness.gaps.`,

@@ -25,9 +25,12 @@ export const model_prices: Record<string, NonNullable<TModelCandidate["pricing"]
   "gpt-5.5": { input: 5.00, cached_input: 0.50, output: 30.00, version: price_version },
 };
 
+export const MAX_SLIDE_PLAN_OUTPUT_TOKENS = 8_000;
+
 // Used when OPENAI_TEXT_MODELS is unset or empty. The env var, when set, replaces this list.
 export const default_models: TModelCandidate[] = [
   { provider: "openai", model: "gpt-5.6-luna", max_output_tokens: 4096, tool_providers: ["session"], purposes: ["director", "browse"] },
+  { provider: "openai", model: "gpt-5.4-mini", max_output_tokens: MAX_SLIDE_PLAN_OUTPUT_TOKENS, tool_providers: ["session"], purposes: ["planning"] },
   { provider: "openai", model: "gpt-5.4-mini", max_output_tokens: 4096, tool_providers: ["session"] },
 ];
 
