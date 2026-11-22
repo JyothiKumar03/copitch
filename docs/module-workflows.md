@@ -101,6 +101,98 @@ flowchart TD
 
 The Decisions check is advisory. A probability below `0.65` can trigger bounded gap research if public lookup is approved. A metered Mission skips this call when its price is unverified. If the advisory endpoint is unavailable, the planner and independent checks still run. The requested slide count remains separate from the number of research sections. The host can recover verified partial work privately when the available evidence cannot support the complete deck.
 
+### From research to slides
+
+```mermaid
+flowchart TD
+    Brief[Approved brief: subject, audience, outcome, slide count, host facts, source scope] --> Agent[Research agent: plan_coverage, web_search, read_url, record_answers]
+    Agent --> Evidence[Evidence records: P# public web, H# host, M# pasted text, F… uploaded file, B… website capture]
+    Evidence --> Draft[Writer drafts findings sections; each paragraph cites evidence ID + verbatim excerpt]
+    Draft --> Ground[Grounding check: unsupported paragraphs removed or repaired]
+    Ground --> Graphs[Graph writer: 0-3 graphs from exact cited numbers]
+    Graphs --> Bundle[Research bundle saved: findings, evidence, verified_graphs, gaps]
+    Bundle --> Decide{Decisions API readiness, advisory}
+    Decide -->|probability >= 0.65 or skipped| Select
+    Decide -->|below 0.65, public research allowed| Gap[Bounded research for the largest gap] --> Select
+    Select[Select planner evidence: linked passages, graph records, required host facts] --> Plan[Planner model writes one beat per slide]
+    Plan --> Rules[Per-slide rules drop or downgrade bad beats]
+    Rules --> Verify[Independent check: every sentence and visible claim vs its cited passages]
+    Verify --> Count{Exact requested count and required facts covered?}
+    Count -->|missing slides| Complete[Completion round for the missing slides only] --> Rules
+    Count -->|yes| Render[Render in Chromium, review layout, up to 3 passes]
+    Render --> Save[Save deck revision for host review]
+    Save --> Mission[Mission outcome check: count, citations, figures, title, host facts, then AI judge]
+```
+
+**Research → bundle**
+
+| Step | Input | Output | Rule |
+| --- | --- | --- | --- |
+| Coverage plan | Brief | 3–6 (focused) or 6–10 (broad) checklist questions | Questions name measure, unit, period, entity |
+| Search and read | Checklist | Evidence records `P#` | Only approved sources. Files-only skips the web |
+| Record answers | Read passages | Answer + verbatim excerpt + evidence ID per item | States facts, never deck advice |
+| Draft | Answers, evidence | Findings sections; each paragraph has `support[]` (evidence ID + excerpt) | The excerpt must appear verbatim in the record |
+| Grounding | Draft | Verified findings + gaps | Unsupported paragraphs removed or repaired |
+| Graphs | Cited numeric records | `verified_graphs`, at most 3, 2–12 points each | Same unit and period. Exact reported values only. No forecasts |
+| Host facts | Host messages | `H#` evidence, brief `studio_notes` | Copied word for word |
+| Attached sources | Files, pasted text, website captures | `F…` (file), `M#` (pasted, 1,800-character chunks), `B…` (website steps) | Material is background for research. Cited like any other record |
+
+**Decisions API (readiness check, advisory)**
+
+| Field | Value |
+| --- | --- |
+| Endpoint and model | `POST /v1/decisions`, `gpt-6-luna` |
+| Inputs | Requested slide count, approved intent, findings, gaps, selected passages |
+| Outputs | `enough_evidence` probability; `largest_gap` ∈ `scope`, `breadth`, `measurements`, `context` |
+| Ready when | probability ≥ **0.65** |
+| Not ready, public allowed | One bounded research round for that gap, then plan |
+| Not ready, files only | Plan anyway, or offer private recovery |
+| Skipped | Endpoint unavailable, or an unpriced metered Mission. Planning still runs |
+
+**Planner input (what the slide model sees)**
+
+| Field | Source |
+| --- | --- |
+| `slide_count` | Host's requested count. Independent of the number of research sections |
+| `findings`, `headings` | Grounded research sections |
+| `evidence` | Passages linked by findings or graphs, plus required host facts. Budget about 68 KB |
+| `available_graphs` | `verified_graphs` |
+| `context_assessment` | Deck title, objective, audience, known gaps |
+| `objective_findings` | Required host facts (always enforced) and objective items the model must cover |
+
+**One beat → one slide**
+
+| Beat field | Becomes on the slide |
+| --- | --- |
+| `title` (≤ 72 characters) | Slide title |
+| `highlights` (≤ 4 × 110 characters) | Bullets |
+| `template` | Layout: `title_card`, `bullet_slide`, `metric_grid` (≤ 4), `timeline` (2–4), `quote`, `comparison` (2 columns), `bar_chart` / `line_chart` / `donut_chart` (2–12 points), or a saved research graph |
+| `evidence_ids` | Slide citations and source footer |
+| `sentences[]` (1–8, each with evidence IDs) | Private narration, spoken one sentence per audio clip |
+
+**Per-slide rules (a failing slide is dropped or downgraded; the rest of the deck survives)**
+
+| Trace code | Rule |
+| --- | --- |
+| `draft_instruction_or_missing_spoken_content` | No placeholder text. At least one spoken sentence |
+| `duplicate_title`, `duplicate_takeaway` | Each slide says something new |
+| `uncited_evidence` | Every cited ID exists in the planner evidence |
+| `unsupported_number_on_slide` | Every visible number appears in a cited passage |
+| `unsupported_number_spoken` | Every spoken number appears in that sentence's cited passages |
+| `unknown_or_reused_graph` | A graph slide uses a saved graph once |
+| `template_downgraded:<type>` | A chart, metric or quote lacking quoted support becomes a bullet slide |
+| `empty_text_slide` | A bullet slide needs bullets |
+
+**Deck-level checks**
+
+| Check | Outcome on failure |
+| --- | --- |
+| Independent verification of each slide's claims | The slide is dropped; unverified narration is trimmed (`trimmed_unverified_narration`) |
+| Exact requested count | Completion round for the missing slides only. If still short: `insufficient_evidence` and private recovery with the verified slides |
+| Required host facts covered (`objective_findings`) | Repair round, then a gap shown to the host |
+| Chromium render review | Layout repair, at most 3 passes. Then `render_review_failed` names the slides |
+| Mission outcome check | Count, citations, figures, title = subject, host facts with an `H#` citation. Then the AI judge reviews audience and purpose. Gaps → **Needs you** |
+
 ### How the presenter coordinates slides, narration, and the host mic
 
 ```mermaid
