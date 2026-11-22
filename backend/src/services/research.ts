@@ -1,4 +1,5 @@
 import { pitch_markdown } from "./pitch-markdown";
+import { log_failure } from "../middleware/trace";
 import { verify_graph_document, verify_sourced_chart } from "./research-graphs";
 import { selected_chart } from "./pitch-chart";
 import { source_evidence } from "./source";
@@ -66,6 +67,8 @@ const evidence_from_brief = (brief: TResearchBrief, sources: TUploadedSource[]):
 
 const needs_more_evidence = "I couldn't find enough evidence for the research context. Share a working link, a file, or one specific example you want included.";
 const paragraph_key = (prose: string) => prose.normalize("NFKC").replace(/\s+/gu, " ").trim().toLowerCase();
+const presentation_advice = (text: string) =>
+  /\b(?:slide-friendly|a strong slide|(?:this|the) (?:slide|deck|presenter) (?:should|could|needs? to|can introduce)|implications for (?:a |the )?(?:short |live )*(?:intro(?:duction)?|presentation|pitch|deck)|(?:the|for the) (?:opening|closing) slide)\b/iu.test(text);
 
 const with_verified_additions = (base: TResearchDraft, revision: TResearchDraft) => {
   const seen = new Set(base.sections.flatMap(section => section.paragraphs.map(paragraph => paragraph_key(paragraph.prose))));
@@ -85,12 +88,14 @@ const with_verified_additions = (base: TResearchDraft, revision: TResearchDraft)
   return { ...base, sections, graph_xml: base.graph_xml ?? revision.graph_xml, gaps: [...new Set([...base.gaps, ...revision.gaps])] };
 };
 
-const supported_findings = (draft: TResearchDraft, evidence: TEvidence[], gaps: Set<string>): TResearchBundle["findings"] => {
+const supported_findings = (draft: TResearchDraft, evidence: TEvidence[], gaps: Set<string>, studio: boolean): TResearchBundle["findings"] => {
   const by_id = new Map(evidence.map(item => [item.id, item]));
   const published = new Set<string>();
   const sections = draft.sections.flatMap(section => {
+    if (studio && presentation_advice(section.heading)) return [];
     const supported: typeof section.paragraphs = [];
     for (const paragraph of section.paragraphs) {
+      if (studio && presentation_advice(paragraph.prose)) continue;
       const valid = paragraph.prose.trim() && paragraph.support.length && paragraph.support.every(ref =>
         quotes(by_id.get(ref.evidence_id)?.passage, ref.excerpt));
       if (!valid) {
@@ -251,7 +256,8 @@ export const build_research = async (
   }
   check_current();
   if (studio && brief.source_policy === "public_search" && (brief.urls.length || brief.public_queries.length) &&
-      !evidence.some(record => record.origin === "public")) {
+      // Attached material (an uploaded file or a captured website) can answer the plan without a public read.
+      !evidence.some(record => record.origin === "public" || record.origin === "material")) {
     throw new AppError(422, "I couldn't read any public evidence for the approved plan. Share a working source or switch to your materials only.");
   }
   if (studio && !evidence.length) throw new AppError(422, needs_more_evidence);
@@ -301,7 +307,10 @@ export const build_research = async (
         "Requested a draft using the collected material.");
       try {
         draft = await provider.draft(prompt, studio ? writer_evidence(evidence, collection) : evidence, [...gaps], signal, studio ? "context" : undefined);
-      } catch {
+      } catch (error) {
+        log_failure("research.draft", error, { repairing: !!repairing });
+        // A mission budget or time stop is a host decision, not an outage: keep its own message.
+        if (error instanceof AppError && error.status === 422) throw error;
         check_current();
         signal.throwIfAborted();
         if (restore_candidate()) break;
@@ -323,7 +332,7 @@ export const build_research = async (
         });
         draft = { ...draft, sections: draft.sections.map(section => ({ ...section, paragraphs: section.paragraphs.map(bind_records) })) };
       }
-      const findings = supported_findings(draft, evidence, gaps);
+      const findings = supported_findings(draft, evidence, gaps, studio);
       const pitch_script = draft.pitch_script ?? [];
       const complete_script = !studio && pitch_script.length >= 3 && pitch_script.length <= 6 &&
         pitch_script[0].purpose === "opening" && pitch_script.at(-1)?.purpose === "close" &&
@@ -389,7 +398,7 @@ export const build_research = async (
   check_current();
   if (!draft || !grounding) throw new Error("Missing grounded research draft");
   for (const gap of draft.gaps) if (gap.trim()) gaps.add(gap);
-  const findings = supported_findings(draft, evidence, gaps);
+  const findings = supported_findings(draft, evidence, gaps, studio);
   if (studio && (grounding.mode !== "verified" || !findings.sections.length)) {
     throw new AppError(422, needs_more_evidence);
   }

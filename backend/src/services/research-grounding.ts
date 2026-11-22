@@ -61,7 +61,7 @@ const unsupported_magnitude = (text: string, records: TEvidence[], legends: Retu
   }
 };
 
-const review_payload = (draft: TResearchDraft, evidence: TEvidence[], gaps: string[]): TGroundingReview => {
+const review_payload = (draft: TResearchDraft, evidence: TEvidence[], gaps: string[], review_gaps: boolean): TGroundingReview => {
   const units: TGroundingUnit[] = [{ id: "title", kind: "title", text: draft.title, support: [] }];
   for (const [i, section] of draft.sections.entries()) {
     const support = section.paragraphs.flatMap(p => p.support);
@@ -88,7 +88,7 @@ const review_payload = (draft: TResearchDraft, evidence: TEvidence[], gaps: stri
     const excerpt = passages.get(ref.evidence_id) === ref.excerpt ? "" : ref.excerpt;
     return [`${ref.evidence_id}\n${excerpt}`, { evidence_id: ref.evidence_id, excerpt }] as const;
   })).values()];
-  return { units, evidence: records, gaps: [...gaps, ...draft.gaps] };
+  return { units, evidence: records, gaps: review_gaps ? gaps : [...gaps, ...draft.gaps] };
 };
 
 const coverage_payload = (review: TGroundingReview, records: TEvidence[], brief: TGroundingCoverageBrief, previous_findings?: string): TGroundingCoverage | undefined => {
@@ -140,10 +140,17 @@ export const verify_draft = async (draft: TResearchDraft, evidence: TEvidence[],
   Promise<{prose:boolean;chart:boolean;decisions?:Map<string,string>;feedback?:string[];coverage_feedback?:string[]}> => {
   const withheld = { prose:false,chart:false };
   if (!provider.verify || signal.aborted) return withheld;
-  const review = review_payload(draft, evidence, gaps);
+  const review = review_payload(draft, evidence, gaps, !!coverage_brief);
   if (review.units.length > 80 || json_bytes(review) > max_review_bytes) {
     on_skip?.(`The draft was too large to check (${review.units.length} units). Requested a shorter one.`);
     return withheld;
+  }
+  if (coverage_brief) {
+    for (const [index, text] of draft.gaps.slice(0, 6).entries()) {
+      if (!text.trim() || text.length > 300 || review.units.length === 80) continue;
+      const unit = { id: `gap-${index}`, kind: "gap" as const, text, support: [] };
+      if (json_bytes({ ...review, units: [...review.units, unit] }) <= max_review_bytes) review.units.push(unit);
+    }
   }
   if (coverage_brief) review.coverage = coverage_payload(review, evidence, coverage_brief, previous_findings);
   on_verify?.();
@@ -153,8 +160,10 @@ export const verify_draft = async (draft: TResearchDraft, evidence: TEvidence[],
       const result = await provider.verify!(review, AbortSignal.any([signal, deadline]));
       const verdicts = Array.isArray(result) ? result : result.verdicts;
       const decisions = new Map(verdicts.map(v => [v.id,v.decision]));
-      if (verdicts.length !== review.units.length || decisions.size !== review.units.length ||
-          !review.units.every(unit => ["supported","unsupported","missing_qualification"].includes(decisions.get(unit.id) ?? ""))) {
+      const ids = new Set(review.units.map(unit => unit.id));
+      if (verdicts.length !== decisions.size || verdicts.some(verdict => !ids.has(verdict.id) ||
+          !["supported", "unsupported", "missing_qualification"].includes(verdict.decision)) ||
+          review.units.some(unit => unit.kind !== "gap" && !decisions.has(unit.id))) {
         throw new Error(`The fact-check returned ${decisions.size} decisions for ${review.units.length} units and could not be applied.`);
       }
       return { result, verdicts, decisions };
@@ -170,7 +179,7 @@ export const verify_draft = async (draft: TResearchDraft, evidence: TEvidence[],
       const records = new Map(review.evidence.map(record => [record.id, record]));
       const legends = scoped_legend_scales(evidence);
       for (const unit of review.units) {
-        if (decisions.get(unit.id) !== "supported" || unit.id === "pitch-chart") continue;
+        if (decisions.get(unit.id) !== "supported" || unit.id === "pitch-chart" || unit.kind === "gap") continue;
         const unsupported = unsupported_magnitude(unit.text, unit.support.flatMap(ref => records.get(ref.evidence_id) ?? []), legends);
         if (!unsupported) continue;
         decisions.set(unit.id, "unsupported");
@@ -179,7 +188,7 @@ export const verify_draft = async (draft: TResearchDraft, evidence: TEvidence[],
       }
     }
     return {
-      prose:review.units.every(unit => unit.id === "pitch-chart" || decisions.get(unit.id) === "supported"),
+      prose:review.units.every(unit => unit.id === "pitch-chart" || unit.kind === "gap" || decisions.get(unit.id) === "supported"),
       chart:decisions.get("pitch-chart") === "supported",
       decisions,
       coverage_feedback: coverage_feedback(review, Array.isArray(result) ? undefined : result.omissions),
@@ -206,7 +215,8 @@ export const keep_supported = (draft: TResearchDraft, decisions: Map<string, str
   });
   const script = (draft.pitch_script ?? []).filter((_, i) => ok("pitch-" + i));
   const complete = script.length >= 3 && script[0].purpose === "opening" && script.at(-1)?.purpose === "close";
-  return { ...draft, title: ok("title") ? draft.title : fallback_title, sections, pitch_script: complete ? script : undefined };
+  return { ...draft, title: ok("title") ? draft.title : fallback_title, sections,
+    gaps: draft.gaps.filter((_, index) => ok(`gap-${index}`)), pitch_script: complete ? script : undefined };
 };
 
 // Use complete records so a selected phrase cannot discard a qualification later in its passage.

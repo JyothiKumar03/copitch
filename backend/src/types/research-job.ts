@@ -25,7 +25,7 @@ export type TResearchLease = {
 export type TActivityKind =
   | "queued" | "started" | "resumed" | "lookup_requested" | "search_completed" | "page_opened"
   | "lookup_failed" | "lookup_empty" | "sources_saved" | "draft_started" | "verification_started" | "verification_skipped"
-  | "verified" | "fallback" | "completed" | "failed" | "needs_input" | "superseded";
+  | "verified" | "fallback" | "completed" | "failed" | "needs_input" | "superseded" | "stopped";
 
 export type TResearchActivity = { sequence: number; kind: TActivityKind; label: string };
 export type TRecordActivity = (kind: TActivityKind, label: string) => void;
@@ -34,7 +34,7 @@ export type TResearchJob = {
   activity: TResearchActivity[];
   job_id: string;
   brief_id: string;
-  status: "queued" | "running" | "completed" | "failed" | "needs_input" | "superseded";
+  status: "queued" | "running" | "completed" | "failed" | "needs_input" | "superseded" | "stopped";
   completed_lookups: number;
   tool_steps?: number;
   research_passes?: number;

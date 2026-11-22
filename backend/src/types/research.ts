@@ -39,6 +39,8 @@ export type TEvidence = {
   location: string;
   passage: string;
   url?: string;
+  // Host-only API path of a captured page screenshot that this passage was read from.
+  image?: string;
 };
 
 export type TResearchDraft = {
@@ -52,7 +54,7 @@ export type TResearchDraft = {
 
 export type TGrounding = { version: 1; mode: "verified" | "source_extracts"; chart?: "verified" | "withheld" };
 export type TGroundingUnit = {
-  id: string; kind: "title" | "heading" | "paragraph"; text: string;
+  id: string; kind: "title" | "heading" | "paragraph" | "gap"; text: string;
   support: { evidence_id: string; excerpt: string }[];
 };
 export type TGroundingCoverageBrief = Pick<TResearchBrief, "summary" | "intent" | "messages">;

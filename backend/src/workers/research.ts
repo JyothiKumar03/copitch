@@ -1,4 +1,5 @@
-import { job_trace } from "../middleware/trace";
+import { commit_mission_result, with_mission_job } from "../services/mission-metering";
+import { job_trace, log_failure } from "../middleware/trace";
 import { AppError } from "../errors/app-error";
 import type { SessionStore } from "../repositories/session";
 import type { TResearchProvider } from "../types/research";
@@ -35,14 +36,15 @@ export class ResearchWorker {
         jobs.assert_owner(lease);
         if (!brief || brief.brief_id !== lease.brief_id) throw new Error("Research scope changed");
         const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(brief.studio_version === 2 ? 240_000 : 90_000)]);
-        const bundle = await build_research(brief,this.provider(),signal,() => jobs.assert_owner(lease),
+        const meter = db.missions.mission_meter(lease.session_id, lease.job_id);
+        const bundle = await with_mission_job(meter, scoped_signal => build_research(brief,this.provider(),scoped_signal,() => jobs.assert_owner(lease),
           lease.checkpoint,state => jobs.checkpoint(lease,state),
           db.sources.selected(lease.session_id, brief.sources?.map(s => s.source_id) ?? []),
           (kind, label) => {
             jobs.record(lease, kind, label);
             job_trace({ ...correlation, operation: "research.activity", status: kind, duration_ms: elapsed() });
-          });
-        jobs.complete(lease,bundle);
+          }), signal);
+        commit_mission_result(db.missions, meter, () => jobs.complete(lease,bundle));
         job_trace({ ...correlation, operation: "research.attempt", status: "completed", duration_ms: elapsed() });
       } catch (error) {
         if (error instanceof AppError && error.status === 422) {
@@ -50,6 +52,7 @@ export class ResearchWorker {
           job_trace({ ...correlation, operation: "research.attempt", status: "needs_input", duration_ms: elapsed() });
           return;
         }
+        log_failure("research.attempt", error, { job_id: lease.job_id, attempt: correlation.attempt, duration_ms: elapsed() });
         job_trace({ ...correlation, operation: "research.attempt", status: "interrupted", duration_ms: elapsed() });
         jobs.fail(lease,error instanceof AppError && error.status === 503 ? error.message : "Research worker failed");
       } finally {

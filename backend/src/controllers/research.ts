@@ -29,7 +29,7 @@ const build_input = z.object({
 const configured_provider = (purpose: "interview" | "research") => {
   const models = configured_models_for(purpose);
   const [model] = models;
-  if (!model || !process.env.OPENAI_API_KEY) throw new AppError(503, "Configure OPENAI_API_KEY and OPENAI_TEXT_MODELS");
+  if (!model || !process.env.OPENAI_API_KEY) throw new AppError(503, "The research service is unavailable. Try again when it is connected.");
   return research_provider(model, undefined, purpose === "research" ? models : []);
 };
 
@@ -76,10 +76,12 @@ export const research_handlers = (get_provider: (purpose: "interview" | "researc
       const brief = db.current_brief(session);
       if (!brief || brief.brief_id !== input.data.brief_id) return res.status(409).json({ error: "Brief revision is stale" });
       if (brief.question) return res.status(409).json({ error: "Answer the open clarification before confirming research" });
-    if (brief.studio_version === 2 && !db.research_jobs.for_brief(session, brief.brief_id)) {
-      return res.status(409).json({ error: "Approve the current studio proposal before starting research" });
-    }
       const jobs = db.research_jobs;
+      const saved = jobs.for_brief(session,brief.brief_id);
+      if (brief.studio_version === 2 && !saved) {
+        return res.status(409).json({ error: "Approve the current studio proposal before starting research" });
+      }
+      if (saved?.status === "stopped") return res.status(409).json({ job_id: saved.job_id, error: saved.error });
       // Verify configuration before accepting new work. Already saved reports remain accessible offline.
       if (!db.research_by_brief(session,brief.brief_id)) get_provider("research");
       const question = input.data.approval_text ?? "Start researching.";
@@ -103,7 +105,7 @@ export const research_handlers = (get_provider: (purpose: "interview" | "researc
         if (job.status === "queued" || job.status === "running") worker.wake(job.job_id);
       }
       if (job.result) return res.json(job.result);
-      return res.status(job.status === "superseded" ? 409 : 503).json({ job_id: job.job_id, error: job.error ?? "Research failed" });
+      return res.status(job.status === "superseded" || job.status === "stopped" ? 409 : 503).json({ job_id: job.job_id, error: job.error ?? "Research failed" });
     },
     job: (req: TApiRequest, res: Response) => {
       const session = session_for(req);

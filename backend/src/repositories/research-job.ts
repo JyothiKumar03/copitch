@@ -112,7 +112,19 @@ export class ResearchJobRepository {
       const {research_id,markdown,gaps} = JSON.parse(payload) as TResearchBundle;
       return { ...job, result:{research_id,markdown,gaps} };
     }
-    return error ? { ...job,error } : job;
+    const message = error && /OPENAI_(?:API_KEY|TEXT_MODELS|BASE_URL)/u.test(error) ? "The research service is unavailable. Try again when it is connected." : error;
+    return message ? { ...job,error: message } : job;
+  }
+
+  stop(session: string, brief: string, id: string) {
+    this.db.transaction(() => {
+      const row = this.db.query<{job_id:string},[string,string,string]>(`UPDATE research_jobs SET status='stopped',
+        error='Research stopped. Saved work remains available.',lease_token=NULL,lease_until=NULL
+        WHERE session_id=? AND brief_id=? AND job_id=? AND status IN ('queued','running')
+        AND EXISTS (SELECT 1 FROM research_briefs WHERE session=research_jobs.session_id AND id=research_jobs.brief_id)
+        RETURNING job_id`).get(session,brief,id);
+      if (row) this.append(row.job_id,"stopped","Research stopped. Saved work remains available.");
+    }).immediate();
   }
 
   supersede(session: string, new_brief: string) {
