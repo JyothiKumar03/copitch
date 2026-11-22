@@ -11,3 +11,9 @@ export const contains_draft_instruction = (value: unknown): boolean => {
   if (typeof value === "string") return is_draft_instruction(value);
   return !!value && typeof value === "object" && Object.values(value).some(contains_draft_instruction);
 };
+
+// A reviewer sometimes fills a required omissions list with a placeholder ("No omission to report; …").
+// That is the absence of a gap, never a gap to repair or show the host.
+export const is_non_omission = (text: string) =>
+  /^\s*(?:no|none|nothing)\b[^.;]{0,60}\b(?:omission|omitted|missing|gap|issue)s?\b/iu.test(text.normalize("NFKC")) ||
+  /^\s*(?:none|n\/a|not applicable)\s*[.;]?\s*$/iu.test(text.normalize("NFKC"));

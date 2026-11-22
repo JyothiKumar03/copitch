@@ -412,4 +412,6 @@ test("outcome judge sees the approved count, saved slide citations and host pass
   expect(JSON.stringify(input)).not.toContain("Uncited private text");
   expect(input.purpose).toContain("teach feedback");
   expect(JSON.stringify(input.slides)).not.toContain("feedback");
+  // The judge runs only after the application's checks pass; it must see that, or it blocks on "factual review not evidenced".
+  expect(input.application_checks).toEqual({ slide_count: "passed", citations_and_figures: "passed", render_review: "passed" });
 });

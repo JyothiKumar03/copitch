@@ -17,7 +17,7 @@ import { configured_mission_budget_usd, mission_turn_patch } from "../types/miss
 import { numbers_stated_in, quotes } from "./excerpt";
 import { mission_interruption } from "./mission-retry";
 import { studio_context } from "./studio-state";
-import { contains_draft_instruction } from "./slide-content";
+import { contains_draft_instruction, is_non_omission } from "./slide-content";
 
 // The website step gets half the mission allowance so research and slides keep the rest.
 const site_budget = (c: TOutcomeContract) => Math.round(c.budget.usd * 50) / 100;
@@ -385,7 +385,7 @@ export const advance_mission = (db: SessionStore, session: string, mission: TMis
     const question = supported ? `Would you like to review the ${supported} supported slides or add a source for the requested ${exact_count(mission)}?` :
       failure?.reason_code === "insufficient_evidence" ? `Which source can you add for the missing material in the ${exact_count(mission)}-slide deck?` :
       "Would you like to review the saved research before trying slide preparation again?";
-    return wait_for_host(mission,[question,...(failure?.gaps ?? []),failure?.message ?? preparation.error ?? "Slide preparation stopped."]);
+    return wait_for_host(mission,[question,...(failure?.gaps ?? []).filter(gap => !is_non_omission(gap)),failure?.message ?? preparation.error ?? "Slide preparation stopped."]);
   }
   const deck = preparation?.deck ?? (mission.deck_id && db.decks.get(session,mission.deck_id,mission.deck_revision ?? undefined));
   if (!deck) return wait_for_host(mission,["The saved deck is unavailable. Review the research and retry preparation."]);

@@ -1,4 +1,5 @@
 import { metered_model } from "./mission-metering";
+import { is_non_omission } from "./slide-content";
 import { log_failure } from "../middleware/trace";
 import { createOpenAI } from "@ai-sdk/openai";
 import { generateText, Output } from "ai";
@@ -366,6 +367,7 @@ export const presentation_plan_review = (provider: TResearchProvider): TVerifyPr
     verified_slide_ids.length ? "independent_check_partial" : "independent_check_rejected");
   const missing = result.coverage_feedback?.length && Array.isArray(omissions) ? omissions.flatMap(omission => {
     if (!omission.objective_excerpt || !coverage_brief?.intent?.outcome.includes(omission.objective_excerpt)) return [];
+    if (is_non_omission(omission.finding ?? "")) return [];
     const parsed = objective_finding_schema.safeParse({ finding: omission?.finding, evidence_ids: omission?.evidence_ids });
     return parsed.success ? [parsed.data] : [];
   }).slice(0, 8) : [];
