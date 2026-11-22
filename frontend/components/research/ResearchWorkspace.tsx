@@ -1,14 +1,22 @@
 "use client";
 
 import { Fragment, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
-import { ArrowLeft, ArrowUpRight, AudioLines, CircleAlert, LoaderCircle, LockKeyhole, MessageSquare, Mic, Presentation, X } from "lucide-react";
+import { flushSync } from "react-dom";
+import { ArrowLeft, ArrowUpRight, AudioLines, Briefcase, CircleAlert, Globe2, Lightbulb, LoaderCircle, LockKeyhole, MessageSquare, Mic, Presentation, Rocket, X } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { DeckWorkspace } from "@/components/deck/DeckWorkspace";
+import { ConversationSlideDiff } from "@/components/deck/ConversationSlideDiff";
 import { useVoiceAgent } from "@/hooks/research/use-voice-agent";
 import { useStudioEvents } from "@/hooks/research/use-studio-events";
 import { useResearch, useSavedWorkspace } from "@/hooks/research/use-research";
+import { useMission } from "@/hooks/research/use-mission";
+import { missionKey } from "@/lib/mission";
+import type { TMissionCommand } from "@/lib/mission";
+import type { TMission } from "../../../shared/mission";
+import { extractPresentationSlideCount, MAX_PRESENTATION_SLIDES } from "../../../shared/presentation";
+import type { TDeckWorkspaceProps } from "@/types/deck";
 import { savedSession, restoreSourceSelection, saveSourceSelection } from "@/lib/research";
 import type { TInterviewMessage, TProposalChoice, TResearchProposal, TResearchWorkspace, TSourcePolicy, TTurnInput, TUploadedSource } from "@/types/research";
 import { ResearchProgress, SourceExecution, TurnExecution } from "./ResearchProgress";
@@ -19,6 +27,7 @@ import { StudioInspector } from "./StudioInspector";
 import { WorkspaceArtifacts } from "./WorkspaceArtifacts";
 import { presentLanguage } from "./studio-language";
 import { ContextArtifact } from "./ContextArtifact";
+import { MissionPanel } from "./MissionPanel";
 import "./cockpit.css";
 
 export const ResearchWorkspace = () => {
@@ -40,15 +49,17 @@ const sameUrls = (left: string[], right: string[]) => {
 };
 
 const starterPrompts = [
-  { label: "Pitch a product", message: "Help me pitch a product to prospective customers. " },
-  { label: "Present my work", message: "Help me present my work to a hiring team. " },
-  { label: "Make a recommendation", message: "Help me present a recommendation to my team. " },
+  { label: "Pitch a product", detail: "To prospective customers or investors", icon: Rocket, message: "Help me pitch a product to prospective customers. " },
+  { label: "Present my work", detail: "Portfolio, case study or project review", icon: Briefcase, message: "Help me present my work to a hiring team. " },
+  { label: "Make a recommendation", detail: "Evidence-backed proposal for your team", icon: Lightbulb, message: "Help me present a recommendation to my team. " },
 ];
 
 const Interview = ({ initial }: { initial: TResearchWorkspace }) => {
   const workspace = initial;
   const client = useQueryClient();
   const session = savedSession();
+  const missionService = useMission(session);
+  const mission = missionService.query.data;
   useStudioEvents(session);
   const [message, setMessage] = useState("");
   const [sources, setSources] = useState<TUploadedSource[]>(() => {
@@ -71,14 +82,18 @@ const Interview = ({ initial }: { initial: TResearchWorkspace }) => {
   const applyButton = useRef<HTMLButtonElement>(null);
   const researchPlan = useRef<HTMLDivElement>(null);
   const researchActivity = useRef<HTMLDivElement>(null);
+  const missionPanel = useRef<HTMLDivElement>(null);
   const presentationPreparation = useRef<HTMLDivElement>(null);
   const [greeting, setGreeting] = useState("");
   const [compactPanel, setCompactPanel] = useState<"artifacts" | "agent" | null>(null);
   const [previewResearchId, setPreviewResearchId] = useState<string | null>(null);
+  const [missionPreview, setMissionPreview] = useState<TDeckWorkspaceProps["command"]>();
   const [previewReset, setPreviewReset] = useState(0);
+  const [dismissedDeckCommand, setDismissedDeckCommand] = useState<string | null>(null);
   const presentationHeading = useRef<HTMLHeadingElement>(null);
   const returnToConversation = useRef(false);
   const composer = useRef<HTMLTextAreaElement>(null);
+  const filePicker = useRef<HTMLInputElement>(null);
   const transcript = useRef<HTMLDivElement>(null);
   const turns = useRef<HTMLDivElement>(null);
   const followingTranscript = useRef(true);
@@ -90,9 +105,17 @@ const Interview = ({ initial }: { initial: TResearchWorkspace }) => {
   const service = useResearch(savedSession()?.session_id ?? "", workspace.job);
   const job = service.job.data ?? workspace.job;
   const running = job?.status === "running" || job?.status === "queued";
-  const unsuccessful = job?.status === "needs_input" || job?.status === "failed" || job?.status === "superseded";
+  const unsuccessful = job?.status === "needs_input" || job?.status === "failed" || job?.status === "superseded" || job?.status === "stopped";
   const result = job ? (unsuccessful || running ? null : job.result ?? workspace.research) : workspace.research;
-  const showingPresentation = !!result && previewResearchId === result.research_id;
+  const latestDeckCommand = workspace.activities?.findLast(activity => activity.deck_preparation?.research_id === result?.research_id && !!activity.deck_preparation);
+  const activeDeckCommand = latestDeckCommand?.deck_preparation && latestDeckCommand.turn_id !== dismissedDeckCommand
+    ? { ...latestDeckCommand.deck_preparation, turn_id: latestDeckCommand.turn_id } : undefined;
+  const latestSlideChange = workspace.activities?.findLast(activity => !!activity.deck_proposal);
+  const missionOwnsResearch = mission && (mission.research_id === result?.research_id ||
+    (mission.brief_id !== null && mission.brief_id === brief?.brief_id));
+  const manualResearchId = missionOwnsResearch ? undefined : result?.research_id;
+  const presentationResearchId = missionPreview?.research_id ?? manualResearchId;
+  const showingPresentation = !!presentationResearchId && (!!missionPreview || previewResearchId === presentationResearchId);
   const currentArtifactId = result?.research_id ?? workspace.research?.research_id;
   const previousArtifacts = workspace.artifacts?.filter(artifact => artifact.research_id !== currentArtifactId) ?? [];
   const calls = service.calls.data ?? [];
@@ -103,7 +126,10 @@ const Interview = ({ initial }: { initial: TResearchWorkspace }) => {
   const proposal = workspace.phase === "proposed" ? workspace.proposal : null;
   const voice = useVoiceAgent(service.getSession, {
     committed: committedCaptions,
-    onClose: () => { void client.invalidateQueries({ queryKey: ["host-workspace", session?.session_id] }); },
+    onClose: () => {
+      void client.invalidateQueries({ queryKey: ["host-workspace", session?.session_id] });
+      void client.invalidateQueries({ queryKey: missionKey(session?.session_id) });
+    },
   });
   const { handsFree, setHandsFree } = voice;
   useEffect(() => {
@@ -125,6 +151,7 @@ const Interview = ({ initial }: { initial: TResearchWorkspace }) => {
       onSuccess(reply) {
         const next = reply.workspace;
         client.setQueryData(["host-workspace", session?.session_id], next);
+        void client.invalidateQueries({ queryKey: missionKey(session?.session_id) });
         if (payload.option_id) composer.current?.focus();
         if (next.state?.source_policy === payload.source_policy) setPolicy(current => current === payload.source_policy ? null : current);
         if (next.state?.materials === payload.materials) setMaterials(current => current === payload.materials ? null : current);
@@ -254,9 +281,15 @@ const Interview = ({ initial }: { initial: TResearchWorkspace }) => {
   const jumpTo = (target: HTMLDivElement | null) => {
     if (!target) return;
     setCompactPanel(null);
+    const openingMission = target === missionPanel.current;
+    if (openingMission) followingTranscript.current = false;
     target.focus({ preventScroll: true });
-    target.scrollIntoView({ block: "nearest", behavior: "instant" });
+    target.scrollIntoView({ block: openingMission ? "start" : "nearest", behavior: "instant" });
   };
+  const showDeckProgress = useEffectEvent(() => {
+    if (activeDeckCommand && !showingPresentation) jumpTo(presentationPreparation.current);
+  });
+  useEffect(() => { showDeckProgress(); }, [activeDeckCommand?.turn_id]);
   const sourcesSummary = [
     sources.length && `${sources.length} ${sources.length === 1 ? "file" : "files"}`,
     urls.length && `${urls.length} ${urls.length === 1 ? "link" : "links"}`,
@@ -265,16 +298,61 @@ const Interview = ({ initial }: { initial: TResearchWorkspace }) => {
   const researchStatus = job && <div ref={researchActivity} className="studio-jump-target" role="group" tabIndex={-1} aria-label="Research activity status"><ResearchProgress job={job} /></div>;
   const backToConversation = () => {
     returnToConversation.current = true;
+    setMissionPreview(undefined);
     setPreviewResearchId(null);
     setPreviewReset(reset => reset + 1);
+    if (latestDeckCommand) setDismissedDeckCommand(latestDeckCommand.turn_id);
   };
+  const addDeckContent = (gaps: string[]) => {
+    const missing = gaps.slice(0, 4).join("; ");
+    const request = missing ? `Find: ${missing}` : "Find another source or a specific fact for the remaining slides.";
+    flushSync(() => {
+      if (showingPresentation) backToConversation();
+      setMessage(existing => [existing.trim(), request].filter(Boolean).join("\n\n").slice(0, 6000));
+    });
+    composer.current?.focus();
+    filePicker.current?.click();
+  };
+  const countFromBrief = extractPresentationSlideCount(brief?.summary ?? "", brief?.intent?.deliverable ?? "");
+  const countFromContract = missionOwnsResearch && mission ? mission.contract.deliverable.slide_count : undefined;
+  const explicitCount = typeof countFromContract === "number" ? countFromContract : countFromBrief;
+  const initialSlideCount = explicitCount !== undefined && explicitCount >= 1 && explicitCount <= MAX_PRESENTATION_SLIDES ? explicitCount : undefined;
+  const reviewMission = (next: TMission) => {
+    if (!next.research_id) {
+      composer.current?.focus();
+      return;
+    }
+    setMissionPreview({ research_id: next.research_id, turn_id: next.mission_id + ":" + next.contract.revision,
+      ...(next.deck_id && next.deck_revision !== null && { deck_id: next.deck_id, deck_revision: next.deck_revision }),
+      ...(next.status === "paused" && { manual: true }),
+      slide_count: next.contract.deliverable.slide_count === "auto" ? 0 : next.contract.deliverable.slide_count,
+    });
+  };
+  const changeMission = (command: TMissionCommand) => {
+    if (!mission || missionService.change.isPending) return;
+    missionService.change.mutate({ missionId: mission.mission_id, command }, { onSuccess: next => {
+      if (command.action === "take-over") reviewMission(next);
+      if (command.action === "approve" && handsFree) void setHandsFree(false);
+    } });
+  };
+  const spokenPlan = !!(handsFree && mission?.proposal_id && mission.proposal_id === proposal?.proposal_id && !mission.contract.sources.site_tasks.length);
+  const approveMission = () => {
+    if (!mission) return;
+    if (spokenPlan) submit("Approve the presentation plan", "approve");
+    else changeMission({ action: "approve", revision: mission.contract.revision });
+  };
+  const missionCommandError = missionService.change.error;
+  const missionError = missionCommandError && (missionService.change.variables?.command.action !== "retry" &&
+    "status" in missionCommandError && missionCommandError.status === 409
+    ? "The mission changed. Review the current plan and try again." : missionCommandError.message);
   return <div className="studio-cockpit" data-mode={showingPresentation ? "presentation" : "conversation"}>
     {!showingPresentation && <WorkspaceArtifacts
       currentResearch={session && currentArtifactId ? { project: session.session_id, researchId: currentArtifactId, getSession: service.getSession } : undefined}
       earlierResearch={session ? previousArtifacts.map(artifact => ({ project: session.session_id, researchId: artifact.research_id, getSession: service.getSession })) : []}
-      onPlan={proposal ? () => jumpTo(researchPlan.current) : undefined}
-      onActivity={job ? () => jumpTo(researchActivity.current) : undefined}
-      onPresentation={result ? () => jumpTo(presentationPreparation.current) : undefined}
+      onPlan={proposal && mission === null ? () => jumpTo(researchPlan.current) : undefined}
+      onActivity={job && (!mission || mission.research_job_id !== job.job_id) ? () => jumpTo(researchActivity.current) : undefined}
+      onMission={mission ? () => jumpTo(missionPanel.current) : undefined}
+      onPresentation={manualResearchId ? () => jumpTo(presentationPreparation.current) : undefined}
       expanded={compactPanel === "artifacts"}
       onToggle={() => setCompactPanel(panel => panel === "artifacts" ? null : "artifacts")} />}
     <Card className="cockpit-chat" role="region" aria-label={showingPresentation ? "Private presentation workspace" : "Private conversation"}>
@@ -287,15 +365,25 @@ const Interview = ({ initial }: { initial: TResearchWorkspace }) => {
       <div className="conversation-timeline" ref={transcript} tabIndex={0} aria-label={showingPresentation ? "Presentation review" : "Conversation timeline"}
         onScroll={({ currentTarget: pane }) => { if (!showingPresentation) followingTranscript.current = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 32; }}>
         {!showingPresentation && !history.length && !previewTurns.length && <div className="chat-opening">
-          <span className="grid size-11 place-items-center rounded-lg bg-secondary text-primary"><AudioLines size={23} aria-hidden="true" /></span>
-          <h3>{greeting || "What are you pitching?"}</h3>
-          <p>Tell copitch what you’re presenting and what you want people to take away.</p>
-          <div className="mt-5 flex flex-wrap gap-2" aria-label="Example starting points">
-            {starterPrompts.map(({ label, message: draft }) => <Button key={label} type="button" variant="outline" size="sm" onClick={() => {
+          <div aria-hidden="true" className="chat-opening-glow" />
+          <span className="relative grid size-11 place-items-center rounded-lg bg-secondary text-primary"><AudioLines size={23} aria-hidden="true" /></span>
+          <h3 className="relative">{greeting || "What are you pitching?"}</h3>
+          <p className="relative">Tell copitch what you’re presenting and what you want people to take away, by voice or in the box below.</p>
+          <ul className="relative mt-6 grid w-full max-w-2xl gap-2.5 sm:grid-cols-2" aria-label="Example starting points">
+            {starterPrompts.map(({ label, detail, icon: Icon, message: draft }) => <li key={label}><button type="button" className="starter-card" onClick={() => {
               setMessage(draft);
               composer.current?.focus();
-            }}>{label}<ArrowUpRight size={13} aria-hidden="true" /></Button>)}
-          </div>
+            }}>
+              <span className="grid size-8 shrink-0 place-items-center rounded-md bg-secondary text-primary"><Icon size={16} aria-hidden="true" /></span>
+              <span className="min-w-0 text-left"><span className="block text-sm font-semibold">{label}</span><span className="block text-xs leading-snug text-muted-foreground">{detail}</span></span>
+              <ArrowUpRight size={14} className="ml-auto shrink-0 text-muted-foreground" aria-hidden="true" />
+            </button></li>)}
+            {session && <li><a className="starter-card" href={"/research?project=" + encodeURIComponent(session.session_id) + "&view=walkthrough"}>
+              <span className="grid size-8 shrink-0 place-items-center rounded-md bg-secondary text-primary"><Globe2 size={16} aria-hidden="true" /></span>
+              <span className="min-w-0 text-left"><span className="block text-sm font-semibold">Start from a website</span><span className="block text-xs leading-snug text-muted-foreground">Capture its pages and screenshots first</span></span>
+              <ArrowUpRight size={14} className="ml-auto shrink-0 text-muted-foreground" aria-hidden="true" />
+            </a></li>}
+          </ul>
         </div>}
         <div ref={turns} className={showingPresentation ? "contents" : "chat-turns"} role={showingPresentation ? undefined : "log"}
           aria-relevant={showingPresentation ? undefined : "additions"} aria-live={showingPresentation ? undefined : "polite"}
@@ -313,10 +401,12 @@ const Interview = ({ initial }: { initial: TResearchWorkspace }) => {
             </div>}
             {turn.role === "assistant" && workspace.activities?.filter(activity => activity.turn_id === turn.turn_id && activity.tool !== "ask_input").map((activity,i) =>
               <TurnExecution key={i} activity={activity} />)}
-            {index === stepIndex && researchStatus}
+            {turn.role === "assistant" && latestSlideChange?.turn_id === turn.turn_id && latestSlideChange?.deck_proposal &&
+              <ConversationSlideDiff initial={latestSlideChange.deck_proposal} getSession={service.getSession} />}
+            {index === stepIndex && (!mission || mission.research_job_id !== job?.job_id) && researchStatus}
           </Fragment>;})}
           {calls.filter(call => callIndex(call.started_at) === history.length).map(call => <SourceExecution key={call.call_id} call={call} />)}
-          {!history.length && researchStatus}
+          {!history.length && (!mission || mission.research_job_id !== job?.job_id) && researchStatus}
           {previewTurns.map(caption => <div key={caption.id} className={"chat-turn live-caption " + (caption.speaker === "host" ? "host" : "assistant")}
             data-recording={caption.speaker === "host" && !caption.final && voice.phase === "recording"} aria-live="off">
             <div className="turn-meta"><small>{caption.speaker === "host" ? "You" : "copitch"}</small>
@@ -325,16 +415,36 @@ const Interview = ({ initial }: { initial: TResearchWorkspace }) => {
           </div>)}
           {pending && !history.some(turn => turn.turn_id === pending.turn_id) && <div className="chat-turn host pending" aria-hidden="true"><small>You</small><p>{pending.message}</p></div>}
           {pending && <div className="chat-pending" role="status">copitch is replying<span aria-hidden="true">…</span></div>}
-          {proposal && <div ref={researchPlan} className="studio-jump-target" role="group" tabIndex={-1} aria-label="Review research plan">
+          {mission && <div ref={missionPanel} className="studio-jump-target" tabIndex={-1} aria-label="Presentation mission">
+            <MissionPanel key={mission.mission_id} mission={mission} sources={workspace.sources ?? brief?.sources ?? []}
+              error={missionError ?? undefined}
+              busy={missionService.change.isPending || !!pending || service.upload.isPending || service.applySources.isPending}
+              approvalBlocked={spokenPlan && changedScope}
+              onApprove={approveMission}
+              onRetry={() => {
+                if (mission.retry) changeMission({ action: "retry", revision: mission.contract.revision, retry_id: mission.retry.retry_id });
+              }}
+              onRevise={contract => changeMission({ action: "revise", revision: mission.contract.revision, contract })}
+              onStop={() => changeMission({ action: "stop", revision: mission.contract.revision })}
+              onTakeOver={() => changeMission({ action: "take-over", revision: mission.contract.revision })}
+              onReview={() => reviewMission(mission)} onReply={() => composer.current?.focus()} />
+          </div>}
+          {missionService.query.isError && <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground" role="alert">
+            Couldn’t refresh the presentation mission.
+            <Button size="sm" variant="outline" onClick={() => void missionService.query.refetch()}>Retry mission</Button>
+          </div>}
+          {proposal && mission === null && <div ref={researchPlan} className="studio-jump-target" role="group" tabIndex={-1} aria-label="Review research plan">
             <StudioQuestion proposal={proposal} filenames={(workspace.sources ?? brief?.sources ?? []).filter(source => savedIds.includes(source.source_id)).map(source => source.filename)}
               changed={changedScope} heard={!!workspace.state?.proposal_heard} busy={!!pending || service.upload.isPending || service.applySources.isPending}
               onChoose={(choice,label) => submit(label, choice)} />
           </div>}
           </>}
-          {result && <div ref={presentationPreparation} className="studio-jump-target" role={showingPresentation ? undefined : "group"} tabIndex={showingPresentation ? undefined : -1} aria-label={showingPresentation ? undefined : "Slide preparation"}>
-            <DeckWorkspace key={`${result.research_id}:${previewReset}`} researchId={result.research_id} getSession={service.getSession}
+          {presentationResearchId && <div ref={presentationPreparation} className="studio-jump-target" role={showingPresentation ? undefined : "group"} tabIndex={showingPresentation ? undefined : -1} aria-label={showingPresentation ? undefined : "Slide preparation"}>
+            <DeckWorkspace key={`${presentationResearchId}:${previewReset}:${missionPreview?.turn_id ?? ""}`} researchId={presentationResearchId} getSession={service.getSession}
               backToConversation={backToConversation} onPreviewReady={setPreviewResearchId}
-              researchAction={session && <ContextArtifact project={session.session_id} researchId={result.research_id} getSession={service.getSession} />} />
+              command={missionPreview ?? activeDeckCommand}
+              onAddContent={addDeckContent} initialCount={initialSlideCount}
+              researchAction={session && <ContextArtifact project={session.session_id} researchId={presentationResearchId} getSession={service.getSession} />} />
           </div>}
         </div>
       </div>
@@ -349,7 +459,7 @@ const Interview = ({ initial }: { initial: TResearchWorkspace }) => {
         <Button type="button" ref={applyButton} variant="outline" size="sm" disabled={running || !!pending || service.applySources.isPending || service.upload.isPending}
           onClick={applySources}>{service.applySources.isPending ? "Applying…" : "Apply sources"}</Button>
       </div>}
-      <StudioComposer inputRef={composer} message={message} setMessage={setMessage} sources={sources} urls={urls} materials={materials}
+      <StudioComposer inputRef={composer} filePickerRef={filePicker} message={message} setMessage={setMessage} sources={sources} urls={urls} materials={materials}
         policy={policy} setPolicy={setPolicy} canSend={canSend} sending={!!pending} uploading={service.upload.isPending}
         attachFiles={files => void attachFiles(files)} attachUrl={attachUrl} attachText={attachText} removeFile={id => selectSources(sources.filter(s => s.source_id !== id))}
         removeUrl={url => setUrls(urls.filter(item => item !== url))} removeText={() => setMaterials("")}

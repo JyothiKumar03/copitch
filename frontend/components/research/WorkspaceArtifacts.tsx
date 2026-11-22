@@ -10,14 +10,15 @@ type TWorkspaceArtifactsProps = {
   earlierResearch: TContextArtifactProps[];
   onPlan?: () => void;
   onActivity?: () => void;
+  onMission?: () => void;
   onPresentation?: () => void;
   expanded: boolean;
   onToggle: () => void;
 };
 
-export const WorkspaceArtifacts = ({ currentResearch, earlierResearch, onPlan, onActivity, onPresentation, expanded, onToggle }: TWorkspaceArtifactsProps) => {
+export const WorkspaceArtifacts = ({ currentResearch, earlierResearch, onPlan, onActivity, onMission, onPresentation, expanded, onToggle }: TWorkspaceArtifactsProps) => {
   const disclosure = useRef<HTMLButtonElement>(null);
-  const hasArtifacts = !!(onPlan || onActivity || currentResearch || onPresentation || earlierResearch.length);
+  const hasArtifacts = !!(onPlan || onActivity || onMission || currentResearch || onPresentation || earlierResearch.length);
   return <aside className="cockpit-artifacts" aria-label="Project artifacts" onKeyDown={event => {
     if (event.key === "Escape" && expanded && event.currentTarget.contains(event.target as Node)) {
       onToggle();
@@ -31,6 +32,7 @@ export const WorkspaceArtifacts = ({ currentResearch, earlierResearch, onPlan, o
       <h2 className="flex items-center gap-2 border-b border-border px-4 py-3 text-sm font-semibold"><FolderOpen size={16} aria-hidden="true" className="text-primary" /> Project artifacts</h2>
       <div className="grid gap-1 p-2.5">
         {onPlan && <Button type="button" variant="ghost" size="sm" className="justify-start px-2.5" onClick={onPlan}><ClipboardList size={16} aria-hidden="true" className="text-muted-foreground" />Research plan</Button>}
+        {onMission && <Button type="button" variant="ghost" size="sm" className="justify-start px-2.5" onClick={onMission}><Workflow size={16} aria-hidden="true" className="text-muted-foreground" />Mission</Button>}
         {onActivity && <Button type="button" variant="ghost" size="sm" className="justify-start px-2.5" onClick={onActivity}><Workflow size={16} aria-hidden="true" className="text-muted-foreground" />Research activity</Button>}
         {currentResearch && <ContextArtifact {...currentResearch} label="Saved research brief" variant="ghost" />}
         {onPresentation && <Button type="button" variant="ghost" size="sm" className="justify-start px-2.5" onClick={onPresentation}><Presentation size={16} aria-hidden="true" className="text-muted-foreground" />Presentation</Button>}

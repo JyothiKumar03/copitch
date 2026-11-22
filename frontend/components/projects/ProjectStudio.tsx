@@ -2,7 +2,9 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, ArrowUpRight, AudioLines, ChevronRight, FileText, FolderClosed, Globe2, LoaderCircle, LockKeyhole, LogOut, Plus, Presentation, Search, Upload } from "lucide-react";
+import { ArrowRight, AudioLines, ChevronRight, FileText, FolderClosed, Globe2, LoaderCircle, LockKeyhole, LogOut, Plus, Presentation, Search } from "lucide-react";
+import { NewProjectDialog, type TProjectStart } from "./NewProjectDialog";
+import { ProjectCard } from "./ProjectCard";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -125,11 +127,17 @@ export const ProjectStudio = ({ projectId, walkthrough = false }: { projectId?: 
     client.clear();
     window.location.replace("/research");
   });
-  const create = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const name = String(new FormData(event.currentTarget).get("name") ?? "");
-    void run(async () => window.location.assign(projectUrl((await addProject(name)).session_id)));
-  };
+  const create = (name: string, start: TProjectStart) => void run(async () => {
+    const created = await addProject(name);
+    window.location.assign(projectUrl(created.session_id) + (start === "website" ? "&view=walkthrough" : ""));
+  });
+  const importLegacy = legacy?.token ? () => void run(async () => {
+    const existing = await importPreviousProject({ session_id: legacy.session_id, token: legacy.token! });
+    window.location.assign(projectUrl(existing.session_id));
+  }) : undefined;
+  const newProject = (label = "New project", size: "default" | "lg" = "default") => <NewProjectDialog busy={busy} error={alert}
+    onCreate={create} onImport={importLegacy}
+    trigger={<Button size={size}><Plus aria-hidden="true" size={16} />{label}</Button>} />;
   const account = <div className="flex min-w-0 items-center justify-end gap-2 sm:gap-3">
     <span className="hidden min-w-0 truncate text-sm text-muted-foreground sm:inline" title={query.data.email}>{query.data.email}</span>
     <Button variant="ghost" size="sm" disabled={busy} onClick={logout}><LogOut aria-hidden="true" size={15} />Sign out</Button>
@@ -155,58 +163,43 @@ export const ProjectStudio = ({ projectId, walkthrough = false }: { projectId?: 
       : <Card><CardContent><p role="alert">This project is unavailable to your account.</p></CardContent></Card>}
   </>;
   const visibleProjects = query.data.projects.filter(item => item.name.toLocaleLowerCase().includes(projectFilter.trim().toLocaleLowerCase()));
-  return <div className="mx-auto max-w-7xl">
-    <header className="flex items-center justify-between gap-4 border-b border-border pb-5 pt-5 sm:pt-9">
+  const hasProjects = !!query.data.projects.length;
+  return <div className="mx-auto max-w-6xl pb-16">
+    <header className="flex flex-wrap items-end justify-between gap-x-6 gap-y-4 pb-6 pt-6 sm:pt-10">
       <div className="min-w-0">
-        <h1 className="text-4xl font-semibold tracking-[-.06em] sm:text-5xl">Projects</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Saved research and presentations</p>
+        <p className="text-xs font-semibold uppercase tracking-[.14em] text-primary">Your studio</p>
+        <h1 className="mt-2 text-4xl font-semibold tracking-[-.06em] sm:text-5xl">Projects</h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          {hasProjects ? `${query.data.projects.length} saved ${query.data.projects.length === 1 ? "project" : "projects"} · research, decks and rehearsals` : "Research, decks and rehearsals, kept private to you"}
+        </p>
       </div>
-      {account}
+      <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+        {account}
+        {hasProjects && newProject()}
+      </div>
     </header>
     {alert}
-    <div className="mt-6 grid min-w-0 items-start gap-7 lg:grid-cols-[minmax(0,1fr)_minmax(17rem,21rem)]">
-      <section aria-labelledby="saved-projects" className="order-2 min-w-0 lg:order-1">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2.5">
-          <h2 id="saved-projects" className="text-xl font-semibold tracking-tight">Your projects</h2>
-          {!!query.data.projects.length && <label className="relative min-w-0 flex-1 sm:max-w-60">
-            <span className="sr-only">Find a project</span>
-            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
-            <Input type="search" placeholder="Find a project" className="pl-9" value={projectFilter}
-              onChange={event => setProjectFilter(event.target.value)} />
-          </label>}
-        </div>
-        {visibleProjects.length ? <ul className="divide-y divide-border rounded-xl border border-border bg-card">{visibleProjects.map(item => (
-          <li key={item.session_id} className="min-w-0">
-            <a aria-label={item.name} className="group flex min-h-[4.7rem] items-center gap-3 rounded-md p-3 transition-colors hover:bg-accent focus-visible:outline-offset-[-3px] motion-reduce:transition-none sm:p-4" href={projectUrl(item.session_id)}>
-              <span className="grid size-9 shrink-0 place-items-center rounded-md bg-secondary text-primary"><FolderClosed aria-hidden="true" size={17} /></span>
-              <span className="min-w-0 flex-1 sm:flex sm:items-center sm:justify-between sm:gap-4">
-                <span className="block wrap-anywhere text-base font-semibold leading-tight">{item.name}</span>
-                <span className="mt-1 block shrink-0 text-xs text-muted-foreground sm:mt-0">{projectDate.format(item.created_at)}</span>
-              </span>
-              <ArrowUpRight aria-hidden="true" size={16} className="shrink-0 text-muted-foreground transition-transform group-hover:text-primary motion-safe:group-hover:translate-x-0.5" />
-            </a>
-          </li>
-        ))}</ul> : (
-          <p className="flex min-h-28 items-center gap-3 rounded-lg border border-dashed border-border p-5 text-sm text-muted-foreground">
-            <FolderClosed aria-hidden="true" className="size-5 shrink-0 text-primary" />
-            {query.data.projects.length ? "No projects match that name." : "Your saved projects will appear here."}
-          </p>
-        )}
-      </section>
-      <Card className="order-1 lg:order-2">
-        <CardHeader><h2 className="text-xl font-semibold tracking-tight">Start a project</h2></CardHeader>
-        <CardContent className="grid gap-4">
-          <form className="grid gap-2.5" onSubmit={create}>
-            <label htmlFor="project-name" className="text-sm font-semibold">Project name</label>
-            <Input id="project-name" name="name" placeholder="e.g. Product launch" required maxLength={100} />
-            <Button type="submit" disabled={busy}><Plus aria-hidden="true" size={16} /> New project</Button>
-          </form>
-          {legacy?.token && <Button variant="outline" className="whitespace-normal" disabled={busy} onClick={() => void run(async () => {
-            const existing = await importPreviousProject({ session_id: legacy.session_id, token: legacy.token! });
-            window.location.assign(projectUrl(existing.session_id));
-          })}><Upload aria-hidden="true" size={15} />Import this tab’s previous pitch</Button>}
-        </CardContent>
-      </Card>
-    </div>
+    {hasProjects ? <section aria-labelledby="saved-projects" className="mt-2 min-w-0">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-5">
+        <h2 id="saved-projects" className="text-sm font-semibold text-muted-foreground">All projects</h2>
+        <label className="relative min-w-0 flex-1 sm:max-w-64">
+          <span className="sr-only">Find a project</span>
+          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+          <Input type="search" placeholder="Find a project" className="pl-9" value={projectFilter}
+            onChange={event => setProjectFilter(event.target.value)} />
+        </label>
+      </div>
+      {visibleProjects.length ? <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{visibleProjects.map(item => <li key={item.session_id} className="min-w-0">
+        <ProjectCard name={item.name} href={projectUrl(item.session_id)} created={projectDate.format(item.created_at)} />
+      </li>)}</ul> : <p className="flex min-h-28 items-center gap-3 rounded-lg border border-dashed border-border p-5 text-sm text-muted-foreground">
+        <Search aria-hidden="true" className="size-5 shrink-0 text-primary" />No projects match “{projectFilter.trim()}”.
+      </p>}
+    </section> : <section className="relative mt-4 grid place-items-center overflow-hidden rounded-xl border border-border bg-card px-6 py-16 text-center sm:py-24">
+      <div aria-hidden="true" className="pointer-events-none absolute -top-32 left-1/2 size-96 -translate-x-1/2 rounded-full opacity-60 blur-3xl" style={{ background: "var(--hero-glow)" }} />
+      <span className="relative grid size-14 place-items-center rounded-xl bg-secondary text-primary"><Presentation size={26} aria-hidden="true" /></span>
+      <h2 className="relative mt-5 text-2xl font-semibold tracking-[-.04em] sm:text-3xl">Start your first presentation</h2>
+      <p className="relative mt-2 max-w-md text-sm leading-relaxed text-muted-foreground">Tell copitch what you’re presenting, or point it at a website. It researches, drafts the slides and rehearses with you.</p>
+      <div className="relative mt-7">{newProject("Create a project", "lg")}</div>
+    </section>}
   </div>;
 };

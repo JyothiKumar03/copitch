@@ -1,4 +1,6 @@
 import type { TInterviewLanguage } from "../../shared/languages";
+import type { TDeckCommandReceipt } from "../../shared/presentation";
+import type { TProposal } from "./deck";
 
 export type TResearchSession = { session_id: string; token?: string };
 export type TContextArtifactProps = { project: string; researchId: string; getSession: () => Promise<TResearchSession> };
@@ -61,7 +63,7 @@ export type TResearchJob = {
   activity?: TResearchActivity[];
   job_id: string;
   brief_id: string;
-  status: "queued" | "running" | "completed" | "failed" | "needs_input" | "superseded";
+  status: "queued" | "running" | "completed" | "failed" | "needs_input" | "superseded" | "stopped";
   completed_lookups: number;
   tool_steps?: number;
   research_passes?: number;
@@ -77,7 +79,7 @@ export type TInterviewMessage = { role: "host" | "assistant"; text: string; turn
 export type TUploadedSource = {
   source_id: string;
   filename: string;
-  kind: "pdf" | "ppt" | "pptx" | "csv";
+  kind: "pdf" | "ppt" | "pptx" | "csv" | "web" | "web_flow";
   locations: number;
 };
 
@@ -85,7 +87,7 @@ export type TResearchActivity = {
   sequence: number;
   kind: "queued" | "started" | "resumed" | "lookup_requested" | "search_completed" | "page_opened" |
     "lookup_failed" | "lookup_empty" | "sources_saved" | "draft_started" | "verification_started" | "verification_skipped" |
-    "verified" | "fallback" | "completed" | "failed" | "needs_input" | "superseded";
+    "verified" | "fallback" | "completed" | "failed" | "needs_input" | "superseded" | "stopped";
   label: string;
 };
 export type TInstrumentState = "ready" | "connecting" | "listening" | "recording" | "transcribing" | "thinking" | "replying" | "speaking" | "researching" | "complete";
@@ -124,4 +126,5 @@ export type TTurnInput = {
   materials?: string;
 };
 
-export type TTurnActivity = { turn_id: string; tool: string; status: string; result: string };
+export type TTurnActivity = { turn_id: string; tool: string; status: string; result: string;
+  deck_preparation?: TDeckCommandReceipt; deck_proposal?: TProposal };
