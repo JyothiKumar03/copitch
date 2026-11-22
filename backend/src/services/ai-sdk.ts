@@ -1,3 +1,4 @@
+import { metered_model } from "./mission-metering";
 import { createOpenAI } from "@ai-sdk/openai";
 import { APICallError, isStepCount, streamText, type LanguageModelUsage, type ToolSet } from "ai";
 import type { TAttempt, TModelCandidate, TModelProviders, TModelStep, TToolProviders } from "../types/ai";
@@ -42,7 +43,7 @@ export const create_model_step = (
       let result: Awaited<ReturnType<TModelStep>>;
       try {
         const response = streamText({
-          model: providers[candidate.provider](candidate.model),
+          model: metered_model(candidate, providers[candidate.provider](candidate.model)),
           instructions,
           messages,
           tools: select_tools(candidate, tool_providers),
