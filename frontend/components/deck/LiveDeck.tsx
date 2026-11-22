@@ -164,7 +164,8 @@ export const LiveDeck = ({ deck, runtime, refreshRevision, backToConversation }:
       else if (event.key.toLowerCase() === "f" && slide) void toggleFullscreen();
       else if (event.key.toLowerCase() === "m" && !talk.isActive()) toggleMic();
       else if (!stageLocked && !voicePress.current && (event.code === "Space" || event.code === "KeyB" && canStartTalk) &&
-        (event.code === "KeyB" || target === holdControl.current || !target?.closest("button, a, [role=button]"))) {
+        // In fullscreen, focus stays on the hidden Fullscreen button; Space must still pause or hold to talk, not press that button.
+        (event.code === "KeyB" || target === holdControl.current || !!document.fullscreenElement || !target?.closest("button, a, [role=button]"))) {
         const press: TVoicePress = { code: event.code, talking: false, release: holdPlayback.current?.() };
         voicePress.current = press;
         const begin = () => {

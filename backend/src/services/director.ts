@@ -382,7 +382,9 @@ export const advance_mission = (db: SessionStore, session: string, mission: TMis
     const failure = preparation.failure;
     if (failure?.reason_code === "provider_unavailable" || failure?.reason_code === "interrupted") return wait_for_host(mission,[mission_interruption("preparation")]);
     const supported = failure?.supported_slide_count ?? 0;
-    const question = supported ? `Would you like to review the ${supported} supported slides or add a source for the requested ${exact_count(mission)}?` :
+    // When every requested slide is supported, the stop is layout or review, not missing material.
+    const question = supported >= exact_count(mission) ? `All ${supported} slides are written, but slide review did not finish. Open the presentation to fix the flagged slides, or try a different slide count?` :
+      supported ? `Would you like to review the ${supported} supported slides or add a source for the requested ${exact_count(mission)}?` :
       failure?.reason_code === "insufficient_evidence" ? `Which source can you add for the missing material in the ${exact_count(mission)}-slide deck?` :
       "Would you like to review the saved research before trying slide preparation again?";
     return wait_for_host(mission,[question,...(failure?.gaps ?? []).filter(gap => !is_non_omission(gap)),failure?.message ?? preparation.error ?? "Slide preparation stopped."]);

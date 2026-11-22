@@ -27,7 +27,6 @@ type TMissionPanelProps = {
 };
 
 type TPlanRow = { label: string; values: string[] };
-const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 const planRows = (contract: TOutcomeContract, filenames: Map<string, string>): TPlanRow[] => {
   const { deliverable, sources, budget } = contract;
   return [
@@ -42,7 +41,7 @@ const planRows = (contract: TOutcomeContract, filenames: Map<string, string>): T
     { label: "Public links", values: sources.urls },
     { label: "Website tasks", values: sources.site_tasks.map(task => `${task.url} · ${task.goal} (${task.mode === "read" ? "read-only" : "interactive"})`) },
     { label: "Public search", values: [sources.public_search ? "Allowed" : "Off"] },
-    { label: "Budget", values: [`${usd.format(budget.usd)} USD · ${budget.minutes} minutes`] },
+    { label: "Time limit", values: [`${budget.minutes} minutes`] },
     { label: "Success checks", values: contract.success_checks },
   ];
 };
@@ -230,8 +229,6 @@ export const MissionPanel = ({ mission, sources, busy, approvalBlocked, error, o
     {mission.steps.length > 0 && <div className="grid gap-2 border-t border-border pt-3">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <h4 className="text-sm font-semibold">Activity</h4>
-        <p className="text-xs text-muted-foreground">{usd.format(mission.spent_usd)} used ·
-          {" "}{usd.format(Math.max(0, contract.budget.usd - mission.spent_usd - mission.reserved_usd))} available</p>
       </div>
       <ol className="grid gap-2 text-sm" aria-label="Mission activity">
         {mission.steps.map(step => <li key={step.sequence} className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-start gap-2 wrap-anywhere">
