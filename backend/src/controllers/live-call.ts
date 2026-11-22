@@ -8,6 +8,7 @@ import { live_session_setup } from "../services/live-session";
 import { configured_models_for } from "../services/model-config";
 import { apply_voice_action, record_voice_exchange } from "../services/studio-turn";
 import { research_worker } from "./research";
+import { deck_preparation_worker } from "./deck";
 
 type TActiveCall = { lease: string; finish: () => void; flush?: () => void };
 const calls = new Map<string, TActiveCall>();
@@ -63,13 +64,18 @@ export const connect_live = (fetch_worker: typeof fetch | ((url: string, options
     const services = {
       ensure_research: () => { if (!configured_models_for("research").length) throw new AppError(503, "Research is unavailable"); },
       wake: (job: string) => research_worker.wake(job),
+      wake_deck: () => deck_preparation_worker.wake(),
     };
     const interviewer = create_live_interviewer({
       caption_scope: lease,
       send: event => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(event)); },
       close: end,
       record: exchange => { record_voice_exchange(db, session, exchange); },
-      act: (message, action) => apply_voice_action(db, session, message, action, services),
+      act: (message, action, mission) => apply_voice_action(db, session, message, action, services, mission),
+      mission_version: () => {
+        const mission = db.missions.current(session);
+        return mission ? { mission_id: mission.mission_id, revision: mission.contract.revision } : undefined;
+      },
       heard: (proposal, turn) => { db.studio.hear_proposal(session, proposal, turn); },
     });
     // A host hangup commits the visible exchange before the browser refreshes conversation history.

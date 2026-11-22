@@ -1,11 +1,15 @@
 import type { Database } from "bun:sqlite";
 import { createHash, randomBytes } from "node:crypto";
 import { AppError } from "../errors/app-error";
-import type { TAudienceProjection } from "../types/audience";
+import type { TAudienceProjection, TAudienceSlide } from "../types/audience";
 import type { TDeck } from "../types/deck";
 
 const ttl_ms = 60 * 60 * 1000;
 const hash_token = (token: string) => createHash("sha256").update(token).digest("hex");
+const audience_slide = ({ slide_id, layout, title, highlights, chart, chart_period, template }: TAudienceSlide): TAudienceSlide => ({
+  slide_id, layout, title, highlights, chart_period, template,
+  ...(chart && { chart: { period: chart.period, rows: chart.rows.map(({ label, numerator, denominator }) => ({ label, numerator, denominator })) } }),
+});
 
 export class AudienceRepository {
   constructor(private db: Database) {
@@ -26,8 +30,7 @@ export class AudienceRepository {
     const slide = deck.slides[index];
     const projection: TAudienceProjection = {
       sequence: sequence + 1, revision: deck.revision, deck_title: deck.title, index, total: deck.slides.length,
-      slide: { slide_id, layout: slide.layout, title: slide.title, highlights: slide.highlights, evidence_ids: slide.evidence_ids,
-        chart: slide.chart, chart_period: slide.chart_period, template: slide.template },
+      slide: audience_slide(slide),
     };
     this.db.query("INSERT OR REPLACE INTO audience_stages VALUES(?,?,?,?)")
       .run(session, deck.deck_id, projection.sequence, JSON.stringify(projection));
@@ -60,6 +63,9 @@ export class AudienceRepository {
     const row = this.db.query<{payload:string}, [string,number]>(`
       SELECT s.payload FROM audience_tokens t JOIN audience_stages s ON s.session=t.session AND s.deck=t.deck
       WHERE t.hash=? AND t.expires>?`).get(hash_token(token), now);
-    if (row) return JSON.parse(row.payload) as TAudienceProjection;
+    if (row) {
+      const projection = JSON.parse(row.payload) as TAudienceProjection;
+      return { ...projection, slide: audience_slide(projection.slide) };
+    }
   }
 }

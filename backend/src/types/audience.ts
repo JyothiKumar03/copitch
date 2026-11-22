@@ -1,4 +1,8 @@
-import type { TSlide } from "./deck";
+import type { TConversionChart, TSlide } from "./deck";
+
+export type TAudienceSlide = Pick<TSlide, "slide_id" | "layout" | "title" | "highlights" | "chart_period" | "template"> & {
+  chart?: { period: TConversionChart["period"]; rows: Omit<TConversionChart["rows"][number], "evidence_id">[] };
+};
 
 export type TAudienceProjection = {
   sequence: number;
@@ -6,5 +10,5 @@ export type TAudienceProjection = {
   deck_title: string;
   index: number;
   total: number;
-  slide: Pick<TSlide, "slide_id" | "layout" | "title" | "highlights" | "evidence_ids" | "chart" | "chart_period" | "template">;
+  slide: TAudienceSlide;
 };

@@ -10,7 +10,8 @@ test("scoped audience links follow published releases only across windows, revis
   const host = await (await http.request("/api/sessions", { method: "POST" })).json();
   const deck: TDeck = { deck_id: crypto.randomUUID(), research_id: crypto.randomUUID(), revision: 1, title: "Public deck",
     slides: ["a", "b"].map(slide_id => ({
-      slide_id, title: slide_id, highlights: ["Public highlight"], layout: "headline", evidence_ids: ["M1"], narration: "SECRET NARRATION",
+      slide_id, title: slide_id, highlights: ["Public highlight"], layout: "headline", evidence_ids: ["M151"], narration: "SECRET NARRATION",
+      chart: { period: "2025", rows: [{ label: "Overall", numerator: 2, denominator: 10, evidence_id: "M151" }] },
     })) };
   database().decks.create(host.session_id, deck);
   const base = "/api/sessions/" + host.session_id + "/audience/";
@@ -25,7 +26,9 @@ test("scoped audience links follow published releases only across windows, revis
   expect(response.headers.get("Cache-Control")).toBe("no-store");
   const payload = await response.json();
   expect(payload).toEqual({ sequence: 1, revision: 1, deck_title: "Public deck", index: 0, total: 2,
-    slide: { slide_id: "a", layout: "headline", title: "a", highlights: ["Public highlight"], evidence_ids: ["M1"] } });
+    slide: { slide_id: "a", layout: "headline", title: "a", highlights: ["Public highlight"],
+      chart: { period: "2025", rows: [{ label: "Overall", numerator: 2, denominator: 10 }] } } });
+  expect(JSON.stringify(payload)).not.toContain("M151");
   expect((await post("publish", opened.token, { ...release, expected_sequence: 1 })).status).toBe(401);
   expect((await post("open", opened.token, release)).status).toBe(401);
   const second = await (await post("open", host.token, release)).json();

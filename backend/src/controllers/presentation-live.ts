@@ -1,23 +1,20 @@
+import { createHash } from "node:crypto";
 import type { Response } from "express";
 import { AppError } from "../errors/app-error";
 import { session_for } from "../middleware/host-session";
 import { presentation_snapshot } from "../repositories/presentation-live";
 import type { TPresentationRoute } from "../repositories/presentation-live";
 import { database } from "../repositories/store";
-import { live_edit_input, propose_slide } from "../services/deck";
-import { quotes } from "../services/excerpt";
 import { call_voice_worker } from "../services/interview-voice";
 import { check_live_answer, classify_live_turn, live_context } from "../services/live-turn";
 import { verify_presentation_claims } from "../services/presentation-grounding";
 import type { TPresentationClaim } from "../services/presentation-grounding";
-import { presentation_sentences } from "../services/presentation-live";
-import { template_supported } from "../services/presentation-planner";
-import { public_url } from "../services/research";
+import { numeric_tokens, prepare_presentation_edit, presentation_claim_evidence, presentation_edit_claims } from "../services/presentation-edit";
 import type { TApiRequest } from "../types/http";
 import type { TLiveDecision, TLiveModel, TLiveTurnContext } from "../types/live-turn";
-import { presentation_command, presentation_paint, presentation_start, presentation_turn } from "../types/presentation-live";
+import { presentation_command, presentation_microphone_offer, presentation_paint, presentation_start, presentation_turn } from "../types/presentation-live";
 import type { TPresentationPin, TPresentationState, TPresentationTurn } from "../types/presentation-live";
-import type { TEvidence, TResearchBundle } from "../types/research";
+import type { TResearchBundle } from "../types/research";
 
 const host = (req: TApiRequest, res: Response) => {
   res.set("Cache-Control", "private, no-store");
@@ -81,11 +78,41 @@ export const presentation_audio = (fetch_worker = fetch) => async (req: TApiRequ
   return res.type("audio/mpeg").send(Buffer.from(audio.bytes));
 };
 
-const clarify = (text: string): TPresentationRoute => ({ kind: "reply", reply: { kind: "clarify", text } });
-const numbers = (text: string) => [...text.matchAll(/(?<![\p{L}\p{N}])(?:\p{Sc})?\p{N}+(?:[.,]\p{N}+)*(?:%|[kKmMbB]\+?|\+)?/gu)].map(match => match[0].replace(/,/gu, "").toLowerCase());
-const numeric_tokens = (items: string[]) => new Set(items.flatMap(numbers));
-const same_words = (left: string, right: string) => quotes(left, right) && quotes(right, left);
+export const presentation_microphone = (fetch_worker = fetch) => {
+  const opening = new Set<string>();
+  return async (req: TApiRequest, res: Response) => {
+    const session = host(req, res);
+    const offer = presentation_microphone_offer.safeParse(req.body);
+    if (!offer.success) throw new AppError(400, "Invalid presentation microphone offer");
+    const deck_id = req.params.deck_id;
+    const store = database().presentations;
+    const verify_revision = () => {
+      const { state } = store.current(session, deck_id);
+      if (state.revision !== offer.data.revision || state.status === "completed") {
+        throw new AppError(409, "Open the current presentation before turning on the room microphone");
+      }
+    };
+    verify_revision();
+    if (opening.has(session)) throw new AppError(429, "The room microphone is already connecting");
+    const abort = new AbortController();
+    const disconnect = () => { if (!res.writableEnded) abort.abort(); };
+    opening.add(session);
+    res.once("close", disconnect);
+    try {
+      const safety_identifier = createHash("sha256").update(session).digest("hex");
+      const answer = await call_voice_worker("presentation-connect", "application/json",
+        JSON.stringify({ sdp: offer.data.sdp, safety_identifier }), fetch_worker, undefined, abort.signal);
+      if (answer.kind !== "sdp") throw new AppError(502, "Realtime microphone signaling was unavailable");
+      verify_revision();
+      return res.type("application/sdp").send(answer.sdp);
+    } finally {
+      res.off("close", disconnect);
+      opening.delete(session);
+    }
+  };
+};
 
+const clarify = (text: string): TPresentationRoute => ({ kind: "reply", reply: { kind: "clarify", text } });
 const route_turn = (turn: TPresentationTurn, pin: TPresentationPin, decision: TLiveDecision,
   context: TLiveTurnContext, research: TResearchBundle, has_independent_review: boolean): TPresentationRoute => {
   const checked = check_live_answer(decision, context);
@@ -107,62 +134,15 @@ const route_turn = (turn: TPresentationTurn, pin: TPresentationPin, decision: TL
     return { kind: "reply", reply: checked };
   }
   if (checked.kind !== "edit") return { kind: "reply", reply: checked };
-  const { slide, evidence } = context;
-  const support = checked.support ?? [];
-  const valid = support.length && support.every(ref => ref.excerpt.length <= 1500 &&
-    (ref.evidence_id === "host" ? quotes(turn.message, ref.excerpt) : evidence.some(row => row.id === ref.evidence_id && quotes(row.passage, ref.excerpt))));
-  if (!valid) return clarify("Which source or exact detail should I use for that change?");
-  const additions = checked.additions;
-  const requested = { ...checked.changes };
-  if (additions?.highlights?.length) {
-    const highlights = [...slide.highlights];
-    for (const highlight of additions.highlights) {
-      if (!highlights.some(existing => same_words(existing, highlight))) highlights.push(highlight);
-    }
-    if (highlights.length > 4) return clarify("This slide has room for four highlights. Which one should I replace?");
-    requested.highlights = highlights;
-  }
-  if (additions?.narration?.trim()) requested.narration = [slide.narration.trim(), additions.narration.trim()].join(" ");
-  const request = live_edit_input.safeParse({ base_revision: pin.revision, command_id: turn.turn_id, slide_id: pin.slide_id, changes: requested });
-  if (!request.success) return clarify("Which title, point or narration sentence should change?");
-  const { changes } = request.data;
-  if (changes.template && !template_supported(changes.template, support.map(ref => ({
-    id: ref.evidence_id, origin: "host", location: "Verified verbatim excerpt", passage: ref.excerpt,
-  })))) return clarify("Which source contains the labels and values for that visual?");
-  const speech = changes.narration ? presentation_sentences({ ...slide, narration: changes.narration }).map(sentence => sentence.text) : [];
-  const changed = [changes.title, ...(changes.highlights ?? []), ...speech].filter((value): value is string => Boolean(value));
-  if ((changes.narration && same_words(changes.narration, turn.message)) ||
-      changed.some(value => same_words(value, turn.message))) return clarify("What factual point should the audience see or hear?");
-  const known = numeric_tokens([slide.title, slide.narration, ...slide.highlights, ...support.map(item => item.excerpt)]);
-  if ([...numeric_tokens(changed)].some(value => !known.has(value))) return clarify("Can you confirm the exact number or its source?");
-  try { propose_slide(slide, changes); }
-  catch (error) {
-    if (error instanceof AppError && error.status === 400) return clarify(error.message);
-    throw error;
-  }
-  const used = new Set(support.map(ref => ref.evidence_id));
-  const sources = research.evidence.filter(row => used.has(row.id)).map(row => ({
-    id: row.id, origin: row.origin, location: row.origin === "public" ? row.location : "Host-provided source",
-    ...(row.origin === "public" && row.url && { url: public_url(row.url) }),
-  }));
-  return { kind: "edit", text: checked.text, request: request.data, attribution: support, sources };
+  const result = prepare_presentation_edit({ turn_id: turn.turn_id, base_revision: pin.revision, slide_id: pin.slide_id,
+    message: turn.message }, checked, context, research);
+  return result.kind === "edit" ? result : clarify(result.text);
 };
 
 const claims_for = (route: TPresentationRoute, context: TLiveTurnContext): TPresentationClaim[] => {
   if (route.kind === "reply" && route.reply.kind === "answer") return [{ text: route.reply.text, support: route.reply.citations ?? [] }];
   if (route.kind !== "edit") return [];
-  const { slide } = context;
-  const { changes } = route.request;
-  const old = [slide.title, ...slide.highlights, ...presentation_sentences(slide).map(sentence => sentence.text)];
-  const new_sentences = changes.narration ? presentation_sentences({ ...slide, narration: changes.narration }).map(sentence => sentence.text) : [];
-  const changed = [changes.title, ...(changes.highlights ?? []), ...new_sentences]
-    .filter((text): text is string => !!text && !old.some(prior => same_words(prior, text)));
-  const visual = changes.template;
-  if (visual && visual.type !== "title_card" && visual.type !== "bullet_slide" &&
-      JSON.stringify(visual) !== JSON.stringify(slide.template)) {
-    changed.push(JSON.stringify(visual));
-  }
-  return [...new Set(changed)].map(text => ({ text, support: route.attribution }));
+  return presentation_edit_claims(route, context);
 };
 
 export const presentation_turn_handler = (model: TLiveModel = classify_live_turn,
@@ -203,9 +183,7 @@ export const presentation_turn_handler = (model: TLiveModel = classify_live_turn
         if (!claims.length) return route;
         const latest = db.presentations.current(session, deck_id).state;
         if (latest.pin?.pin_id !== turn.pin_id || latest.pending_turn !== turn.turn_id) return route;
-        const ids = new Set(claims.flatMap(claim => claim.support.map(ref => ref.evidence_id)));
-        const evidence: TEvidence[] = research.evidence.filter(row => ids.has(row.id));
-        if (ids.has("host")) evidence.push({ id: "host", origin: "host", location: "Host statement in this turn", passage: turn.message });
+        const evidence = presentation_claim_evidence(claims, research, turn.message);
         return await verify(claims, evidence, signal, on_attempt) ? route : clarify("The available sources don’t verify that wording. Can you give an exact statement or source?");
       })
       .catch(error => {

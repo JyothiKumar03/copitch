@@ -21,6 +21,10 @@ export const presentation_command = z.strictObject({
   event_id: id, revision: z.number().int().positive(), generation: z.number().int().nonnegative(), action: presentation_action,
 });
 export const presentation_start = z.strictObject({ revision: z.number().int().positive(), approved: z.literal(true) });
+export const presentation_microphone_offer = z.strictObject({
+  revision: z.number().int().positive(),
+  sdp: z.string().max(65_536).refine(offer => /^v=0\r?\n/u.test(offer) && /^m=audio /mu.test(offer)),
+});
 export const presentation_paint = z.strictObject({ sequence: z.number().int().positive(), revision: z.number().int().positive(), slide_id: id });
 export const presentation_turn = z.strictObject({ turn_id: id, pin_id: id, message: z.string().trim().min(1).max(2000) });
 

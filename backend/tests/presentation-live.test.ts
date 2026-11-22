@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { create_api } from "../src/app";
-import { presentation_audio, presentation_turn_handler } from "../src/controllers/presentation-live";
+import { presentation_audio, presentation_microphone, presentation_turn_handler } from "../src/controllers/presentation-live";
 import { api_error } from "../src/middleware/api-error";
 import { stage_paint_lease_ms } from "../src/repositories/presentation-live";
 import { database } from "../src/repositories/store";
@@ -89,6 +89,73 @@ test("a reopened deck answers the pinned source question from private supplement
     citations: [{ evidence_id: id, excerpt }] } });
   expect(JSON.stringify(replied)).not.toContain(source_only);
   expect(db.research_by_id(session_id, research_id)?.evidence).toEqual([]);
+});
+
+test("the room microphone signs only a host's active deck revision and never publishes voice state", async () => {
+  process.env.AI_SESSION_DB = ":memory:";
+  const token_before = process.env.VOICE_WORKER_TOKEN;
+  process.env.VOICE_WORKER_TOKEN = "fixture-microphone-worker";
+  const sdp = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n";
+  const answer = "v=0\r\nm=audio 10100 UDP/TLS/RTP/SAVPF 111\r\n";
+  const pending = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let calls = 0;
+  const fixture = create_api();
+  fixture.use("/api", accounts, audience);
+  fixture.use("/api/sessions", create_deck_router(undefined, undefined, undefined, presentation_microphone(async (url, options) => {
+    expect(new URL(url).pathname).toBe("/presentation-connect");
+    expect(new Headers(options.headers).get("authorization")).toBe("Bearer fixture-microphone-worker");
+    expect(JSON.parse(String(options.body))).toEqual({ sdp, safety_identifier: expect.stringMatching(/^[a-f0-9]{64}$/u) });
+    if (++calls === 2) { pending.resolve(); await release.promise; }
+    return new Response(answer, { headers: { "Content-Type": "application/sdp", "X-Voice-Session": "internal-fixture-id" } });
+  })));
+  fixture.use(api_error);
+  await using http = await serve_api(fixture);
+  const post = (path: string, body: object, cookie?: string) => http.request(path, {
+    method: "POST", headers: { "Content-Type": "application/json", ...(cookie && { Cookie: cookie }) },
+    body: JSON.stringify(body),
+  });
+  const account = async () => (await post("/api/account/register", { email: `${crypto.randomUUID()}@example.test`,
+    password: crypto.randomUUID() })).headers.get("set-cookie")!.split(";", 1)[0];
+  try {
+    const owner = await account();
+    const guest = await account();
+    const { session_id } = await (await post("/api/projects", { name: "Microphone scope rehearsal" }, owner)).json();
+    const db = database();
+    const deck: TDeck = { deck_id: crypto.randomUUID(), research_id: crypto.randomUUID(), revision: 1, title: "Rehearsal", slides: [
+      { slide_id: "intro", layout: "headline", title: "Introduction", highlights: [], narration: "Welcome.", evidence_ids: [] },
+      { slide_id: "close", layout: "takeaway", title: "Wrap up", highlights: [], narration: "Thank you.", evidence_ids: [] },
+    ] };
+    db.decks.create(session_id, deck);
+    const path = `/api/sessions/${session_id}/decks/${deck.deck_id}/live`;
+    const offer = { revision: 1, sdp };
+    expect((await post(path + "/microphone", offer)).status).toBe(401);
+    expect((await post(path + "/microphone", offer, guest)).status).toBe(401);
+    expect((await post(path + "/microphone", offer, owner)).status).toBe(404);
+    expect((await post(path + "/start", { revision: 1, approved: true }, owner)).status).toBe(200);
+    expect((await post(path + "/microphone", { ...offer, revision: 2 }, owner)).status).toBe(409);
+    expect((await post(path + "/microphone", { ...offer, context: "private notes" }, owner)).status).toBe(400);
+    expect(calls).toBe(0);
+    const before = db.presentations.current(session_id, deck.deck_id).state;
+    const signed = await post(path + "/microphone", offer, owner);
+    expect(signed.status).toBe(200);
+    expect(signed.headers.get("cache-control")).toBe("private, no-store");
+    expect(signed.headers.get("x-voice-session")).toBeNull();
+    expect(await signed.text()).toBe(answer);
+    expect(db.presentations.current(session_id, deck.deck_id).state).toEqual(before);
+
+    const stale = post(path + "/microphone", offer, owner);
+    await pending.promise;
+    expect((await post(path + "/microphone", offer, owner)).status).toBe(429);
+    expect(db.decks.reorder(session_id, deck.deck_id, 1, ["close", "intro"]).revision).toBe(2);
+    release.resolve();
+    expect((await stale).status).toBe(409);
+    expect(calls).toBe(2);
+  } finally {
+    release.resolve();
+    if (token_before === undefined) delete process.env.VOICE_WORKER_TOKEN;
+    else process.env.VOICE_WORKER_TOKEN = token_before;
+  }
 });
 
 test("signed-in presentation fences stale speech, pins Q&A and publishes only approved edits before advancing", async () => {
