@@ -1,6 +1,9 @@
+import { commit_mission_result, with_mission_job } from "../services/mission-metering";
 import { AppError } from "../errors/app-error";
 import type { SessionStore } from "../repositories/session";
-import type { TDeckPreparationPhase } from "../../../shared/presentation";
+import type { TDeckPreparationFailure, TDeckPreparationPhase } from "../../../shared/presentation";
+import type { TSlide } from "../types/deck";
+import { DeckPreparationError } from "../services/deck-preparation-failure";
 import { prepare_reviewed_deck } from "../services/deck-render-review";
 import { PresentationCoverageError, select_presentation_evidence } from "../services/presentation-planner";
 import { decide_presentation_readiness } from "../services/presentation-readiness";
@@ -31,14 +34,16 @@ export class DeckPreparationWorker {
       };
       trace("started");
       const controller = new AbortController();
-      const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(330_000)]);
+      let signal = AbortSignal.any([controller.signal, AbortSignal.timeout(330_000)]);
       const refresh = setInterval(() => {
         try {
           if (signal.aborted || !jobs.renew(lease)) controller.abort();
         } catch { controller.abort(); }
       }, 5_000);
       refresh.unref();
+      let verified_slides: TSlide[] = [];
       try {
+        const meter = db.missions.mission_meter(lease.session_id, lease.job_id);
         const bundle = db.research_by_id(lease.session_id, lease.research_id);
         if (!bundle) throw new AppError(404, "The saved research is unavailable.");
         const original_ids = new Set(bundle.evidence.map(row => row.id));
@@ -54,7 +59,16 @@ export class DeckPreparationWorker {
         };
         const decide = async (evidence: typeof bundle) => {
           phase("checking_evidence");
-          return this.coverage_services.decide(evidence, count, signal);
+          try {
+            return await this.coverage_services.decide(evidence, count, signal);
+          } catch (error) {
+            signal.throwIfAborted();
+            if (!(error instanceof AppError) || error.status !== 503) throw error;
+            // The readiness check is advisory. When Decisions is unreachable, the exact-count planner,
+            // independent fact check and render review still decide whether the deck can be published.
+            trace("readiness_unavailable");
+            return { probability: 0, ready: true, gaps: [] };
+          }
         };
         const prepare = async (evidence: typeof bundle) => {
           phase("planning_slides");
@@ -67,10 +81,10 @@ export class DeckPreparationWorker {
           });
           return { deck, supplemental: evidence.evidence.filter(row => !original_ids.has(row.id)) };
         };
-        const evidence_error = (gaps: string[]) => new AppError(422, [
+        const evidence_error = (gaps: string[]) => new DeckPreparationError("insufficient_evidence", [
           `There isn’t enough evidence for ${count} slides yet. Add sources and run research again, or choose fewer slides.`,
           ...gaps.slice(0, 2),
-        ].join(" "));
+        ].join(" "), gaps);
         const recover = async (coverage: TPresentationResearchCheckpoint) => {
           if (bundle.confirmed_brief.source_policy !== "public_search") throw evidence_error(coverage.gaps);
           phase("researching_gaps");
@@ -97,16 +111,24 @@ export class DeckPreparationWorker {
             return await prepare(bundle);
           } catch (error) {
             if (!(error instanceof PresentationCoverageError)) throw error;
+            verified_slides = error.verified_slides;
             return recover({ gaps: error.gaps });
           }
         };
-        const { deck, supplemental } = await run();
+        const { deck, supplemental } = await with_mission_job(meter, scoped_signal => {
+          signal = scoped_signal;
+          return run();
+        }, signal);
         signal.throwIfAborted();
-        if (jobs.complete(lease, deck, Date.now(), supplemental)) trace("completed");
+        if (commit_mission_result(db.missions, meter, () => jobs.complete(lease, deck, Date.now(), supplemental))) trace("completed");
       } catch (error) {
         const reason = error instanceof AppError ? error.message : "Slide preparation was interrupted. Try again.";
         const status = error instanceof AppError ? error.status : 503;
-        if (jobs.fail(lease, reason, status)) trace("failed");
+        const detail = error instanceof DeckPreparationError ? error : undefined;
+        const failure: TDeckPreparationFailure = { reason_code: detail?.reason_code ?? (status === 503 ? "provider_unavailable" : "preparation_failed"),
+          message: reason, gaps: [...new Set(detail?.gaps ?? [])], supported_slide_count: 0 };
+        const partial = detail?.verified_slides ?? [];
+        if (jobs.fail(lease, failure, status, partial.length >= verified_slides.length ? partial : verified_slides)) trace("failed");
       } finally {
         clearInterval(refresh);
       }

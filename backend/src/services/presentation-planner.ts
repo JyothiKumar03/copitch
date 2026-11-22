@@ -1,7 +1,10 @@
+import { metered_model } from "./mission-metering";
+import { log_failure } from "../middleware/trace";
 import { createOpenAI } from "@ai-sdk/openai";
 import { generateText, Output } from "ai";
 import { z } from "zod";
 import { AppError } from "../errors/app-error";
+import { DeckPreparationError } from "./deck-preparation-failure";
 import type { TModelCandidate } from "../types/ai";
 import { MAX_PRESENTATION_SLIDES } from "../types/deck";
 import type { TDeck, TDeckLayoutIssue, TDeckLayoutRepair, TDeckPlanInput, TDeckSentence, TPresentationReadiness, TSlide, TSlideTemplate } from "../types/deck";
@@ -13,12 +16,36 @@ import { presentation_planner } from "./prompts";
 import { verify_draft } from "./research-grounding";
 import { research_provider } from "./research-provider";
 import { saved_research_graphs, unit_supported } from "./research-graphs";
+import { contains_draft_instruction, is_draft_instruction } from "./slide-content";
 
 const sentences = new Intl.Segmenter(undefined, { granularity: "sentence" });
 const internal_text = (text: string) => /^(?:\s*#+\s*)?(?:guardrails?|(?:system|developer) (?:message|prompt|instructions?)|speaker instructions?|(?:verification|formatting) instructions?)(?:\s*[:.\-–—]|\s*$)/imu.test(text) ||
-  /\b(?:the host (?:asked|requested|wants|instructed)|the (?:presentation|presenter|slides?|narration|speaker|answer|output|agent|model) (?:must|should|needs? to))\b/iu.test(text) ||
+  /\b(?:the host (?:asked|requested|wants|instructed)|the (?:presentation|presenter|deck|slides?|narration|speaker|answer|output|agent|model) (?:must|should|needs? to))\b/iu.test(text) ||
   /^(?:use only|do not (?:invent|include|reveal|repeat|follow)|ignore (?:any|all|previous|the above)|(?:respond|output|return) (?:only|as|in)|(?:treat|cite) (?:the )?(?:supplied|approved|provided|evidence))\b/imu.test(text);
+// A highlight is on-screen content for the audience. A subjectless note about what the slide does
+// ("Introduces the host by name", "Sets the tone for…") is the planner describing its own design.
+const slide_commentary = (text: string) =>
+  /^(?:(?:a strong|a memorable) (?:slide|opening|closing)|introduces|sets|adds|shows|highlights|gives|keeps|connects|signals|summari[sz]es|closes|leaves|focuses|frames|establishes|opens|wraps|reinforces|positions|explains|demonstrates|emphasi[sz]es|illustrates|previews|recaps|transitions|invites|ends)\b/iu.test(text.trim()) &&
+  !/\d/u.test(text);
+const title_words = (text: string) => text.normalize("NFKC").toLowerCase().match(/[\p{L}\p{N}\p{M}]+/gu)?.join(" ") ?? "";
+export const without_commentary = (beat: TPlanBeat): TPlanBeat => {
+  const content = beat.highlights.filter(text => !slide_commentary(text) && !is_draft_instruction(text));
+  const spoken_facts = beat.sentences.filter(sentence => !is_draft_instruction(sentence.text));
+  if (beat.template.type === "title_card") {
+    const title = ` ${title_words(beat.title)} `;
+    return { ...beat, sentences: spoken_facts, highlights: content.filter(text => {
+      const phrase = title_words(text);
+      return phrase && !title.includes(` ${phrase} `);
+    }) };
+  }
+  if (content.length === beat.highlights.length) return { ...beat, sentences: spoken_facts };
+  // If the bullets were commentary, use the beat's own spoken facts for a text slide.
+  const spoken = content.length ? [] : spoken_facts.filter(sentence => sentence.evidence_ids.length).map(sentence => sentence.text.trim())
+    .filter(text => text.length <= 110 && !slide_commentary(text)).slice(0, 3);
+  return { ...beat, highlights: [...content, ...spoken], sentences: spoken_facts };
+};
 const speakable = (text: string) => !internal_text(text) && !/<\/?[a-z][\w:-]*(?:\s[^<>]*)?\s*\/?>/iu.test(text);
+const audience_text = (text: string) => speakable(text) && !is_draft_instruction(text);
 const short_text = (limit: number) => z.string().trim().min(1).max(limit)
   .refine(speakable);
 const saved_graph_template = z.strictObject({ type: z.enum(["saved_graph"]), graph_id: z.string().min(1).max(16) });
@@ -94,15 +121,22 @@ type TPlanAttempt = {
 export type TVerifyPresentationPlan = (slides: TSlide[], evidence: TEvidence[], research_id: string, signal?: AbortSignal,
   options?: TPlanReviewOptions) => Promise<boolean | TPresentationPlanReview>;
 
-export class PresentationCoverageError extends AppError {
-  constructor(readonly requested: number, readonly verified: number, readonly gaps: string[], reason: string) {
-    super(422, [`Saved evidence supports ${verified} of ${requested} requested slides.`, reason, ...gaps].join(" "));
+export class PresentationCoverageError extends DeckPreparationError {
+  constructor(readonly requested: number, readonly verified: number, gaps: string[], partial: TSlide[] = []) {
+    super("insufficient_evidence", [`${verified} of ${requested} requested slides passed review.`,
+      `Add evidence for the remaining slides or choose a smaller deck.`, ...gaps.slice(0, 2)].join(" "), gaps, partial);
     this.name = "PresentationCoverageError";
   }
 }
 
 type TPresentationEvidence = Pick<TEvidence, "id" | "origin" | "passage" | "location" | "url">;
 const presentation_evidence_budget = 68_000;
+
+// Host statements the approved brief requires. Research rarely cites a personal fact, so the planner must see and cover it anyway.
+const required_host_note = (bundle: TResearchBundle) => {
+  const notes = (bundle.confirmed_brief.studio_notes ?? []).filter(note => speakable(note));
+  return (passage: string) => notes.some(note => quotes(passage, note) || quotes(note, passage));
+};
 
 export const select_presentation_evidence = (bundle: TResearchBundle): TPresentationEvidence[] => {
   const excerpts_by_id = new Map<string, Set<string>>();
@@ -120,14 +154,16 @@ export const select_presentation_evidence = (bundle: TResearchBundle): TPresenta
     }
   }
   const graph_ids = new Set(saved_research_graphs(bundle).flatMap(graph => graph.evidence_ids));
-  const linked = (id: string) => excerpts_by_id.has(id) || graph_ids.has(id);
+  const required = required_host_note(bundle);
+  const required_ids = new Set(bundle.evidence.filter(({ origin, passage }) => origin === "host" && required(passage)).map(({ id }) => id));
+  const linked = (id: string) => excerpts_by_id.has(id) || graph_ids.has(id) || required_ids.has(id);
   const ordered = [...bundle.evidence].sort((left, right) => Number(linked(right.id)) - Number(linked(left.id)));
   let remaining = presentation_evidence_budget;
   return ordered.flatMap(({ id, origin, location, url, passage }) => {
-    if (origin === "host" && !excerpts_by_id.has(id)) return [];
+    if (origin === "host" && !excerpts_by_id.has(id) && !required_ids.has(id)) return [];
     if (origin === "public" && bundle.confirmed_brief.source_policy === "files_only") return [];
     const supported_excerpt = [...(excerpts_by_id.get(id) ?? [])].join("\n\n");
-    const eligible_passage = origin !== "host" && speakable(passage) ? passage : supported_excerpt;
+    const eligible_passage = (origin !== "host" || required_ids.has(id)) && speakable(passage) ? passage : supported_excerpt;
     for (const candidate of new Set([eligible_passage, supported_excerpt])) {
       if (!candidate.trim()) continue;
       const record = { id, origin, location, url, passage: candidate };
@@ -224,6 +260,7 @@ const donut_supported = (template: Extract<TSlideTemplate, { points: unknown[] }
 };
 
 export const template_supported = (template: TSlideTemplate, records: TEvidence[]) => {
+  if (contains_draft_instruction(template)) return false;
   const groups = records.flatMap(record => excerpts(record.passage));
   const together = (...parts: string[]) => groups.some(group =>
     group.length <= 320 && parts.every(part => literal_text(group, part)));
@@ -271,7 +308,8 @@ const compile_beat = (beat: TBeatVisual, script: TDeckSentence[], narration: str
   };
 };
 
-const trace_plan = (research_id: string, outcome: string, counts?: { requested: number; generated: number; eligible: number; verified: number }) => {
+const trace_plan = (research_id: string, outcome: string,
+  counts?: { requested?: number; generated?: number; eligible?: number; verified?: number; missing?: string[]; feedback?: string[] }) => {
   if (process.env.TRACE_LOGS === "1") console.log(JSON.stringify({ operation: "presentation.plan_acceptance", research_id, outcome, ...counts }));
 };
 
@@ -349,7 +387,7 @@ export const presentation_plan_provider = (config: TModelCandidate, openai = cre
   let usage;
   try {
     const reply = await generateText({
-      model: openai.responses(config.model), maxOutputTokens: Math.min(config.max_output_tokens, 5200),
+      model: metered_model(config, openai.responses(config.model)), maxOutputTokens: Math.min(config.max_output_tokens, 5200),
       temperature: config.temperature, maxRetries: 0, abortSignal: bounded_signal(25_000, signal),
       providerOptions: { openai: { store: false } }, instructions: context.context_assessment
         ? presentation_planner + objective_planning_instructions : presentation_planner,
@@ -487,8 +525,8 @@ export const plan_verified_pitch = async (bundle: TResearchBundle, pitch: TDeckP
   };
   const approved_headings = new Map<string, string[]>();
   const sections = bundle.findings.sections.flatMap(section => {
-    if (!speakable(section.heading)) return [];
-    const paragraphs = section.paragraphs.filter(paragraph => speakable(paragraph.prose) &&
+    if (!audience_text(section.heading)) return [];
+    const paragraphs = section.paragraphs.filter(paragraph => audience_text(paragraph.prose) &&
       (settings || paragraph.support.length));
     return paragraphs.length ? [{ ...section, paragraphs }] : [];
   });
@@ -498,9 +536,11 @@ export const plan_verified_pitch = async (bundle: TResearchBundle, pitch: TDeckP
     approved_headings.set(section.heading, [...new Set(result.flatMap(item => item.evidence_ids))]);
     return result;
   });
-  const deck_title = speakable(bundle.findings.title) ? bundle.findings.title : "Research presentation";
+  const subject = bundle.confirmed_brief.intent?.subject?.trim();
+  const deck_title = subject && audience_text(subject) ? subject :
+    audience_text(bundle.findings.title) ? bundle.findings.title : "Research presentation";
   approved_headings.set(deck_title, [...cited_records]);
-  const saved_script = settings && bundle.pitch_script?.length ? bundle.pitch_script.filter(passage => speakable(passage.prose)) : undefined;
+  const saved_script = settings && bundle.pitch_script?.length ? bundle.pitch_script.filter(passage => audience_text(passage.prose)) : undefined;
   const script_available = !!saved_script?.length;
   const narration_basis = script_available && saved_script
     ? saved_script.map(passage => ({ ...passage, heading: findings.find(item => item.evidence_ids.some(id =>
@@ -533,12 +573,11 @@ export const plan_verified_pitch = async (bundle: TResearchBundle, pitch: TDeckP
   }) : select_presentation_evidence(bundle);
   const eligible = settings ? records : new Map(context_records.map(record => [record.id, record]));
   if (!settings && !eligible.size) {
-    throw new PresentationCoverageError(count, 0, ["Add a source that directly supports the presentation objective."],
-      "The saved research has no eligible evidence for this deck.");
+    throw new PresentationCoverageError(count, 0, ["No saved source supports the presentation objective yet."]);
   }
   const graphs = settings ? [] : saved_research_graphs(bundle).filter(({ graph, evidence_ids }) =>
-    evidence_ids.every(id => eligible.has(id)) && speakable(graph.name) &&
-    speakable(graph.description) && graph.data.every(point => speakable(point.label)));
+    evidence_ids.every(id => eligible.has(id)) && audience_text(graph.name) &&
+    audience_text(graph.description) && graph.data.every(point => audience_text(point.label)));
   const by_graph_id = new Map(graphs.map(item => [item.graph_id, item]));
   const evidence_numbers = new Map([...eligible].map(([id, entry]) => [id, numeric_tokens(entry.passage)]));
   const supported_numbers = (text: string, ids: string[]) => numeric_tokens(text).every(value =>
@@ -584,8 +623,10 @@ export const plan_verified_pitch = async (bundle: TResearchBundle, pitch: TDeckP
       feedback.push(`Slide "${title}" was flagged (${reason}).`);
     };
     const has_evidence = (id: string) => settings ? cited_records.has(id) : eligible.has(id);
-    for (const beat of beats) {
+    for (const planned of beats) {
+      const beat = without_commentary(planned);
       if (slides.length === candidate_limit) break;
+      if (!audience_text(beat.title) || !beat.sentences.length) { skip("draft_instruction_or_missing_spoken_content", beat.title); continue; }
       const title_key = beat.title.toLowerCase();
       if (titles.has(title_key)) { skip("duplicate_title", beat.title); continue; }
       if (!beat.evidence_ids.length || !beat.evidence_ids.every(has_evidence)) {
@@ -659,6 +700,11 @@ export const plan_verified_pitch = async (bundle: TResearchBundle, pitch: TDeckP
     } }),
     evidence: context_records,
   };
+  // Enforce required host facts as objective findings, so a count-only deck that omits one is not accepted.
+  const required = required_host_note(bundle);
+  const host_findings = settings ? [] : context_records.filter(({ origin, passage }) => origin === "host" && required(passage))
+    .map(({ id, passage }) => ({ finding: passage.slice(0, 240), evidence_ids: [id] }));
+  if (host_findings.length) context.objective_findings = [...host_findings, ...(context.objective_findings ?? [])].slice(0, 8);
   if (context.layout_repair && !context.layout_repair.issues.length) throw new AppError(422, "The layout report needs valid slide IDs.");
   const brief = bundle.confirmed_brief;
   const coverage_brief: TGroundingCoverageBrief | undefined = context.context_assessment?.objective && brief.intent ? {
@@ -712,27 +758,30 @@ export const plan_verified_pitch = async (bundle: TResearchBundle, pitch: TDeckP
         { requested: count, generated: beats.length, eligible: proposed.slides.length, verified: verified.length });
       const missing = uncovered_objectives(attempt.slides, attempt.objectives);
       if (missing.length) {
-        trace_plan(bundle.research_id, "objective_findings_missing");
+        // Local trace only: name what the plan still lacks so a failed deck can be diagnosed.
+        trace_plan(bundle.research_id, "objective_findings_missing", { missing: missing.map(({ finding }) => finding.slice(0, 200)),
+          verified: attempt.slides.length, feedback: attempt.feedback.slice(missing.length, missing.length + 4).map(item => item.slice(0, 200)) });
         attempt.feedback.unshift(...missing.map(({ finding }) => `Still needed for the presentation objective: ${finding}`));
       }
       if (verified.length < proposed.slides.length) attempt.rationale += " The deck retains the slides with checked content.";
       return attempt;
-    } catch {
+    } catch (error) {
       signal?.throwIfAborted();
+      log_failure("presentation.plan", error, { research_id: bundle.research_id });
       trace_plan(bundle.research_id, "proposal_failed");
       return { ...attempt, unavailable: true };
     }
   };
   const first = await propose(context);
   const verified_count = first.slides.length;
-  const missing_evidence = (attempt: TPlanAttempt, verified: number) => {
+  const missing_evidence = (attempt: TPlanAttempt, retained: TSlide[]) => {
     const assessment = attempt.assessment;
     if (attempt.unavailable || !assessment || assessment.status === "ready") return;
     const gaps = [...new Set(assessment.gaps)];
-    if (gaps.length) return new PresentationCoverageError(count, verified, gaps, assessment.reason);
+    if (gaps.length) return new PresentationCoverageError(count, retained.length, gaps, retained);
   };
   if (!settings && !layout_repair && first.assessment?.status === "insufficient") {
-    const coverage_failure = missing_evidence(first, verified_count);
+    const coverage_failure = missing_evidence(first, first.slides);
     if (coverage_failure) throw coverage_failure;
   }
   let repaired: TPlanAttempt | undefined;
@@ -791,14 +840,14 @@ export const plan_verified_pitch = async (bundle: TResearchBundle, pitch: TDeckP
     });
     if (layout_repair) throw new AppError(422, "The layout repair did not produce a verified candidate. Keep the previous draft.");
     if (added?.unavailable || repaired?.unavailable || first.unavailable && !repaired) {
-      throw new AppError(503, "Slide planning or fact-checking is unavailable. Try again shortly.");
+      throw new DeckPreparationError("provider_unavailable", "Slide planning or fact-checking is unavailable. Try again shortly.", [], selected.slides, 503);
     }
     const coverage_failure = [added, repaired, first].flatMap(attempt => attempt ?
-      missing_evidence(attempt, selected.slides.length) ?? [] : [])[0];
+      missing_evidence(attempt, selected.slides) ?? [] : [])[0];
     if (coverage_failure) throw coverage_failure;
-    if (unfulfilled.length) throw new AppError(422, "The reviewed slides did not cover every part of the presentation objective. Try generating the deck again.");
-    throw new AppError(422,
-      `Only ${selected.slides.length} of ${count} requested slides passed review. Try generating the deck again or choose fewer slides.`);
+    const message = unfulfilled.length ? "The reviewed slides did not cover every part of the presentation objective." :
+      `Only ${selected.slides.length} of ${count} requested slides passed review.`;
+    throw new DeckPreparationError("grounding_failed", message, unfulfilled.map(finding => finding.finding), selected.slides);
   }
   const selected_plan = selected.slides.length ? selected : undefined;
   let slides = selected_plan?.slides;
@@ -832,7 +881,7 @@ export const plan_verified_pitch = async (bundle: TResearchBundle, pitch: TDeckP
       const ids = [...new Set(group.flatMap(passage => passage.sentences.flatMap(sentence => sentence.evidence_ids)))];
       const candidates = settings ? (ids.length ? ids : [...cited_records]).flatMap(id => excerpts(records.get(id)!.passage)
         .map(text => ({ text, evidence_ids: [id] }))) : group.flatMap(passage => passage.sentences);
-      const visible = candidates.filter(item => short_text(110).safeParse(item.text).success).slice(0, 2);
+      const visible = candidates.filter(item => audience_text(item.text) && short_text(110).safeParse(item.text).success).slice(0, 2);
       const selected_heading = [...group.map(passage => passage.heading), deck_title].find(heading =>
         heading && !used_titles.has(heading.toLowerCase()) && short_text(72).safeParse(heading).success &&
         numeric_tokens(heading).every(value => (approved_headings.get(heading) ?? []).some(id =>
@@ -841,7 +890,7 @@ export const plan_verified_pitch = async (bundle: TResearchBundle, pitch: TDeckP
       used_titles.add(title.toLowerCase());
       const heading_ids = selected_heading ? approved_headings.get(selected_heading) ?? [] : [];
       return compile_beat({
-        title, highlights: visible.length ? visible.map(item => item.text) : [script_available ? "Approved talk track" : "Research findings"],
+        title, highlights: visible.map(item => item.text),
         evidence_ids: [...new Set([...heading_ids, ...visible.flatMap(item => item.evidence_ids)])],
         template: { type: index === 0 ? "title_card" : "bullet_slide" },
       }, group.flatMap(passage => passage.sentences), group.map(passage => passage.narration).join("\n\n"), index, groups.length);

@@ -1,3 +1,4 @@
+import { mission_meter_active } from "./mission-metering";
 import { z } from "zod";
 import { AppError } from "../errors/app-error";
 import type { TResearchBundle } from "../types/research";
@@ -29,6 +30,7 @@ export const decide_presentation_readiness = async (
   config = { key: process.env.OPENAI_API_KEY, base_url: process.env.OPENAI_BASE_URL },
   request: (url: string, init: RequestInit) => Promise<Response> = fetch,
 ): Promise<TPresentationReadinessDecision> => {
+  if (mission_meter_active()) throw new AppError(503, "The advisory readiness provider has no verified mission price.");
   if (!config.key?.trim()) throw new AppError(503, "OpenAI is unavailable for the slide evidence check. Try again when the provider is connected.");
   const url = (config.base_url?.trim() || "https://api.openai.com/v1").replace(/\/+$/u, "") + "/decisions";
   const signal = AbortSignal.any([parent, AbortSignal.timeout(12_000)]);

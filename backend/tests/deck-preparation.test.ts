@@ -13,6 +13,7 @@ import type { TDeck } from "../src/types/deck";
 import type { TEvidence, TResearchBrief, TResearchBundle } from "../src/types/research";
 import { DeckPreparationWorker } from "../src/workers/deck-preparation";
 import { AppError } from "../src/errors/app-error";
+import { DeckPreparationError } from "../src/services/deck-preparation-failure";
 import { decide_presentation_readiness } from "../src/services/presentation-readiness";
 import { serve_api } from "./helpers/serve-api";
 
@@ -32,6 +33,46 @@ const pitch = { slide_count: 2 };
 const variant = pitch_variant_key(pitch);
 const ready = { probability: 0.95, ready: true, gaps: [] };
 const no_research = async () => { throw new Error("This request must not perform gap research."); };
+
+test("a thin twelve-slide request keeps a private recoverable draft and never publishes blank slides", async () => {
+  const bundle = research();
+  const count = 12;
+  const gap = "What was the pilot completion rate in May 2026?";
+  const db = new SessionStore(":memory:");
+  db.replace_brief("owner", undefined, bundle.confirmed_brief);
+  db.save_research("owner", bundle);
+  const earlier = db.decks.create("owner", candidate(bundle.research_id, 1), pitch_variant_key({ slide_count: 1 }));
+  const checked = candidate(bundle.research_id).slides;
+  const worker = new DeckPreparationWorker(() => db, async (input, requested, _, lifecycle) => {
+    if (requested.slide_count === count) throw new DeckPreparationError("insufficient_evidence", "Two slides passed review.", [gap], checked);
+    lifecycle?.before_render();
+    return candidate(input.research_id);
+  }, { decide: async () => ready, research: no_research });
+  const failed = db.deck_preparations.enqueue("owner", bundle.research_id, pitch_variant_key({ slide_count: count }), count).job!;
+  await worker.tick();
+  const first = db.deck_preparations.get("owner", failed.job_id)!;
+  const id = first.failure!.partial_deck_id!;
+  expect(typeof id).toBe("string");
+  expect(first).toMatchObject({ status: "failed", failure: { reason_code: "insufficient_evidence", message: "Two slides passed review.",
+    supported_slide_count: 2, gaps: [gap], partial_deck_id: id } });
+  expect(first.deck).toBeUndefined();
+  expect(db.deck_preparations.latest_failure("owner", bundle.research_id)).toEqual(first.failure);
+  const draft = db.deck_preparations.draft("owner", id)!;
+  expect(draft.slides).toHaveLength(count);
+  expect(draft.slides.map(slide => slide.status)).toEqual(["verified", "verified", ...Array(10).fill("blank")]);
+  expect(db.deck_preparations.draft("someone-else", id)).toBeUndefined();
+  expect(db.decks.get("owner", id)).toBeUndefined();
+  expect(() => db.presentations.start("owner", id, 1)).toThrow();
+  const changed = db.deck_preparations.edit_draft("owner", id, 1, draft.slides[2].slide_id, { title: "My pending observation", highlights: [], narration: "" });
+  expect(changed).toMatchObject({ revision: 2, slides: expect.arrayContaining([expect.objectContaining({ status: "edited", evidence_ids: [] })]) });
+  expect(() => db.deck_preparations.edit_draft("owner", id, 1, draft.slides[2].slide_id, { title: "Stale", highlights: [], narration: "" })).toThrow("changed");
+  const reduced = db.deck_preparations.enqueue("owner", bundle.research_id, pitch_variant_key({ slide_count: 2 }), 2).job!;
+  await worker.tick();
+  expect(db.deck_preparations.get("owner", reduced.job_id)?.deck?.slides).toHaveLength(2);
+  expect(db.deck_preparations.latest_failure("owner", bundle.research_id)).toBeUndefined();
+  expect(db.decks.get("owner", earlier.deck_id, 1)).toEqual(earlier);
+  expect(db.deck_preparations.draft("owner", id)).toEqual(changed);
+});
 
 test("count-only preparation returns before the worker, deduplicates, and restores the exact saved result", async () => {
   process.env.AI_SESSION_DB = ":memory:";
@@ -169,7 +210,7 @@ test("Decisions routes a public coverage gap through research and rechecks befor
   expect(JSON.stringify(deck)).not.toContain(cited.passage);
 });
 
-test("files-only gaps and provider errors are retryable and a short deck cannot finish", async () => {
+test("files-only gaps are retryable, a readiness outage defers to the planner gates, and a short deck cannot finish", async () => {
   const db = new SessionStore(":memory:");
   const bundle = research();
   db.replace_brief("host", undefined, bundle.confirmed_brief);
@@ -191,7 +232,8 @@ test("files-only gaps and provider errors are retryable and a short deck cannot 
   expect(read(first.job_id)).toMatchObject({ status: "failed", error_status: 422, error: expect.stringContaining("Find comparable results") });
   const second = enqueue();
   await worker.tick();
-  expect(read(second.job_id)).toMatchObject({ status: "failed", error_status: 503, error: "Provider unavailable" });
+  // Decisions was unreachable: the job continued to planning, where the exact-count gate still rejected the short deck.
+  expect(read(second.job_id)).toMatchObject({ status: "failed", error_status: 422, error: expect.stringContaining("2 slides") });
   const third = enqueue();
   await worker.tick();
   expect(read(third.job_id)).toMatchObject({ status: "failed", error_status: 422, error: expect.stringContaining("2 slides") });

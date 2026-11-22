@@ -289,7 +289,8 @@ test("count-only planning uses saved findings and exact archived chart values", 
     expect(context.speaking_seconds).toBeUndefined();
     expect(context.brief).toBeUndefined();
     expect(context.talk_track).toBeUndefined();
-    expect(context.context_assessment).toMatchObject({ title: saved.findings.title, objective: "Know who led the pilots" });
+    expect(context.context_assessment).toMatchObject({ title: "Jordan", objective: "Know who led the pilots" });
+    expect(context.headings).toContain("Jordan");
     expect(context.available_graphs).toEqual([{ graph_id: "graph-1", graph, evidence_ids: ["P1"] }]);
     return { readiness: ready, rationale: "Open with the counts, then introduce the lead.", beats: [
       { title: "Pilot counts", highlights: [], evidence_ids: ["P1"], sentences: [spoken("Both teams ran more than forty pilots.", "P1")],
@@ -299,6 +300,7 @@ test("count-only planning uses saved findings and exact archived chart values", 
     ] };
   }, verified);
   expect(deck.slides).toHaveLength(2);
+  expect(deck.title).toBe("Jordan");
   expect(deck.slides[0]).toMatchObject({ highlights: [], chart_period: "2025", narration: "Both teams ran more than forty pilots.",
     template: { type: "bar_chart", unit: "pilots", points: [{ label: "Alpha", value: 42 }, { label: "Beta", value: 51 }] } });
   expect(deck.pitch?.audience).toBe("");
@@ -343,6 +345,21 @@ test("count-only planning omits procedural context and rejects procedural narrat
     ] };
   }, async () => { checks++; return true; })).rejects.toThrow("Only 0 of 3 requested slides passed review");
   expect(checks).toBe(0);
+});
+
+test("audience slides replace missing-content directions with a checked factual sentence", async () => {
+  const draft_instruction = "Add one more source for this section.";
+  const plan: TPlanPresentation = async () => ({ readiness: ready, rationale: "Introduce the pilot lead.", beats: [{
+    title: "Jordan led onboarding", highlights: [draft_instruction, "[Insert a result]"], evidence_ids: ["P2"],
+    sentences: [spoken(draft_instruction), spoken(leadership, "P2")], template: { type: "bullet_slide" },
+  }] });
+  const deck = await prepare_pitch(saved, { slide_count: 1 }, plan, async (slides, evidence) => {
+    expect(slides[0]).toMatchObject({ highlights: [leadership], narration: leadership });
+    expect(evidence.some(record => record.id === "P2" && record.passage === leadership)).toBe(true);
+    return true;
+  });
+  expect(deck.slides).toHaveLength(1);
+  expect(JSON.stringify(deck.slides)).not.toContain(draft_instruction);
 });
 
 const three_distinct_beats = [
