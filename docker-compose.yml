@@ -14,6 +14,8 @@ services:
       PORT: 3001
       CORS_ORIGIN: http://localhost:3000
       DECK_RENDER_ORIGIN: http://web:3000
+      MISSION_BUDGET_USD: ${MISSION_BUDGET_USD:-5}
+      SITE_RUN_BUDGET_USD: ${SITE_RUN_BUDGET_USD:-5}
     volumes:
       - session-data:/data
     healthcheck:

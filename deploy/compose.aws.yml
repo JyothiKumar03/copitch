@@ -2,10 +2,14 @@ services:
   api:
     ports: !reset []
     restart: unless-stopped
+    # Chromium (website capture, site agent, slide render check) needs more than Docker's 64 MB /dev/shm.
+    shm_size: "2gb"
     environment:
       CORS_ORIGIN: https://${PUBLIC_HOST:?Set PUBLIC_HOST}
       TRACE_LOGS: "1"
       COPITCH_TRUST_GATEWAY: "1"
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      SITE_AGENT_ALLOW_PRIVATE: "0"
     volumes:
       - ${SESSION_DATA_DIR:?Set SESSION_DATA_DIR on mounted EBS}:/data
   voice:
