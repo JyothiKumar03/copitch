@@ -45,6 +45,13 @@ export const loadWalkthrough = async (projectId: string, id: string, signal: Abo
 export const approveWalkthrough = async (projectId: string, input: TWebsiteWalkthroughInput) =>
   readWalkthrough(await (await request(walkthroughPath(projectId), { session_id: projectId }, input)).json());
 
+// Save the captured pages as a project source and add it to the studio scope, then return to the conversation.
+export const addWalkthroughToProject = async (projectId: string, id: string) => {
+  const body = await (await request(`${walkthroughPath(projectId, id)}/source`, { session_id: projectId }, {})).json();
+  if (typeof body?.source_id !== "string") throw new Error("The walkthrough could not be added to the project.");
+  return body.source_id as string;
+};
+
 export const downloadWalkthrough = async (projectId: string, id: string) => {
   const response = await request(`${walkthroughPath(projectId, id)}/powerpoint`, { session_id: projectId });
   const objectUrl = URL.createObjectURL(await response.blob());

@@ -1,26 +1,34 @@
 "use client";
 
 import Image from "next/image";
+import { useRouter } from "next/navigation";
 import { useRef, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowDownToLine, ArrowRight, ArrowUpRight, Check, CircleAlert, Globe2, Image as ImageIcon, LoaderCircle, Plus } from "lucide-react";
+import { ArrowRight, Presentation, ArrowUpRight, Camera, Check, CircleAlert, Globe2, Image as ImageIcon, LoaderCircle, Plus, Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
-import { approveWalkthrough, captureImage, downloadWalkthrough, listWalkthroughs, loadWalkthrough } from "@/lib/website-walkthrough";
+import { approveWalkthrough, captureImage, downloadWalkthrough, listWalkthroughs, loadWalkthrough, addWalkthroughToProject } from "@/lib/website-walkthrough";
 import { DEFAULT_WEBSITE_WALKTHROUGH_DEPTH, MAX_WEBSITE_WALKTHROUGH_PAGES, WEBSITE_WALKTHROUGH_DEPTHS } from "../../../shared/website-walkthrough";
 import type { TWebsiteWalkthrough, TWebsiteWalkthroughInput } from "../../../shared/website-walkthrough";
+import { PowerPointSelection } from "./PowerPointSelection";
+import { SiteRun } from "./SiteRun";
 
 type TWalkthroughDraft = Pick<TWebsiteWalkthroughInput, "url" | "audience" | "goal" | "max_depth">;
 const blank: TWalkthroughDraft = { url: "", audience: "", goal: "", max_depth: DEFAULT_WEBSITE_WALKTHROUGH_DEPTH };
 const depthOptions = { 0: "Starting page only", 1: "One level of links", 2: "Two levels of links", 3: "Three levels of links" };
+const depthShort = { 0: "This page", 1: "1 level", 2: "2 levels", 3: "3 levels" };
+const walkthroughSteps = [
+  { icon: Search, title: "Capture", detail: MAX_WEBSITE_WALKTHROUGH_PAGES + " pages, screenshotted" },
+  { icon: ImageIcon, title: "Review", detail: "Check every page and fact" },
+  { icon: Presentation, title: "Present", detail: "Turn them into a cited deck" },
+];
 const depthLabel = (value: number) => depthOptions[WEBSITE_WALKTHROUGH_DEPTHS.find(depth => depth === value) ?? DEFAULT_WEBSITE_WALKTHROUGH_DEPTH];
 const dateLabel = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 const statusLabel: Record<TWebsiteWalkthrough["status"], string> = {
-  queued: "Capture queued", capturing: "Capturing pages", exporting: "Building PowerPoint", completed: "PowerPoint ready", failed: "Walkthrough stopped",
+  queued: "Capture queued", capturing: "Capturing pages", exporting: "Preparing pages", completed: "Pages ready", failed: "Walkthrough stopped",
 };
 const inProgress = (status?: TWebsiteWalkthrough["status"]) => status === "queued" || status === "capturing" || status === "exporting";
 
@@ -29,7 +37,9 @@ const displaySite = (url: string) => {
 };
 
 const scopeUrl = (value: string) => {
-  const url = new URL(value.trim());
+  const text = value.trim();
+  // Accept a bare domain such as "jk-ai.in" by assuming HTTPS.
+  const url = new URL(/^[a-z][a-z\d+.-]*:\/\//iu.test(text) ? text : "https://" + text);
   if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new Error("Enter a public HTTP or HTTPS URL.");
   url.hash = "";
   return url.href;
@@ -44,7 +54,15 @@ const ScopeFields = ({ scope }: { scope: TWalkthroughDraft }) => (
 );
 
 const WalkthroughResult = ({ projectId, item }: { projectId: string; item: TWebsiteWalkthrough }) => {
-  const download = useMutation({ mutationFn: () => downloadWalkthrough(projectId, item.walkthrough_id) });
+  const router = useRouter();
+  const client = useQueryClient();
+  const present = useMutation({
+    mutationFn: () => addWalkthroughToProject(projectId, item.walkthrough_id),
+    onSuccess: async () => {
+      await client.invalidateQueries({ queryKey: ["host-workspace", projectId] });
+      router.push(`/research?project=${encodeURIComponent(projectId)}`);
+    },
+  });
   const active = inProgress(item.status);
   const gapCount = item.attempts.filter(attempt => attempt.status === "failed").length;
   return <div className="grid min-w-0 gap-4">
@@ -58,16 +76,21 @@ const WalkthroughResult = ({ projectId, item }: { projectId: string; item: TWebs
           </p>
           <h2 className="mt-1 wrap-anywhere text-2xl font-semibold tracking-[-.045em]">{displaySite(item.url)}</h2>
         </div>
-        {item.status === "completed" && <Button type="button" disabled={download.isPending} onClick={() => download.mutate()}>
-          <ArrowDownToLine size={16} aria-hidden="true" />{download.isPending ? "Downloading…" : "Download PowerPoint"}
-        </Button>}
+        {item.status === "completed" && <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" disabled={present.isPending || !item.pages.length} onClick={() => present.mutate()}>
+            <Presentation size={16} aria-hidden="true" />{present.isPending ? "Adding pages…" : "Use all pages in presenter studio"}
+          </Button>
+        </div>}
       </CardHeader>
       <CardContent className="grid gap-3">
         <ScopeFields scope={item} />
         {item.error && <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{item.error}</p>}
-        {download.error && <p role="alert" className="text-sm text-destructive">{download.error.message}</p>}
+        {present.error && <p role="alert" className="text-sm text-destructive">{present.error.message}</p>}
       </CardContent>
     </Card>
+    {item.status === "completed" && !!item.pages.length && <PowerPointSelection projectId={projectId}
+      source={{ kind: "website-walkthroughs", captureId: item.walkthrough_id }} imageUrl={pageNumber => captureImage(projectId, item.walkthrough_id, pageNumber)}
+      downloadArchived={() => downloadWalkthrough(projectId, item.walkthrough_id)} />}
     {!!item.pages.length && <section aria-labelledby="walkthrough-pages" className="min-w-0">
       <div className="mb-3 flex items-baseline gap-2"><h2 id="walkthrough-pages" className="text-xl font-semibold tracking-tight">Captured pages</h2><span className="text-sm tabular-nums text-muted-foreground">{item.pages.length}</span></div>
       <div className="grid min-w-0 gap-3 sm:grid-cols-2">
@@ -110,7 +133,7 @@ const WalkthroughResult = ({ projectId, item }: { projectId: string; item: TWebs
   </div>;
 };
 
-export const WebsiteWalkthrough = ({ projectId }: { projectId: string }) => {
+const PageCapture = ({ projectId }: { projectId: string }) => {
   const client = useQueryClient();
   const listKey = ["website-walkthroughs", projectId];
   const [selectedId, setSelectedId] = useState<string>();
@@ -157,12 +180,12 @@ export const WebsiteWalkthrough = ({ projectId }: { projectId: string }) => {
   return <section aria-labelledby="website-walkthrough-title" className="mx-auto grid max-w-7xl min-w-0 gap-5 pb-8 pt-3">
     <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-4">
       <div><h2 id="website-walkthrough-title" className="flex items-center gap-2 text-2xl font-semibold tracking-[-.04em] sm:text-3xl"><Globe2 size={23} className="text-primary" aria-hidden="true" />Website walkthrough</h2>
-        <p className="mt-1 text-sm text-muted-foreground">Turn pages from a public website into a PowerPoint for your audience.</p></div>
+        <p className="mt-1 text-sm text-muted-foreground">Capture a public website, then turn its pages and screenshots into a cited presenter deck.</p></div>
       {!showForm && <Button type="button" variant="outline" disabled={inProgress(current.data?.status)} onClick={() => { setCreating(true); setApproval(null); start.reset(); focusInput(); }}><Plus size={16} aria-hidden="true" />New walkthrough</Button>}
     </header>
     {saved.error && <p role="alert" className="flex flex-wrap items-center gap-3 text-sm text-destructive">{saved.error.message}<Button size="sm" variant="outline" onClick={() => void saved.refetch()}>Retry</Button></p>}
-    <div className="grid min-w-0 items-start gap-4 lg:grid-cols-[minmax(12rem,16rem)_minmax(0,1fr)]">
-      <Card className="order-2 lg:order-1" aria-label="Saved walkthroughs">
+    <div className={"grid min-w-0 items-start gap-4 " + (saved.data?.length ? "lg:grid-cols-[minmax(12rem,16rem)_minmax(0,1fr)]" : "")}>
+      {!!saved.data?.length && <Card className="order-2 lg:order-1" aria-label="Saved walkthroughs">
         <CardHeader className="px-4 pt-4"><h3 className="flex items-center gap-2 text-sm font-semibold"><ImageIcon size={16} className="text-muted-foreground" aria-hidden="true" />Saved walkthroughs</h3></CardHeader>
         <CardContent className="p-2.5">
           {saved.data?.length ? <ul className="grid min-w-0 gap-1">{saved.data.map(item => <li key={item.walkthrough_id}>
@@ -171,15 +194,25 @@ export const WebsiteWalkthrough = ({ projectId }: { projectId: string }) => {
               <span className="wrap-anywhere">{displaySite(item.url)}</span><span className="text-xs font-normal text-muted-foreground">{dateLabel.format(item.created_at)}</span>
               <span className="text-xs text-muted-foreground">{statusLabel[current.data?.walkthrough_id === item.walkthrough_id ? current.data.status : item.status]}</span>
             </Button>
-          </li>)}</ul> : <p className="px-1.5 py-2 text-sm text-muted-foreground">{saved.isPending ? "Opening saved walkthroughs…" : "No walkthroughs yet."}</p>}
+          </li>)}</ul> : null}
         </CardContent>
-      </Card>
-      <div className="order-1 min-w-0 lg:order-2">
-        {showForm ? <Card>
-          <CardHeader>
-            {approval ? <><Badge variant="outline" className="text-evidence">Approval required</Badge><h3 ref={approvalHeading} tabIndex={-1} className="text-xl font-semibold">Review capture scope</h3></> : <h3 className="text-xl font-semibold">Set the walkthrough scope</h3>}
-          </CardHeader>
-          <CardContent>
+      </Card>}
+      <div className={"order-1 min-w-0 lg:order-2 " + (saved.data?.length ? "" : "mx-auto w-full max-w-3xl")}>
+        {showForm ? <Card className="overflow-hidden rounded-xl">
+          <div className="relative overflow-hidden border-b border-border px-5 pb-5 pt-6 sm:px-7">
+            <div aria-hidden="true" className="pointer-events-none absolute -right-20 -top-28 size-72 rounded-full opacity-70 blur-3xl" style={{ background: "var(--hero-glow)" }} />
+            <div className="relative">
+              {approval ? <><Badge variant="outline" className="text-evidence">Approval required</Badge><h3 ref={approvalHeading} tabIndex={-1} className="mt-2 text-2xl font-semibold tracking-[-.04em]">Review capture scope</h3></>
+                : <><p className="text-xs font-semibold uppercase tracking-[.14em] text-primary">New walkthrough</p><h3 className="mt-2 text-2xl font-semibold tracking-[-.04em]">Which website should we present?</h3></>}
+              <ol className="mt-5 grid gap-2 sm:grid-cols-3" aria-label="How a walkthrough works">
+                {walkthroughSteps.map(({ icon: Icon, title, detail }, index) => <li key={title} className="flex items-start gap-2.5 rounded-lg border border-border bg-background/50 p-3">
+                  <span className="grid size-8 shrink-0 place-items-center rounded-md bg-secondary text-primary"><Icon size={15} aria-hidden="true" /></span>
+                  <span className="min-w-0"><span className="block text-sm font-semibold">{index + 1}. {title}</span><span className="block text-xs leading-snug text-muted-foreground">{detail}</span></span>
+                </li>)}
+              </ol>
+            </div>
+          </div>
+          <CardContent className="px-5 py-6 sm:px-7">
             {approval ? <div className="grid gap-4">
               <ScopeFields scope={approval} />
               <p className="text-sm text-muted-foreground">Copitch will capture up to {MAX_WEBSITE_WALKTHROUGH_PAGES} pages on this website and save the screenshots in this project.</p>
@@ -188,20 +221,31 @@ export const WebsiteWalkthrough = ({ projectId }: { projectId: string }) => {
                 <Button type="button" disabled={start.isPending} onClick={() => start.mutate(approval)}>{start.isPending ? "Starting…" : "Approve and capture"}<ArrowRight size={16} aria-hidden="true" /></Button>
                 <Button type="button" variant="outline" disabled={start.isPending} onClick={() => { setApproval(null); start.reset(); focusInput(); }}>Edit scope</Button>
               </div>
-            </div> : <form onSubmit={review} className="grid gap-4">
-              <label className="grid gap-1.5 text-sm font-semibold">Public website URL<Input ref={siteInput} type="url" inputMode="url" value={form.url} onChange={event => change("url", event.target.value)} maxLength={2048} required placeholder="https://" /></label>
-              <label className="grid gap-1.5 text-sm font-semibold">Audience<Input value={form.audience} onChange={event => change("audience", event.target.value)} maxLength={180} required placeholder="e.g. New customers" /></label>
-              <label className="grid gap-1.5 text-sm font-semibold">Presentation goal<Textarea rows={3} value={form.goal} onChange={event => change("goal", event.target.value)} maxLength={600} required placeholder="What should the audience learn or decide?" /></label>
-              <label className="grid gap-1.5 text-sm font-semibold">Crawl depth
-                <NativeSelect className="min-h-11" value={form.max_depth} onChange={event => {
-                  const depth = WEBSITE_WALKTHROUGH_DEPTHS.find(value => String(value) === event.target.value);
-                  if (depth !== undefined) change("max_depth", depth);
-                }}>
-                  {WEBSITE_WALKTHROUGH_DEPTHS.map(depth => <NativeSelectOption key={depth} value={depth}>{depth} · {depthOptions[depth]}</NativeSelectOption>)}
-                </NativeSelect>
+            </div> : <form onSubmit={review} className="grid gap-5">
+              <label className="grid gap-2 text-sm font-semibold">Public website
+                <span className="relative">
+                  <Globe2 size={18} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-primary" aria-hidden="true" />
+                  <Input ref={siteInput} type="text" inputMode="url" autoComplete="url" spellCheck={false} value={form.url} onChange={event => change("url", event.target.value)} maxLength={2048} required placeholder="yourcompany.com"
+                    className="h-13 pl-11 text-base" />
+                </span>
               </label>
+              <div className="grid gap-5 sm:grid-cols-2">
+                <label className="grid content-start gap-2 text-sm font-semibold">Audience<Input value={form.audience} onChange={event => change("audience", event.target.value)} maxLength={180} required placeholder="e.g. Hiring managers" /></label>
+                <label className="grid content-start gap-2 text-sm font-semibold">Presentation goal<Textarea rows={2} value={form.goal} onChange={event => change("goal", event.target.value)} maxLength={600} required placeholder="What should they learn or decide?" /></label>
+              </div>
+              <fieldset className="grid gap-2">
+                <legend className="mb-2 text-sm font-semibold">How far to follow links</legend>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  {WEBSITE_WALKTHROUGH_DEPTHS.map(depth => <label key={depth} title={depthOptions[depth]}
+                    className="flex cursor-pointer items-center justify-center rounded-md border border-border px-3 py-2.5 text-sm font-medium transition-colors hover:border-input has-[:checked]:border-primary has-[:checked]:bg-secondary has-[:checked]:text-secondary-foreground has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-ring motion-reduce:transition-none">
+                    <input type="radio" name="depth" className="sr-only" checked={form.max_depth === depth} onChange={() => change("max_depth", depth)} />
+                    {depthShort[depth]}
+                  </label>)}
+                </div>
+                <span className="text-xs text-muted-foreground">{depthLabel(form.max_depth)} · up to {MAX_WEBSITE_WALKTHROUGH_PAGES} pages</span>
+              </fieldset>
               {formError && <p role="alert" className="text-sm text-destructive">{formError}</p>}
-              <div className="flex flex-wrap gap-2"><Button type="submit">Review capture scope<ArrowRight size={16} aria-hidden="true" /></Button>
+              <div className="flex flex-wrap gap-2 border-t border-border pt-5"><Button type="submit" size="lg"><Camera size={17} aria-hidden="true" />Review capture scope<ArrowRight size={16} aria-hidden="true" /></Button>
                 {creating && currentId && <Button type="button" variant="ghost" onClick={() => setCreating(false)}>Cancel</Button>}
               </div>
             </form>}
@@ -213,4 +257,17 @@ export const WebsiteWalkthrough = ({ projectId }: { projectId: string }) => {
       </div>
     </div>
   </section>;
+};
+
+export const WebsiteWalkthrough = ({ projectId }: { projectId: string }) => {
+  const [mode, setMode] = useState<"agent" | "capture">("agent");
+  return <div className="mx-auto min-w-0 max-w-7xl">
+    <div className="flex flex-wrap gap-2" aria-label="Website walkthrough modes">
+      <Button type="button" size="sm" variant={mode === "agent" ? "secondary" : "ghost"} aria-pressed={mode === "agent"}
+        onClick={() => setMode("agent")}>Agent mode</Button>
+      <Button type="button" size="sm" variant={mode === "capture" ? "secondary" : "ghost"} aria-pressed={mode === "capture"}
+        onClick={() => setMode("capture")}>Page capture</Button>
+    </div>
+    {mode === "agent" ? <SiteRun projectId={projectId} /> : <PageCapture projectId={projectId} />}
+  </div>;
 };
