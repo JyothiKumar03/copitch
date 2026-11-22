@@ -9,12 +9,13 @@ export const useNarration = (
   command: (action: TPresentationAction) => Promise<TPresentationState>,
   observeAudio: (element: HTMLAudioElement) => () => void,
 ) => {
-  const playback = useRef<{ hold: () => () => void; stop: () => void } | null>(null);
+  const playback = useRef<{ hold: () => () => void; duck: () => (advance?: boolean) => void; stop: () => void } | null>(null);
   const latest = useRef({ load, command, observeAudio });
   const [error, setError] = useState<string | null>(null);
   useEffect(() => { latest.current = { load, command, observeAudio }; }, [load, command, observeAudio]);
 
   const hold = useCallback(() => playback.current?.hold(), []);
+  const duck = useCallback(() => playback.current?.duck(), []);
   useEffect(() => {
     if (!attemptId) return;
     const abort = new AbortController();
@@ -23,6 +24,9 @@ export const useNarration = (
     let unobserve: (() => void) | undefined;
     let acknowledgement: Promise<TPresentationState> | undefined;
     const holds = new Set<symbol>();
+    const ducks = new Set<symbol>();
+    let endedDuringSpeech = false;
+    let normalVolume = 1;
 
     const report = async (kind: "ended" | "failed") => {
       if (abort.signal.aborted) return;
@@ -51,6 +55,18 @@ export const useNarration = (
         audio?.pause();
         return () => { if (holds.delete(id) && !holds.size) void play(); };
       },
+      duck: () => {
+        const id = Symbol();
+        if (!ducks.size) normalVolume = audio?.volume ?? 1;
+        ducks.add(id);
+        if (audio) audio.volume = 0.2;
+        return (advance = true) => {
+          if (!ducks.delete(id) || ducks.size || abort.signal.aborted) return;
+          if (audio) audio.volume = normalVolume;
+          if (endedDuringSpeech && advance) void report("ended");
+          endedDuringSpeech = false;
+        };
+      },
       stop: () => {
         abort.abort();
         if (audio) { audio.onplaying = audio.onended = audio.onerror = null; audio.pause(); audio.removeAttribute("src"); audio.load(); }
@@ -65,6 +81,7 @@ export const useNarration = (
         if (abort.signal.aborted) return;
         objectUrl = URL.createObjectURL(blob);
         audio = new Audio(objectUrl);
+        if (ducks.size) audio.volume = 0.2;
         unobserve = latest.current.observeAudio(audio);
         audio.onplaying = () => {
           if (!acknowledgement && !abort.signal.aborted) {
@@ -75,7 +92,10 @@ export const useNarration = (
             });
           }
         };
-        audio.onended = () => { void report("ended"); };
+        audio.onended = () => {
+          if (ducks.size) endedDuringSpeech = true;
+          else void report("ended");
+        };
         audio.onerror = () => { setError("Could not play narration. Press Resume to try again."); void report("failed"); };
         await play();
       } catch (cause) { await fail(cause); }
@@ -84,5 +104,5 @@ export const useNarration = (
     return () => { player.stop(); if (playback.current === player) playback.current = null; };
   }, [attemptId]);
 
-  return { error, hold };
+  return { error, hold, duck };
 };

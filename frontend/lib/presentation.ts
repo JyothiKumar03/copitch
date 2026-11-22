@@ -30,6 +30,16 @@ export const sendPresentationTurn = async (
 export const loadPresentationAudio = async (session: TResearchSession, deckId: string, attemptId: string, signal: AbortSignal) =>
   (await request(livePath(session, deckId) + "/audio/" + encodeURIComponent(attemptId), session, undefined, { signal })).blob();
 
+export const connectPresentationMicrophone = async (
+  session: TResearchSession, deckId: string, revision: number, sdp: string, signal: AbortSignal,
+) => {
+  const response = await request(livePath(session, deckId) + "/microphone", session, { revision, sdp }, { signal });
+  if (response.headers.get("content-type")?.split(";")[0] !== "application/sdp") throw new Error("Realtime microphone answer unavailable");
+  const answer = await response.text();
+  if (!/^v=0\r?\n/u.test(answer) || answer.length > 65_536) throw new Error("Invalid realtime microphone answer");
+  return answer;
+};
+
 export const transcribePresentationAudio = async (session: TResearchSession, clip: Blob, signal: AbortSignal) => {
   const body = new FormData();
   body.set("audio", clip, "speech.wav");
