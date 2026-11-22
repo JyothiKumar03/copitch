@@ -27,6 +27,67 @@ Both WebRTC and a WebSocket are used, for different jobs.
 
 Presentation hands-free has **no server WebSocket**. The browser receives transcript events on its WebRTC data channel, then sends the accepted text to Express over HTTP.
 
+### Studio voice call: one session, two connections
+
+> **WebRTC carries voice. The WebSocket carries tool calls.** The host's audio goes straight to OpenAI for speed. Express listens in and acts only after checking the model's request.
+
+OpenAI creates **one** Live session per call. The browser joins it for audio. Express attaches to the **same session** by its ID (`/v1/live/sessions/{id}/attach`). The model runs once and the call is billed once.
+
+```
+                         ┌──────────────────────┐
+                         │      OpenAI Live      │
+                         │  (hears you, talks)   │
+                         └──────────────────────┘
+                     ▲          ▲            │
+         voice both  │          │ transcript │ tool calls:
+         ways (fast) │          │ text +     │ "save plan?"
+                     │          │ events     │ "start research?"
+              WebRTC │       WebSocket  (control only, no audio)
+                     │          │            ▼
+            ┌────────┴───┐   ┌──┴──────────────────────────┐
+            │    Host    │   │          Express API          │
+            │ (browser,  │   │  checks: approved after the   │
+            │   mic)     │   │  readback? words really said? │
+            └────────────┘   │  current revision? in budget? │
+                  │          │  → saves turn / applies action│
+                  │  HTTP    │  → returns the tool result    │
+                  └─────────►│  (only to start the call)     │
+                             └───────────────────────────────┘
+```
+
+One spoken approval, end to end:
+
+```
+Host speaks ──WebRTC──► OpenAI hears "yes"
+OpenAI ──WebSocket──► Express: start_research tool call
+Express checks: full plan read out + approval spoken after it ✓
+Express starts research ──WebSocket──► OpenAI: "started"
+OpenAI ──WebRTC──► Host hears "Starting the research now"
+```
+
+| Connection | Carries | Why |
+| --- | --- | --- |
+| **WebRTC** | Host and agent audio, captions | Low latency. Absorbs packet loss and jitter. Browser echo cancellation. No audio load or bandwidth on our server |
+| **WebSocket** | Transcript text, tool calls, tool results, Mission card updates | The browser can't fake an approval. The API key stays on the server. Turns are saved server-side. Express can add context mid-call |
+| **HTTP** | Call setup (SDP offer → answer) | Express authorizes the project before the call starts |
+
+| Rejected alternative | Problem |
+| --- | --- |
+| Browser only (tools run in the browser) | Approvals could be faked, and the API key would be exposed |
+| Server only (audio relayed through Express) | Extra delay on every word, worse audio, more server load and code |
+
+| Cost of this design | Effect |
+| --- | --- |
+| Two views of one call can drift | A tool call can reach Express before the host's words are transcribed. This is the cause of the dropped spoken plan change, fixed in `289e920` |
+| WebRTC needs UDP | Some venue Wi-Fi blocks it, and the studio voice call fails. Typed chat and the presentation's Hold to talk use HTTP and still work |
+
+The presentation needs neither a realtime voice model nor a WebSocket:
+
+```
+Host holds Space ──HTTP──► Express ──► speech-to-text ──► gpt-5.4-mini ──► answer
+Express ──HTTP──► Host: slide + narration MP3 (TTS), one sentence at a time
+```
+
 ## Module 1 · Interview, research, and Mission
 
 **Input** is a brief spoken by the host or typed into a private project. **Output** is saved research with evidence IDs, citations, and gaps. An approved slide Mission can continue into Module 2.
