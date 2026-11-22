@@ -157,12 +157,15 @@ export const create_live_interviewer = (hooks: TLiveHooks) => {
     pending_command = undefined;
     clearTimeout(pending.timer);
     clearTimeout(command_tail);
+    trace({ tool: "command", outcome: matched ? "command_confirmed" : "command_unmatched" });
     if (matched) pending.apply();
     else reply(pending.call_id, "The spoken request could not be matched to this change. Keep the saved work and offer the private project conversation.");
   };
   const confirm_command_after_tail = (pending: TPendingHostCommand, host_end: number) => {
     const { delegated_at, mission } = pending;
     const matched = host_end <= delegated_at && (!mission || mission.mission_id === host_mission?.mission_id && mission.revision === host_mission.revision);
+    // Name the failed condition so a dropped spoken change can be diagnosed from the logs.
+    if (!matched) trace({ tool: "command", outcome: host_end > delegated_at ? "command_after_delegation" : "command_mission_changed" });
     clearTimeout(command_tail);
     if (!matched) resolve_pending_command(false);
     else command_tail = setTimeout(() => resolve_pending_command(true), Math.min(HOST_COMMAND_TAIL_MS, (hooks.idle_ms ?? LIVE_EXCHANGE_IDLE_MS) / 2));
