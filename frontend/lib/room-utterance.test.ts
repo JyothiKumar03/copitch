@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { RoomUtteranceGate } from "./room-utterance";
+import { matchesNarration, RoomUtteranceGate } from "./room-utterance";
 
 const frameSize = 40;
 const directDelay = 760;
@@ -16,20 +16,20 @@ const signal = (seed: number, length: number) => {
 const band = (samples: Float32Array, index: number) =>
   ((samples[index - 1] ?? 0) + 2 * (samples[index] ?? 0) + (samples[index + 1] ?? 0)) / 4;
 
-const playRoom = (hostFrames: number) => {
+const playRoom = (hostFrames: number, referenceLostAt = 82, stopsPlayingAt = 82) => {
   const gate = new RoomUtteranceGate();
   const narration = signal(42, 82 * frameSize);
   const speech = signal(739, hostFrames * frameSize);
   const events = [];
-  for (let frame = 0; frame < 140; frame++) {
+  for (let frame = 0; frame < 155; frame++) {
     const at = frame * frameSize;
-    const speaker = Float32Array.from({ length: frameSize }, (_, i) => band(narration, at + i) * 0.19);
+    const speaker = Float32Array.from({ length: frameSize }, (_, i) => frame < referenceLostAt ? band(narration, at + i) * 0.19 : 0);
     const mic = Float32Array.from({ length: frameSize }, (_, i) => {
       const room = 0.168 * band(narration, at + i - directDelay) +
         0.059 * band(narration, at + i - reflectionDelay);
       return room + 0.15 * band(speech, at + i - 65 * frameSize);
     });
-    const event = gate.frame({ speaker, mic }, frame < 82);
+    const event = gate.frame({ speaker, mic }, frame < stopsPlayingAt);
     if (event) events.push({ ...event, frame });
   }
   return events;
@@ -50,6 +50,13 @@ test("short unmatched sound can pause playback without creating a transcription 
   expect(playRoom(8).map(event => event.kind)).toEqual(["onset", "discard"]);
 });
 
+test("losing the speaker reference does not abandon an in-progress host question", () => {
+  const events = playRoom(45, 75, 130);
+  expect(events.map(event => event.kind)).toEqual(["onset", "end"]);
+  expect(events[0].frame).toBeLessThan(75);
+  expect(events[1].frame).toBeGreaterThan(110);
+});
+
 test("mic startup and steady rumble are ignored, then idle host speech opens the gate", () => {
   const gate = new RoomUtteranceGate();
   const startup = signal(153, 9 * frameSize);
@@ -68,4 +75,33 @@ test("mic startup and steady rumble are ignored, then idle host speech opens the
   expect(events.map(event => event.kind)).toEqual(["onset", "end"]);
   expect(events[0].frame).toBeGreaterThanOrEqual(42);
   expect(events[0].frame).toBeLessThan(50);
+});
+
+test("missing speaker reference still captures host speech during playback", () => {
+  const diagnostics: string[] = [];
+  const gate = new RoomUtteranceGate(({ event }) => { diagnostics.push(event); });
+  const speechStart = 70;
+  const speech = signal(914, 30 * frameSize);
+  const speaker = new Float32Array(frameSize);
+  const events = [];
+  for (let frame = 0; frame < 145; frame++) {
+    const mic = Float32Array.from({ length: frameSize }, (_, i) =>
+      0.32 * band(speech, (frame - speechStart) * frameSize + i));
+    const result = gate.frame({ speaker, mic }, frame < 77);
+    if (result) events.push({ kind: result.kind, frame });
+  }
+  expect(diagnostics).toEqual(["missing-reference", "unavailable", "onset"]);
+  expect(events.map(event => event.kind)).toEqual(["onset", "end"]);
+  expect(events[0].frame).toBe(speechStart + 3);
+});
+
+test("the transcript veto recognizes narration and keeps a distinct question", () => {
+  const narration = "On the holdout set, the onboarding model reached ninety-two percent accuracy.";
+  expect(matchesNarration("The onboarding model reached ninety two percent accuracy", narration)).toBe(true);
+  expect(matchesNarration("model reached", narration)).toBe(true);
+  expect(matchesNarration("What's the accuracy figure?", narration)).toBe(false);
+  expect(matchesNarration("What drove the decrease?", narration)).toBe(false);
+  const telugu = "మొదటి ప్రయోగంలో ఖచ్చితత్వం పెరిగింది";
+  expect(matchesNarration("ఖచ్చితత్వం పెరిగింది", telugu)).toBe(true);
+  expect(matchesNarration("రెండవ ప్రయోగం ఏమిటి", telugu)).toBe(false);
 });
