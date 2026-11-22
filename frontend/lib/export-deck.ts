@@ -34,9 +34,24 @@ export const exportDeck = async (deck: TDeck) => {
     parent.append(node);
     return node;
   };
-  deck.slides.forEach((slide, index) => {
+  // Captured page screenshots are served to the signed-in host. Embed them so the file also works offline.
+  const embedded = new Map<string, string | undefined>();
+  const embed = async (url: string) => {
+    try {
+      const response = await fetch(url, { credentials: "include" });
+      if (!response.ok) return;
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      let binary = "";
+      for (let index = 0; index < bytes.length; index += 0x8000) binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+      return "data:image/jpeg;base64," + btoa(binary);
+    } catch { return; }
+  };
+  const views = deck.slides.map((slide, index) => deckSlideView(deck, slide, index));
+  for (const image of new Set(views.flatMap(view => view.image ? [view.image] : []))) embedded.set(image, await embed(image));
+  views.forEach((captured, index) => {
+    const view = { ...captured, image: captured.image && embedded.get(captured.image) };
     const template = doc.createElement("template");
-    template.innerHTML = renderToStaticMarkup(createElement(PublicSlide, { view: deckSlideView(deck, slide, index) }));
+    template.innerHTML = renderToStaticMarkup(createElement(PublicSlide, { view }));
     const section = template.content.firstElementChild as HTMLElement;
     section.id = "slide-" + (index + 1);
     doc.body.append(section);

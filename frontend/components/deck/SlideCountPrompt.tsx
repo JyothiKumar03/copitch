@@ -4,11 +4,11 @@ import { useId, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { TSlideCountPromptProps } from "@/types/deck";
-import { MAX_PRESENTATION_SLIDES } from "../../../shared/presentation";
+import { DEFAULT_PRESENTATION_SLIDES, MAX_PRESENTATION_SLIDES } from "../../../shared/presentation";
 
 export const SlideCountPrompt = ({ initialCount, pending, onPrepare }: TSlideCountPromptProps) => {
   const inputId = useId();
-  const [count, setCount] = useState(initialCount?.toString() ?? "");
+  const [count, setCount] = useState(String(initialCount ?? DEFAULT_PRESENTATION_SLIDES));
   const slideCount = Number(count);
   const canGenerate = !pending && Number.isInteger(slideCount) && slideCount >= 1 && slideCount <= MAX_PRESENTATION_SLIDES;
   const generate = () => { if (canGenerate) onPrepare({ slide_count: slideCount }); };

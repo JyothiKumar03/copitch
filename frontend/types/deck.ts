@@ -1,5 +1,5 @@
 import type { TResearchSession } from "./research";
-import type { TPresentationReadiness } from "../../shared/presentation";
+import type { TDeckCommandReceipt, TPresentationReadiness } from "../../shared/presentation";
 
 export type TConversionChart = {
   period: string | null;
@@ -30,7 +30,8 @@ export type TSlide = {
 };
 export type TPublicSlide = Pick<TSlide, "slide_id" | "layout" | "title" | "highlights" | "evidence_ids" | "chart" | "chart_period" | "template">;
 // sources: audience-safe site names or generic labels for private material.
-export type TSlideView = { deckTitle: string; index: number; total: number; slide: TPublicSlide; sources?: string[] };
+// image: a host-only screenshot of the captured page the slide is grounded in.
+export type TSlideView = { deckTitle: string; index: number; total: number; slide: TPublicSlide; sources?: string[]; image?: string };
 export type TPitchInput = {
   audience: string;
   duration_minutes: number;
@@ -50,7 +51,7 @@ export type TDeck = {
   pitch?: TPitchPlan;
   grounding_mode?: "verified" | "source_extracts";
   render_review?: { status: "passed"; rounds: number };
-  sources?: { id: string; origin: string; location: string; url?: string }[];
+  sources?: { id: string; origin: string; location: string; url?: string; image?: string }[];
 };
 export type TProposal = {
   proposal_id: string;
@@ -70,7 +71,8 @@ export type TEditInput = {
   slide_id: string;
   changes: TSlideChanges;
 };
-export type TDeckWorkspaceProps = { researchId: string; getSession: () => Promise<TResearchSession> };
+export type TDeckWorkspaceProps = { researchId: string; getSession: () => Promise<TResearchSession>;
+  command?: TDeckCommandReceipt & { turn_id: string; deck_revision?: number; manual?: boolean } };
 
 export type TLiveReply =
   | { kind: "answer"; text: string; evidence_ids: string[]; citations?: { evidence_id: string; excerpt: string }[] }

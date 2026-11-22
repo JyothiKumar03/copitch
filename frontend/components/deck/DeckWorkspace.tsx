@@ -1,18 +1,21 @@
 "use client";
 
 import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } from "react";
+import { useMutation } from "@tanstack/react-query";
 import { ArrowDownToLine, ArrowLeft, ArrowRight, AudioLines, Check, CircleAlert, ListOrdered, LoaderCircle, PencilLine, Play, Presentation, SlidersHorizontal } from "lucide-react";
 import { usePresentation } from "@/hooks/deck/use-presentation";
 import { useDeck } from "@/hooks/deck/use-deck";
 import { exportDeck } from "@/lib/export-deck";
-import { slideSource } from "@/lib/slide-source";
+import { slideSources } from "@/lib/slide-source";
 import type { TPreparationProgress } from "@/lib/decks";
+import { fetchRecoveryDraft } from "@/lib/decks";
 import type { TDeckWorkspaceProps, TPitchRequest } from "@/types/deck";
 import { SlideCountPrompt } from "./SlideCountPrompt";
 import { SlideOrder } from "./SlideOrder";
 import { deckSlideView, PublicSlide, Slide } from "./Slide";
 import { SlideDiff } from "./SlideDiff";
 import { LiveDeck } from "./LiveDeck";
+import { RecoveryDraft } from "./RecoveryDraft";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -21,6 +24,7 @@ import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
 import { MAX_PRESENTATION_SLIDES } from "../../../shared/presentation";
+import type { TDeckPreparationFailure } from "../../../shared/presentation";
 import "./stage.css";
 
 const phaseText: Record<TPreparationProgress, string> = {
@@ -46,9 +50,35 @@ const PreparationNotice = ({ message }: { message: string }) => (
   </div>
 );
 
-export const DeckWorkspace = (props: TDeckWorkspaceProps & { backToConversation: () => void; onPreviewReady: (researchId: string) => void; researchAction?: ReactNode }) => {
+const PreparationRecovery = ({ info, busy, canAdd, onMake, onAdd, onDraft }: { info: TDeckPreparationFailure; busy: boolean;
+  canAdd: boolean; onMake: (count: number) => void; onAdd: () => void; onDraft: (id: string) => void }) => {
+  const needsContent = info.reason_code === "insufficient_evidence" || info.reason_code === "grounding_failed";
+  const canReduce = info.supported_slide_count > 0 && (info.requested_slide_count === undefined || info.supported_slide_count < info.requested_slide_count);
+  const retryCount = !needsContent ? info.requested_slide_count : undefined;
+  return <section className="grid min-w-0 gap-3 rounded-lg border border-border bg-card p-3 text-sm" aria-label="Slide preparation recovery">
+      <div role="alert" className="wrap-anywhere">
+        <p className="flex items-center gap-2 font-semibold"><CircleAlert size={16} aria-hidden="true" className="text-primary" />Couldn’t prepare all slides</p>
+        <p className="mt-1 text-muted-foreground">{info.message}</p>
+      </div>
+      {info.gaps.length > 0 && <ul className="list-disc space-y-1 pl-5 text-muted-foreground">{info.gaps.map(gap => <li key={gap}>{gap}</li>)}</ul>}
+      <div className="flex flex-wrap gap-2">
+        {canReduce && <Button size="sm" disabled={busy} onClick={() => onMake(info.supported_slide_count)}>
+          Make {info.supported_slide_count} {info.supported_slide_count === 1 ? "slide" : "slides"} now
+        </Button>}
+        {retryCount !== undefined && <Button size="sm" variant={canReduce ? "outline" : "default"} disabled={busy} onClick={() => onMake(retryCount)}>
+          Retry {retryCount} {retryCount === 1 ? "slide" : "slides"}
+        </Button>}
+        {canAdd && needsContent && <Button size="sm" variant="outline" disabled={busy} onClick={onAdd}>Add content</Button>}
+        {info.partial_deck_id && <Button size="sm" variant="outline" disabled={busy} onClick={() => onDraft(info.partial_deck_id!)}>Edit draft myself</Button>}
+      </div>
+    </section>;
+};
+
+export const DeckWorkspace = (props: TDeckWorkspaceProps & { backToConversation: () => void; onPreviewReady: (researchId: string) => void;
+  researchAction?: ReactNode; initialCount?: number; onAddContent?: (gaps: string[]) => void }) => {
   const { onPreviewReady, researchId } = props;
-  const { order, deck, pitches, reopen, refresh, variantsError, proposal, prepare, preparationProgress, edit, decision } = useDeck(props);
+  const { order, deck, pitches, reopen, refresh, variantsError, proposal, prepare, preparationProgress, edit, decision, recovery } = useDeck(props);
+  const draft = useMutation({ mutationFn: async (id: string) => fetchRecoveryDraft(await props.getSession(), id) });
   const [preparingVariant, setPreparingVariant] = useState(false);
   const [orderIds, setOrderIds] = useState<string[] | null>(null);
   const [index, setIndex] = useState(0);
@@ -59,20 +89,40 @@ export const DeckWorkspace = (props: TDeckWorkspaceProps & { backToConversation:
   const [exportError, setExportError] = useState<string | null>(null);
   const [previewFocusRequest, requestPreviewFocus] = useReducer((request: number) => request + 1, 0);
   const lastPreviewFocus = useRef(0);
+  const wasLive = useRef(false);
   const previewHeading = useRef<HTMLHeadingElement>(null);
+  const preparationPanel = useRef<HTMLDivElement>(null);
+  const handledManualCommand = useRef<string | undefined>(undefined);
   const slide = deck?.slides[index];
   const runtime = usePresentation(deck, props.getSession, props.researchId);
   const { mutate: refreshDeck } = refresh;
   const deckId = deck?.deck_id;
   const refreshRevision = useCallback(() => { if (deckId) refreshDeck(deckId); }, [deckId, refreshDeck]);
+  const beginEdit = useCallback(() => {
+    if (!slide) return;
+    setTitle(slide.title); setPoints(slide.highlights.join("\n")); setNotes(slide.narration); setEditing(true);
+  }, [slide]);
   useEffect(() => { if (deckId) onPreviewReady(researchId); }, [deckId, onPreviewReady, researchId]);
+  const command = props.command;
   useEffect(() => {
+    if (!command?.manual || handledManualCommand.current === command.turn_id || runtime.active || command.research_id !== researchId) return;
+    if (command.deck_id && (deckId !== command.deck_id || command.deck_revision !== undefined && deck?.revision !== command.deck_revision)) return;
+    const frame = requestAnimationFrame(() => {
+      handledManualCommand.current = command.turn_id;
+      if (slide) beginEdit();
+      else preparationPanel.current?.querySelector("input")?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [beginEdit, command, deck?.revision, deckId, researchId, runtime.active, slide]);
+  useEffect(() => {
+    const returnedFromLive = wasLive.current && !runtime.active;
+    wasLive.current = runtime.active;
     const heading = previewHeading.current;
-    if (!heading || previewFocusRequest === lastPreviewFocus.current) return;
+    if (!heading || (!returnedFromLive && previewFocusRequest === lastPreviewFocus.current)) return;
     lastPreviewFocus.current = previewFocusRequest;
     heading.focus({ preventScroll: true });
     heading.scrollIntoView({ block: "start", behavior: "instant" });
-  }, [deck, previewFocusRequest]);
+  }, [deck, previewFocusRequest, runtime.active]);
   const error = order.error ?? reopen.error ?? refresh.error ?? decision.error ?? edit.error ?? prepare.error ?? variantsError;
   const navigate = (direction: number) => setIndex(i => Math.max(0, Math.min((deck?.slides.length ?? 1) - 1, i + direction)));
   const resetPreview = () => {
@@ -92,24 +142,28 @@ export const DeckWorkspace = (props: TDeckWorkspaceProps & { backToConversation:
 
   if (deck && runtime.active) return <LiveDeck deck={deck} runtime={runtime} refreshRevision={refreshRevision}
     backToConversation={props.backToConversation} />;
-  const requestedCount = prepare.variables?.slide_count;
+  const requestedCount = prepare.variables?.slide_count ?? recovery?.requested_slide_count;
   const preparationStatus = prepare.isPending && <PreparationStatus progress={preparationProgress} count={requestedCount} />;
+  const recoveryCard = recovery && <PreparationRecovery info={recovery} busy={busy || draft.isPending} canAdd={!!props.onAddContent}
+    onMake={slide_count => preparePitch({ slide_count })} onAdd={() => props.onAddContent?.(recovery.gaps)} onDraft={draft.mutate} />;
+  const draftDialog = draft.data && <RecoveryDraft key={draft.data.draft_id} initial={draft.data} getSession={props.getSession} close={draft.reset} />;
   if (!deck || !slide) return (
     <Card className="grid min-w-0 gap-4 bg-background p-4 sm:p-5" aria-label="Presentation preparation">
       <div className="flex flex-wrap items-center justify-between gap-2.5">
         <div className="flex items-center gap-2"><Presentation size={17} aria-hidden="true" className="text-primary" /><h3 className="font-semibold">Research is ready</h3></div>
         {props.researchAction}
       </div>
-      <SlideCountPrompt pending={busy} initialCount={requestedCount} onPrepare={preparePitch} />
+      <div ref={preparationPanel}>
+        <SlideCountPrompt pending={busy} initialCount={requestedCount ?? props.initialCount ?? command?.slide_count} onPrepare={preparePitch} />
+      </div>
       {preparationStatus}
-      {error && (prepare.error ? <PreparationNotice message={error.message} /> : <p role="alert" className="text-sm text-destructive">{error.message}</p>)}
+      {recoveryCard}
+      {error && !(recovery && error === prepare.error) && (prepare.error ? <PreparationNotice message={error.message} /> : <p role="alert" className="text-sm text-destructive">{error.message}</p>)}
+      {draft.error && <p role="alert" className="text-sm text-destructive">{draft.error.message}</p>}
+      {draftDialog}
       {pitchPicker}
     </Card>
   );
-  const beginEdit = () => {
-    if (!slide) return;
-    setTitle(slide.title); setPoints(slide.highlights.join("\n")); setNotes(slide.narration); setEditing(true);
-  };
   const highlights = points.split("\n").map(point => point.trim()).filter(Boolean);
   const highlightsChanged = highlights.length !== slide.highlights.length || highlights.some((point, i) => point !== slide.highlights[i]);
   const validChanges = !!title.trim() && !!notes.trim() && highlights.length <= 4 &&
@@ -174,9 +228,8 @@ export const DeckWorkspace = (props: TDeckWorkspaceProps & { backToConversation:
               <p>{slide.narration}</p>
               {!!slide.evidence_ids.length && <div className="mt-4 border-t border-border pt-3">
                 <h4 className="mb-2 text-xs font-semibold text-evidence">Slide sources</h4>
-                <ul className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground" aria-label="Slide sources">{slide.evidence_ids.map(id => {
-                  const source = slideSource(deck, id);
-                  return <li className="min-w-0 wrap-anywhere" key={id}>{source.href ? <a href={source.href} target="_blank" rel="noreferrer" className="text-evidence underline underline-offset-2">{source.label}</a> : source.label}</li>;
+                <ul className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground" aria-label="Slide sources">{slideSources(deck, slide.evidence_ids).map(source => {
+                  return <li className="min-w-0 wrap-anywhere" key={source.label}>{source.href ? <a href={source.href} target="_blank" rel="noreferrer" className="text-evidence underline underline-offset-2">{source.label}</a> : source.label}</li>;
                 })}</ul>
               </div>}
             </CardContent>
@@ -200,7 +253,9 @@ export const DeckWorkspace = (props: TDeckWorkspaceProps & { backToConversation:
               </CollapsibleContent>
             </Collapsible>
             {preparationStatus}
-            {prepare.error && <PreparationNotice message={prepare.error.message} />}
+            {recoveryCard}
+            {prepare.error && !recovery && <PreparationNotice message={prepare.error.message} />}
+            {draft.error && <p role="alert" className="text-sm text-destructive">{draft.error.message}</p>}
           </CardContent></Card>
         </aside>
       </div>
@@ -233,6 +288,7 @@ export const DeckWorkspace = (props: TDeckWorkspaceProps & { backToConversation:
         </form>
       </DialogContent>
       {proposal && <SlideDiff proposal={proposal} pending={decision.isPending} onDecision={choice => decision.mutate(choice)} />}
+      {draftDialog}
     </section>
     </Dialog>
   );

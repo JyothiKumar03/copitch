@@ -5,7 +5,7 @@ import { PublicSlide } from "./Slide";
 import { stageStyle } from "@/lib/stage-style";
 import type { TSlideView } from "@/types/deck";
 
-type TRenderIssue = { slide_id: string; issue: "overflow" | "collision" | "unreadable_text"; viewport: string; note: string };
+type TRenderIssue = { slide_id: string; issue: "overflow" | "collision" | "unreadable_text" | "visual_hierarchy"; viewport: string; note: string };
 type TRenderWindow = Window & { setDeckRenderViews?: (views: TSlideView[]) => void };
 
 const reviewStyle = `
@@ -42,6 +42,15 @@ const measureDeck = (sheet: HTMLElement): TRenderIssue[] =>
     }
     if (visible.filter(item => item !== footer).some(item => parseFloat(getComputedStyle(item).fontSize) < 14)) {
       issues.push({ slide_id: slideId, issue: "unreadable_text", viewport, note: "Body text is below the template legibility floor." });
+    }
+    if (slide.dataset.composition === "points" && slide.dataset.template === "bullet_slide" && title) {
+      const points = slide.querySelectorAll(".slide-points > li");
+      if (points.length >= 3) {
+        const occupied = (points[points.length - 1].getBoundingClientRect().bottom - title.getBoundingClientRect().top) / bounds.height;
+        frame.dataset.contentFill = occupied.toFixed(2);
+        if (occupied < 0.55) issues.push({ slide_id: slideId, issue: "visual_hierarchy", viewport,
+          note: "The title and points occupy less than 55% of the frame height." });
+      }
     }
     return issues;
   });

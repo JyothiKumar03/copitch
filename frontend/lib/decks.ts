@@ -1,6 +1,6 @@
 import type { TDeck, TPitchRequest, TSavedPitch, TEditInput, TProposal } from "@/types/deck";
 import type { TResearchSession } from "@/types/research";
-import type { TDeckPreparationPhase } from "../../shared/presentation";
+import type { TDeckPreparationFailure, TDeckPreparationPhase, TDeckRecoveryDraft, TDeckRecoverySlide } from "../../shared/presentation";
 import { MAX_PRESENTATION_SLIDES } from "../../shared/presentation";
 import { request } from "./research";
 
@@ -10,7 +10,7 @@ const deckPath = (session: TResearchSession, deckId?: string) => {
 };
 
 type TPreparationReceipt = { job_id: string; slide_count: number };
-export type TDeckVariants = { decks: TSavedPitch[]; preparation?: TPreparationReceipt };
+export type TDeckVariants = { decks: TSavedPitch[]; preparation?: TPreparationReceipt; recovery?: TDeckPreparationFailure };
 export type TPreparationProgress = "queued" | TDeckPreparationPhase | "running";
 
 const activeReceipt = (value: unknown): TPreparationReceipt | undefined => {
@@ -20,12 +20,31 @@ const activeReceipt = (value: unknown): TPreparationReceipt | undefined => {
   return { job_id: value.job_id, slide_count: value.slide_count };
 };
 
+const recoveryCodes = new Set<unknown>(["insufficient_evidence", "grounding_failed", "render_review_failed", "provider_unavailable",
+  "interrupted", "preparation_failed"]);
+const readRecovery = (value: unknown): TDeckPreparationFailure | undefined => {
+  if (!value || typeof value !== "object") return;
+  const candidate = value as Partial<TDeckPreparationFailure>;
+  if (!recoveryCodes.has(candidate.reason_code) || typeof candidate.message !== "string" || !Array.isArray(candidate.gaps) ||
+    !candidate.gaps.every(gap => typeof gap === "string") || typeof candidate.supported_slide_count !== "number" ||
+    !Number.isInteger(candidate.supported_slide_count) || candidate.supported_slide_count < 0 ||
+    candidate.supported_slide_count > MAX_PRESENTATION_SLIDES ||
+    (candidate.requested_slide_count !== undefined && (!Number.isInteger(candidate.requested_slide_count) ||
+      candidate.requested_slide_count < 1 || candidate.requested_slide_count > MAX_PRESENTATION_SLIDES)) ||
+    (candidate.partial_deck_id !== undefined && typeof candidate.partial_deck_id !== "string")) return;
+  return candidate as TDeckPreparationFailure;
+};
+
+export class DeckPreparationFailed extends Error {
+  constructor(readonly recovery: TDeckPreparationFailure) { super(recovery.message); }
+}
+
 export const fetchDeckVariants = async (session: TResearchSession, researchId: string, signal?: AbortSignal): Promise<TDeckVariants> => {
   const response = await request(deckPath(session) + "?research_id=" + encodeURIComponent(researchId), session, undefined, { signal });
   const body = await response.json();
   const decks = Array.isArray(body?.decks) ? body.decks.filter((item: unknown): item is TSavedPitch =>
     !!item && typeof item === "object" && "deck_id" in item && typeof item.deck_id === "string" && "label" in item && typeof item.label === "string") : [];
-  return { decks, preparation: activeReceipt(body?.preparation) };
+  return { decks, preparation: activeReceipt(body?.preparation), recovery: readRecovery(body?.recovery) };
 };
 
 export type TPreparationInput = TPitchRequest | { jobId: string; slide_count?: number };
@@ -52,6 +71,8 @@ export const prepareDeck = async (session: TResearchSession, researchId: string,
       if (current?.status === "completed" && current.deck?.research_id === researchId) { saveJob(null); return current.deck; }
       if (current?.status === "failed") {
         saveJob(null);
+        const recovery = readRecovery(current.failure);
+        if (recovery) throw new DeckPreparationFailed(recovery);
         throw new Error(typeof current.error === "string" ? current.error : "Slide review failed. Try again.");
       }
       if (current?.status !== "queued" && current?.status !== "running") throw new Error("Slide review returned an unknown status.");
@@ -66,13 +87,29 @@ export const prepareDeck = async (session: TResearchSession, researchId: string,
   }
 };
 
-export const fetchDeck = async (session: TResearchSession, deckId: string): Promise<TDeck> => {
-  return (await request(deckPath(session, deckId), session)).json();
+export const fetchDeck = async (session: TResearchSession, deckId: string, revision?: number): Promise<TDeck> => {
+  const query = revision === undefined ? "" : `?revision=${revision}`;
+  const deck: TDeck = await (await request(deckPath(session, deckId) + query, session)).json();
+  if (revision !== undefined && (deck?.deck_id !== deckId || deck.revision !== revision)) {
+    throw new Error("Couldn’t confirm the saved presentation revision.");
+  }
+  return deck;
 };
+
+export const fetchRecoveryDraft = async (session: TResearchSession, id: string): Promise<TDeckRecoveryDraft> =>
+  (await request(`${deckPath(session)}/drafts/${encodeURIComponent(id)}`, session)).json();
+
+export const saveRecoveryDraft = async (session: TResearchSession, draft: TDeckRecoveryDraft, slideId: string,
+  text: Pick<TDeckRecoverySlide, "title" | "highlights" | "narration">): Promise<TDeckRecoveryDraft> =>
+  (await request(`${deckPath(session)}/drafts/${encodeURIComponent(draft.draft_id)}`, session,
+    { base_revision: draft.revision, slide_id: slideId, ...text })).json();
 
 export const proposeEdit = async (session: TResearchSession, deckId: string, input: TEditInput): Promise<TProposal> => {
   return (await request(deckPath(session, deckId) + "/edits", session, input)).json();
 };
+
+export const fetchEdit = async (session: TResearchSession, deckId: string, proposalId: string): Promise<TProposal> =>
+  (await request(deckPath(session, deckId) + "/edits/" + encodeURIComponent(proposalId), session)).json();
 
 export const decideEdit = async (session: TResearchSession, deckId: string, proposalId: string, decision: "approve" | "reject"): Promise<TProposal> => {
   const path = deckPath(session, deckId) + "/edits/" + encodeURIComponent(proposalId) + "/decision";
