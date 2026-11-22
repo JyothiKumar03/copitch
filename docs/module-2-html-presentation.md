@@ -47,4 +47,4 @@ Slide 3 shows “12 teams joined the pilot.” During narration, the host says, 
 | M2-4 · Accept or reject the exact diff | Accept once, see the added point on the stage, then see the next slide only after the accepted update paints. Repeat with Reject and confirm that the old revision remains and the stage stays in place. Repeat an approval and replay a stale one to verify that neither creates another revision. |
 | M2-5 · Recover from ambiguous speech and disconnect | Interrupt twice, refer to an ambiguous slide, and disconnect during review. Verify old audio stops, ambiguous intent asks for clarification, and reconnect restores the last approved view and pending review privately. |
 
-Use the [detailed PRD](module-2-prd.md#8-acceptance) for the full acceptance checks and the [Module 2 contract](../handoffs/2-live-presentation.contract.md) for the HTML release path. Rehearse the full sequence on the event laptop before beginning Module 3 browser walkthroughs.
+Use the [detailed PRD](module-2-prd.md#8-acceptance) for the full acceptance checks. Rehearse the full sequence on the event laptop before beginning Module 3 browser walkthroughs.

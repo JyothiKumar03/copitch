@@ -38,7 +38,7 @@ The API image includes the Java reader for legacy PowerPoint uploads. For native
 
 ## Chat and long-running sessions
 
-Set `OPENAI_API_KEY` and `OPENAI_TEXT_MODELS` in the backend process environment. The latter accepts a JSON array in fallback order. Replace the model placeholder with an ID available to your account. Omit temperature for models that require their own sampling defaults.
+Set `OPENAI_API_KEY` and `OPENAI_TEXT_MODELS` in the backend process environment. The latter accepts a JSON array in fallback order. Replace the model placeholder with an ID available to your account. Omit temperature for models that require their own sampling defaults. The API readiness route checks SQLite. Verify provider access by starting an approved rehearsal with public or synthetic inputs.
 
 ```json
 [
@@ -52,7 +52,7 @@ Set `OPENAI_API_KEY` and `OPENAI_TEXT_MODELS` in the backend process environment
 ]
 ```
 
-The session tool provider maps to `find_context` (find a phrase) and `read_context` (read an excerpt). Set `tool_providers` to an empty array to disable tools for a model. Optional `pricing` accepts `input`, `cached_input` and `output` in USD per million tokens plus a `version` label. Attempts with insufficient pricing or usage report a null estimate. The pitch practice page at `/chat` posts to `/api/chat` and uses browser speech recognition and synthesis. The pitch studio uses the OpenAI Realtime interviewer over WebRTC. The private Python adapter negotiates the call and Express validates actions through the server sideband.
+The session tool provider maps to `find_context` (find a phrase) and `read_context` (read an excerpt). Set `tool_providers` to an empty array to disable tools for a model. For a budgeted Director mission, configure priced model candidates for `director` and all model-backed child purposes the mission uses, including `research` and `planning`. For model-guided Agent mode, configure a priced `browse` candidate with image input. Pricing uses `input`, `cached_input` and `output` in USD per million tokens plus a `version` label. A mission pauses when a required model or spending bound is missing. Agent mode can still capture public pages with the browser fallback and reports that coverage may be partial. The pitch studio uses the OpenAI Realtime interviewer over WebRTC. The private Python adapter negotiates the call and Express validates actions through the server sideband.
 
 Session persistence uses Bun’s SQLite driver. For a legacy local development client, create a session with `POST /api/sessions` and keep the returned `session_id` and bearer `token` for the host. Send the token as a Bearer token to `POST /api/sessions/:session_id/runs` with a JSON body containing `message` and optional `context`. The response includes `run_id`. Subscribe to `GET /api/sessions/:session_id/runs/:run_id/events` with the same token. Supply `Last-Event-ID` when reconnecting. Cancel with `DELETE /api/sessions/:session_id/runs/:run_id`. Disconnecting the stream leaves the worker running. A backend restart preserves stored events and marks an unfinished run failed.
 
@@ -80,14 +80,14 @@ Follow the [AWS operations guide](docs/aws-operations.md) to build the four imag
 
 ## HTML presentation and model selection
 
-Open the research workspace, approve the research plan, and request a slide count. The preparation checks readiness through OpenAI Decisions and can follow up on evidence gaps within the approved source scope. Review the saved slides and speaker notes, then approve the displayed revision to present or download the HTML. Slide edits produce private proposals. The offline HTML contains slide content and source identifiers.
+Open the research workspace, approve the research plan, and request a slide count by text, voice or the count control. OpenAI Decisions advises the manual preparation route, and the planner can follow up on evidence gaps within the approved source scope. If the exact count cannot pass independent checks, the private recovery view can offer fewer slides, a draft or a request for more sources. Review the saved slides and speaker notes, then approve the displayed revision to present or download the HTML. Slide edits produce private proposals. The offline HTML contains the approved slide content and public-facing source labels.
 
 ## Website walkthrough and PowerPoint
 
-Open a private project and choose **Website walkthrough**. Enter the public starting URL, the audience, the presentation goal and crawl depth. Depth 0 captures the starting page. Each additional level allows another link hop within the approved website. Review the scope and select **Approve and capture**.
+Open a private project and choose **Website walkthrough**. In **Agent mode**, give the browser a goal to explore. In **Page capture**, start a bounded capture of public pages. Both modes ask for a public starting URL, audience, goal and crawl depth. Depth 0 captures the starting page. Each additional level allows another link hop within the approved website. Review and approve the scope to start.
 
-The job saves observed pages and screenshot evidence to the project. Open the result to review captures, failed pages and the PowerPoint download. Reopening the project restores the same result. Capture follows visible public links and uses a bounded read-only browser for screenshots. The [acceptance contract](handoffs/3-website-to-powerpoint.contract.md) covers depth, source links, file validity and privacy.
+The job saves observed pages and screenshot evidence to the project. Review the captures and coverage, then open **Choose PowerPoint content**. Select each item you want to include, add any wording of your own, and confirm the slide plan. Selected screenshots include everything visible in their pixels. A fresh sign-in can retrieve the original confirmed export. An earlier full export, when present, remains available in the archive. The [acceptance contract](handoffs/3-website-to-powerpoint.contract.md) covers depth, selection, file validity and privacy.
 
-Optional `purposes` on each OPENAI_TEXT_MODELS entry accepts `interview`, `research`, `planning`, `live` and `chat`. A matching entry takes priority over generic entries. Entries scoped exclusively to other purposes are excluded. A single existing entry without purposes still works everywhere. Interview and research handlers select the first eligible entry; the generic chat model-step service supports ordered transport fallback. The deterministic deck compiler spends zero additional text-model tokens. The typed live router uses the same configuration contract.
+Optional `purposes` on each `OPENAI_TEXT_MODELS` entry accepts `interview`, `research`, `planning`, `live`, `chat`, `director` and `browse`. A matching entry takes priority over generic entries. An entry without purposes can be considered for every purpose and still needs the capabilities and pricing required by that caller. The generic chat model-step service supports ordered transport fallback.
 
 Run `bun run check:html` for the standalone HTML layout test and `bun run check:tour` for the offline browser/continuation fixture. Both use Playwright Chromium. Install it with `bunx playwright install chromium` or set `DECK_BROWSER_CHANNEL=chrome` to use installed Chrome.
