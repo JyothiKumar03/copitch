@@ -14,7 +14,9 @@ import type { TSiteBrowser } from "./site-browser";
 import { site_element_wall, site_navigation, site_page_wall, site_wall_reason } from "./site-policy";
 import { until_aborted, website_capture_url } from "./website-capture";
 
-export const site_run_limits = { actions: 150, steps: 30, time_ms: 15 * 60_000, branch_budget_share: 0.4, frontier: 240 } as const;
+// Coverage is the goal: at most two screens per page, and an accepted goal shows several distinct pages when more are reachable.
+export const site_run_limits = { actions: 150, steps: 30, time_ms: 15 * 60_000, branch_budget_share: 0.4, frontier: 240,
+  screens_per_page: 2, pages_before_goal: 4 } as const;
 const maximum_input_tokens = 30_000;
 // A plain union emits nested anyOf under the required object root in the provider JSON Schema.
 const provider_action = z.strictObject({ action: z.union(site_action.options) });
@@ -160,6 +162,9 @@ export const run_site_agent = async (lease: TSiteLease, signal: AbortSignal, com
   const persist = (image?: { n: number; bytes: Buffer }) => { signal.throwIfAborted(); commit(state, image); };
   const activity = (label: string) => { state.activity.push({ n: state.activity.length + 1, label }); };
   const signature_of = (page: TSiteObservation) => createHash("sha256").update(JSON.stringify([page.url, page.title, page.facts])).digest("hex");
+  const page_of = (url: string) => url.split("#")[0];
+  const screens_on = (url: string) => state.steps.filter(step => page_of(step.url) === page_of(url)).length;
+  const distinct_pages = () => new Set(state.steps.map(step => page_of(step.url))).size;
   const record_screen = (page: TSiteObservation, caption: string) => {
     if (!current || !page.facts.length || state.steps.length >= site_run_limits.steps) return;
     const fingerprint = signature_of(page);
@@ -176,6 +181,7 @@ export const run_site_agent = async (lease: TSiteLease, signal: AbortSignal, com
     });
     const facts = candidates.sort((left, right) => right.score - left.score || left.index - right.index)
       .slice(0, 4).sort((left, right) => left.index - right.index).map(({ text }) => text);
+    if (screens_on(url) >= site_run_limits.screens_per_page) { activity(`Skipped another screen of ${title}`); return; }
     const step = { n: state.steps.length + 1, url, title, caption, facts, depth: current.depth };
     state.screens.push(fingerprint); state.steps.push(step);
     activity(`Recorded ${step.title}`);
@@ -322,6 +328,11 @@ export const run_site_agent = async (lease: TSiteLease, signal: AbortSignal, com
   const choose = async (choices: TSiteTarget[] = frontier()): Promise<TSiteAction | undefined> => {
     const next = choices[0] && { kind: "navigate" as const, url: choices[0].url };
     if (!observation || !current) return next;
+    // A page that already has its screens leaves for the best unvisited page without spending a model call.
+    if (choices[0] && screens_on(current.url) >= site_run_limits.screens_per_page) {
+      activity(`Moved on from ${current.label}: it already has ${site_run_limits.screens_per_page} recorded screens.`);
+      return { kind: "navigate", url: (other_branch(choices) ?? choices[0]).url };
+    }
     if (!planner) {
       const local = explore_local();
       if (local) return local;
@@ -432,6 +443,12 @@ export const run_site_agent = async (lease: TSiteLease, signal: AbortSignal, com
         continue;
       }
       repeated.add(action_key);
+      if (action.kind === "finish" && action.goal_met && choices.length && distinct_pages() < site_run_limits.pages_before_goal) {
+        activity(`Kept exploring: the walkthrough shows ${distinct_pages()} pages and more are reachable.`);
+        await open(other_branch(choices) ?? choices[0]);
+        persist();
+        continue;
+      }
       if (action.kind === "finish" && action.goal_met) {
         const summary = await review_goal();
         if (summary) return { checkpoint: state, summary };

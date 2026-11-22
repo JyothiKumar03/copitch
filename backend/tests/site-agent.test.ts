@@ -279,7 +279,7 @@ test("a proposed finish needs independently reviewed evidence before the crawl c
   const visited: string[] = [];
   let completed_review = lease.checkpoint;
   const result = await run_site_agent(lease, AbortSignal.timeout(1_000), state => {
-    if (state.receipts?.length === 4 && state.receipts[3].status === "completed") completed_review = structuredClone(state);
+    if (state.receipts?.length === 3 && state.receipts[2].status === "completed") completed_review = structuredClone(state);
   }, {
     open: async () => ({ open: async value => { page_url = value; visited.push(value); }, observe: async () => ({
       url: page_url, title: "Project guide", screenshot: Buffer.from("frame"), password_field: false, payment_field: false, challenge: false,
@@ -296,13 +296,13 @@ test("a proposed finish needs independently reviewed evidence before the crawl c
     },
   });
   expect(visited).toEqual([root, destination]);
-  expect(review_calls).toEqual([["Welcome to the product."], ["Welcome to the product.", "Choose New Project, give it a name, then choose Export to save the result."]]);
+  // A finish on the first page is deferred while another page is reachable, so the review sees both pages.
+  expect(review_calls).toEqual([["Welcome to the product.", "Choose New Project, give it a name, then choose Export to save the result."]]);
   expect(result.checkpoint.goal_met).toBe(true);
-  expect(result.checkpoint.activity.map(item => item.label)).toContain("The recorded facts did not yet verify the full goal.");
   expect(result.checkpoint.activity.map(item => item.label)).toContain("Verified the goal against recorded website facts.");
-  expect(result.checkpoint.spent_usd).toBeCloseTo(0.03);
+  expect(result.checkpoint.spent_usd).toBeCloseTo(0.025);
   expect(Object.values(result.checkpoint.branch_spend).reduce((total, price) => total + price, 0)).toBeCloseTo(0.02);
-  expect(result.checkpoint.receipts?.map(receipt => receipt.priced_usd)).toEqual([0.01, 0.005, 0.01, 0.005]);
+  expect(result.checkpoint.receipts?.map(receipt => receipt.priced_usd)).toEqual([0.01, 0.01, 0.005]);
   const resumed = await run_site_agent({ ...lease, checkpoint: completed_review }, AbortSignal.timeout(1_000), () => {}, {
     open: async () => { throw new Error("A settled, verified result must restore without reopening the browser."); },
   });
@@ -360,4 +360,33 @@ test("screen cap is reported with all thirty distinct screenshots and an unexplo
   expect(new Set(images).size).toBe(30);
   expect(result.checkpoint.frontier).toHaveLength(8);
   expect(result.summary).toContain("limit of 30 recorded screens");
+});
+
+test("a walkthrough moves on after two screens of one page and covers four pages before accepting the goal", async () => {
+  // Reproduces the jk-ai.in run: the model kept scrolling one blog post, then claimed the orientation goal after few pages.
+  const lease = { ...lease_for(), goal: "for introduction and orientation", audience: "my company" };
+  const pages = ["blog/post", "about", "projects/a", "projects/b", "contact"].map(path => root + path);
+  let page_url = root;
+  let scrolls = 0;
+  let reviews = 0;
+  const result = await run_site_agent(lease, AbortSignal.timeout(2000), () => {}, {
+    open: async () => ({ open: async value => { page_url = value; }, observe: async () => ({
+      url: page_url, title: "Page " + page_url, screenshot: Buffer.from("frame"), password_field: false, payment_field: false, challenge: false,
+      facts: ["Observed page " + page_url + (page_url.endsWith("blog/post") ? " section " + scrolls : "")],
+      elements: page_url === root ? pages.map((href, i) => ({ ref: "e" + (i + 1), role: "link", enabled: true, name: href.slice(root.length), href })) : [],
+    }), click: async () => {}, select: async () => {}, scroll: async () => { scrolls++; }, close: async () => {} }),
+    decider: { model: "fixture-priced", reserve_usd: 0.001,
+      choose: async ({ observation, frontier, recorded }) => ({ spend_usd: 0.001, action:
+        observation.url.endsWith("blog/post") ? { kind: "scroll", direction: "down" } :
+        recorded.length >= 2 ? { kind: "finish", goal_met: true } : { kind: "navigate", url: frontier[0]!.url } }),
+      // The first verdict cites an unknown step, which must not close the run.
+      review: async ({ recorded }) => ({ verdict: { goal_met: true, steps: [reviews++ ? recorded[0].n : 99] }, spend_usd: 0.001 }),
+    },
+  });
+  expect(result.checkpoint.activity.map(item => item.label)).toContain("The recorded facts did not yet verify the full goal.");
+  const per_page = new Map<string, number>();
+  for (const step of result.checkpoint.steps) per_page.set(step.url, (per_page.get(step.url) ?? 0) + 1);
+  expect(Math.max(...per_page.values())).toBeLessThanOrEqual(2);
+  expect(per_page.size).toBeGreaterThanOrEqual(4);
+  expect(result.checkpoint.goal_met).toBe(true);
 });
