@@ -1,5 +1,9 @@
 import { z } from "zod";
 import type { TSourcePolicy } from "./research";
+import type { TEditProposal } from "./deck";
+import { MAX_PRESENTATION_SLIDES } from "../../../shared/presentation";
+import type { TDeckCommandReceipt } from "../../../shared/presentation";
+import { mission_turn_patch } from "./mission";
 
 export const turn_text_limit = 6000;
 export const spoken_text_limit = 1600;
@@ -95,12 +99,18 @@ export const action_inputs = {
   }),
   start_research: z.strictObject({}),
   set_reply_language: z.strictObject({ language: studio_language }),
+  prepare_slides: z.strictObject({ slide_count: z.number().int().min(1).max(MAX_PRESENTATION_SLIDES), focus: z.string().trim().min(1).max(300).optional() }),
+  revise_slide: z.strictObject({ slide_number: z.number().int().min(1).max(MAX_PRESENTATION_SLIDES).optional(), instruction: z.string().trim().min(1).max(600) }),
+  mission_command: z.strictObject({ patch: mission_turn_patch }),
 };
 const agent_action_schema = z.discriminatedUnion("kind", [
   action_inputs.remember.extend({ kind: z.literal("remember"), goal: action_inputs.remember.shape.goal.optional() }),
   action_inputs.propose_research.extend({ kind: z.literal("propose_research") }),
   action_inputs.start_research.extend({ kind: z.literal("start_research") }),
   action_inputs.set_reply_language.extend({ kind: z.literal("set_reply_language") }),
+  action_inputs.prepare_slides.extend({ kind: z.literal("prepare_slides") }),
+  action_inputs.revise_slide.extend({ kind: z.literal("revise_slide") }),
+  action_inputs.mission_command.extend({ kind: z.literal("mission_command") }),
 ]);
 export type TAgentAction = z.infer<typeof agent_action_schema>;
 export const file_citation_schema = z.strictObject({ evidence_id: z.string(), excerpt: z.string().max(300) });
@@ -111,11 +121,21 @@ export const agent_turn_schema = z.strictObject({
 export type TAgentTurn = z.infer<typeof agent_turn_schema>;
 
 export const allowed_actions: Record<TStudioPhase, TAgentAction["kind"][]> = {
-  interview: ["remember", "propose_research", "set_reply_language"],
-  proposed: ["remember", "propose_research", "start_research", "set_reply_language"],
-  researching: ["set_reply_language"],
-  done: ["remember", "propose_research", "set_reply_language"],
+  interview: ["remember", "propose_research", "set_reply_language", "mission_command"],
+  proposed: ["remember", "propose_research", "start_research", "set_reply_language", "mission_command"],
+  researching: ["set_reply_language", "mission_command"],
+  done: ["remember", "propose_research", "set_reply_language", "prepare_slides", "revise_slide", "mission_command"],
 };
+
+// OpenAI strict object inputs require every property; only the controller sees the non-null patch.
+const mission_fields = mission_turn_patch.shape;
+export const nullable_mission_patch = z.strictObject({
+  slide_count: mission_fields.slide_count.unwrap().nullable(), audience: mission_fields.audience.unwrap().nullable(),
+  purpose: mission_fields.purpose.unwrap().nullable(), tone: mission_fields.tone.unwrap().nullable(),
+  add_host_fact: mission_fields.add_host_fact.unwrap().nullable(), files_only: mission_fields.files_only.unwrap().nullable(),
+});
+export const parse_mission_patch = (value: z.infer<typeof nullable_mission_patch>) =>
+  mission_turn_patch.safeParse(Object.fromEntries(Object.entries(value).filter(([, field]) => field !== null)));
 
 // Older saved turns and activities retain these fields on read.
 export type TStudioIntent = "greeting" | "meta" | "language" | "brief" | "clarify" | "correction" | "file_question" |
@@ -125,16 +145,19 @@ export type TStudioAsk = {
   options: { id: string; label: string }[]; allow_free_text: true; brief_id: string | null;
 };
 export type TStudioActivity = {
-  tool: "read_source" | "queue_research" | "ask_input";
+  tool: "read_source" | "queue_research" | "ask_input" | "prepare_slides" | "revise_slide";
   status: "completed" | "queued" | "awaiting_input";
   result: string;
   question?: TStudioAsk;
   citations?: { evidence_id: string; location: string; excerpt: string }[];
+  deck_preparation?: TDeckCommandReceipt;
+  deck_proposal?: TEditProposal;
 };
 export type TStudioTurn = {
   turn_id: string; created_at: number; user_text: string; text: string; language: string;
   voice_items?: string[];
   voice_reply?: string;
+  mission_readback?: { text: string; required: string[][] };
   phase: TStudioPhase; proposal: TResearchProposal | null;
   activity?: TStudioActivity; answer_to?: string; option_id?: string; intent?: TStudioIntent;
 };

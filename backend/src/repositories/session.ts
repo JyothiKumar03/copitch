@@ -9,6 +9,9 @@ import { StudioRepository } from "./studio";
 import { ContinuationStore } from "./continuation";
 import { PresentationRepository } from "./presentation-live";
 import { WebsiteWalkthroughRepository } from "./website-walkthrough";
+import { WalkthroughExportRepository } from "./walkthrough-export";
+import { SiteRunRepository } from "./site-run";
+import { MissionRepository } from "./mission";
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -31,6 +34,9 @@ export class SessionStore {
   readonly presentations: PresentationRepository;
   readonly studio: StudioRepository;
   readonly website_walkthroughs: WebsiteWalkthroughRepository;
+  readonly site_runs: SiteRunRepository;
+  readonly walkthrough_exports: WalkthroughExportRepository;
+  readonly missions: MissionRepository;
   constructor(path: string) {
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
     this.db = new Database(path, { create: true, strict: true });
@@ -47,6 +53,9 @@ export class SessionStore {
     this.presentations.recover();
     this.studio = new StudioRepository(this.db);
     this.website_walkthroughs = new WebsiteWalkthroughRepository(this.db);
+    this.site_runs = new SiteRunRepository(this.db);
+    this.walkthrough_exports = new WalkthroughExportRepository(this.db);
+    this.missions = new MissionRepository(this.db);
     this.db.exec(`
       PRAGMA journal_mode=WAL;
       CREATE TABLE IF NOT EXISTS ai_sessions (id TEXT PRIMARY KEY, token_hash TEXT NOT NULL);

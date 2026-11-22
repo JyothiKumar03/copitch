@@ -4,6 +4,8 @@ import { interview_workspace } from "../src/services/interview";
 import { apply_studio_agent_turn, apply_voice_action, record_voice_exchange, run_studio_turn, studio_context, update_studio_scope } from "../src/services/studio-turn";
 import type { TStudioAgent, TStudioAgentInput } from "../src/services/studio-agent";
 import type { TAgentTurn, TStudioTurnInput } from "../src/types/studio-turn";
+import type { TEvidence, TResearchBrief } from "../src/types/research";
+import { pitch_variant_key } from "../src/repositories/deck";
 
 const pitch_intent = { subject: "Onboarding pilot", audience: "The bank", outcome: "Agree to evaluate the pilot",
   deliverable: "A short pilot pitch" };
@@ -40,6 +42,94 @@ const studio = () => {
   return { db, session, responses, calls, jobs, service, send, state, propose };
 };
 
+const completed_research = (db: SessionStore, session: string, evidence: TEvidence[] = []) => {
+  const brief: TResearchBrief = { brief_id: crypto.randomUUID(), summary: "Onboarding pilot", question: null,
+    source_policy: "files_only", messages: [], materials: "", urls: [], public_queries: [] };
+  const research_id = crypto.randomUUID();
+  db.replace_brief(session, undefined, brief);
+  db.save_research(session, { research_id, brief_id: brief.brief_id, confirmed_brief: brief,
+    findings: { title: "Onboarding pilot", sections: [] }, gaps: [], evidence });
+  db.studio.seed(session, { ...studio_context(db, session).state, phase: "done" }, []);
+  return research_id;
+};
+
+test("typed count queues once against the completed research and names the number", async () => {
+  const { db, session, responses, service } = studio();
+  const research_id = completed_research(db, session);
+  responses.push({ reply: "Got it.", language: "en", actions: [{ kind: "prepare_slides", slide_count: 6 }] });
+  let wakes = 0;
+  const input: TStudioTurnInput = { input: "typed", turn_id: crypto.randomUUID(), message: "Make it 6 slides." };
+  const dependencies = { ...service, wake_deck: () => { wakes++; } };
+  const result = await run_studio_turn(db, session, input, dependencies);
+  expect(result.text).toBe("Preparing 6 slides.");
+  expect(result.activity).toMatchObject({ tool: "prepare_slides", status: "queued", deck_preparation: { research_id, slide_count: 6 } });
+  expect(db.deck_preparations.active_for_research(session, research_id)).toEqual({ job_id: result.activity!.deck_preparation!.job_id!, slide_count: 6 });
+  expect(await run_studio_turn(db, session, input, dependencies)).toEqual(result);
+  expect(wakes).toBe(1);
+});
+
+test("deck commands before research finishes cannot queue or replace a research plan", async () => {
+  const { db, session, responses, send } = studio();
+  responses.push({ reply: "Preparing", language: "en", actions: [{ kind: "prepare_slides", slide_count: 6 }] });
+  const result = await send("Make it 6 slides.");
+  expect(result.text).toContain("Finish research");
+  expect(result.activity).toBeUndefined();
+  expect(db.deck_preparations.claim()).toBeUndefined();
+  expect(studio_context(db, session).state.phase).toBe("interview");
+});
+
+test("voice decks use the same durable count and a typed edit waits for approval on the current revision", async () => {
+  const { db, session, service, responses } = studio();
+  const research_id = completed_research(db, session, [{ id: "M1", origin: "material", location: "Pilot readout", passage: "Pilot outcomes" }]);
+  const voiced = await apply_voice_action(db, session, "Make four slides", { kind: "prepare_slides", slide_count: 4 }, service);
+  expect(voiced.activity).toMatchObject({ tool: "prepare_slides", deck_preparation: { research_id, slide_count: 4 } });
+  const deck_id = crypto.randomUUID();
+  db.decks.create(session, { deck_id, research_id, revision: 1, title: "Pilot", slides: ["First", "Second"].map((title, index) =>
+    ({ slide_id: String(index + 1), title, layout: "evidence", highlights: ["Pilot update"], narration: "A pilot update.", evidence_ids: [] })) },
+  pitch_variant_key({ slide_count: 2 }));
+  const message = "Change slide 2's title to Pilot outcomes.";
+  responses.push({ reply: "I'll draft the change.", language: "en", actions: [{ kind: "revise_slide", slide_number: 2, instruction: message }] });
+  const edit = await run_studio_turn(db, session, { input: "typed", turn_id: crypto.randomUUID(), message }, { ...service,
+    deck_editor: async context => {
+      expect(context.slide.slide_id).toBe("2");
+      expect(context.message).toBe(message);
+      return { kind: "edit", text: "Drafted", changes: { title: "Pilot outcomes" }, support: [{ evidence_id: "M1", excerpt: "Pilot outcomes" }] };
+    } });
+  const proposal = edit.activity!.deck_proposal!;
+  expect(proposal).toMatchObject({ deck_id, slide_id: "2", status: "pending", base_revision: 1,
+    attribution: [{ evidence_id: "M1", excerpt: "Pilot outcomes" }], after: { title: "Pilot outcomes", evidence_ids: ["M1"] } });
+  expect(db.decks.get(session, deck_id)?.slides[1].title).toBe("Second");
+  expect(db.decks.decide(session, deck_id, proposal.proposal_id, "approve").approved_revision).toBe(2);
+  expect(db.decks.get(session, deck_id)?.slides[1].title).toBe("Pilot outcomes");
+});
+
+test("preview slide changes require exact citations and independent verification for new claims", async () => {
+  const { db, session, service, responses } = studio();
+  const research_id = completed_research(db, session, [{ id: "M1", origin: "material", location: "Pilot readout", passage: "The pilot is ongoing." }]);
+  const deck_id = crypto.randomUUID();
+  db.decks.create(session, { deck_id, research_id, revision: 1, title: "Pilot", slides: [{ slide_id: "s1", title: "Trial update",
+    layout: "evidence", highlights: ["The pilot is ongoing."], narration: "The pilot is ongoing.", evidence_ids: ["M1"] }] }, pitch_variant_key({ slide_count: 1 }));
+  const message = "Give slide one a more informative title.";
+  const revise = { reply: "I'll draft the change.", language: "en", actions: [{ kind: "revise_slide", slide_number: 1, instruction: message }] } satisfies TAgentTurn;
+  const try_edit = (excerpt: string) => {
+    responses.push(revise);
+    return run_studio_turn(db, session, { input: "typed", turn_id: crypto.randomUUID(), message }, { ...service,
+      deck_editor: async () => ({ kind: "edit", text: "Drafted", changes: { title: "The pilot succeeded" }, support: [{ evidence_id: "M1", excerpt }] }),
+      verify_deck_edit: async (claims, evidence) => {
+        expect(claims.map(claim => claim.text)).toEqual(["The pilot succeeded"]);
+        expect(evidence.map(item => item.passage)).toEqual(["The pilot is ongoing."]);
+        return false;
+      } });
+  };
+  const fabricated = await try_edit("The pilot succeeded");
+  expect(fabricated.text).toContain("Which source");
+  expect(fabricated.activity).toBeUndefined();
+  const misleading = await try_edit("The pilot is ongoing.");
+  expect(misleading.text).toContain("don’t verify");
+  expect(misleading.activity).toBeUndefined();
+  expect(db.decks.get(session, deck_id)?.revision).toBe(1);
+});
+
 test("opening greeting creates no proposal", async () => {
   const { responses, send, calls, jobs } = studio();
   responses.push({ reply: "Hi. What do you want to pitch?", language: "en", actions: [] });
@@ -63,10 +153,39 @@ test("propose then explicit typed approve queues one job without a second model 
   expect(reply.phase).toBe("researching");
   expect(reply.activity?.tool).toBe("queue_research");
   expect(db.current_brief(session)?.studio_notes).toEqual(["I led three regulated onboarding pilots."]);
-  expect(db.current_brief(session)?.intent).toEqual(pitch_intent);
+  expect(db.current_brief(session)?.intent).toEqual({ ...pitch_intent, deliverable: "6 slides" });
   expect(db.current_brief(session)?.studio_version).toBe(2);
   expect(calls).toHaveLength(2);
   expect(jobs).toHaveLength(1);
+  expect(db.missions.current(session)).toMatchObject({ status: "working", approved_revision: 1, research_job_id: jobs[0] });
+});
+
+test("typed scope revision freezes the old mission and cannot approve the replacement", async () => {
+  const { db, session, propose, responses, send, jobs } = studio();
+  const proposal = (await propose()).proposal!;
+  await send("Start research", { option_id: "approve", answer_to: proposal.proposal_id });
+  responses.push({ reply: "I'll start again.", language: "en", actions: [
+    { kind: "mission_command", patch: { slide_count: 4, add_host_fact: "I use a secure sandbox", files_only: true } }, { kind: "start_research" },
+  ] });
+  const turn = await send("Make four slides, use only my files and add that I use a secure sandbox.");
+  expect(turn.text).toContain("Review and approve");
+  expect(db.missions.current(session)).toMatchObject({ status: "needs_approval", approved_revision: 1,
+    contract: { revision: 2, deliverable: { slide_count: 4 }, sources: { public_search: false, urls: [], site_tasks: [] } } });
+  expect(db.missions.current(session)?.contract.must_include.map(fact => fact.text)).toContain("I use a secure sandbox");
+  expect(jobs).toHaveLength(1);
+});
+
+test("a typed patch arriving after a spoken mission revision cannot change the new plan", async () => {
+  const { db, session, propose, service, jobs } = studio();
+  await propose();
+  const mission = db.missions.current(session)!;
+  const basis = { mission_id: mission.mission_id, revision: mission.contract.revision };
+  await expect(run_studio_turn(db, session, { input: "typed", turn_id: crypto.randomUUID(), message: "Make four slides" }, { ...service, agent: async () => {
+    await apply_voice_action(db, session, "Make it seven slides", { kind: "mission_command", patch: { slide_count: 7 } }, service, basis);
+    return { reply: "I’ll revise it.", language: "en", actions: [{ kind: "mission_command", patch: { slide_count: 4 } }] };
+  } })).rejects.toThrow();
+  expect(db.missions.current(session)).toMatchObject({ status: "needs_approval", contract: { revision: 2, deliverable: { slide_count: 7 } } });
+  expect(jobs).toHaveLength(0);
 });
 
 test("spoken yes without heard proposal does not start research", async () => {
@@ -126,7 +245,7 @@ test("agent failure leaves state unchanged and records a retry reply", async () 
   await propose();
   const before = state();
   const reply = await send("What can we do next?", { materials: "Uncommitted material" });
-  expect(reply.text).toBe("Sorry, I lost that. Could you say it again?");
+  expect(reply.text).toBe("I couldn’t reach the AI model just now, so nothing changed. Please send that again.");
   expect(state()).toEqual(before);
 });
 
@@ -220,4 +339,13 @@ test("a spoken plan is set without adding a turn, and only a fully heard plan ca
   const started = apply_voice_action(db, session, "Yes, go ahead.", { kind: "start_research" }, voice_services(jobs));
   expect([started.phase, started.activity?.tool, jobs.length]).toEqual(["researching", "queue_research", 1]);
   expect(db.current_brief(session)?.studio_notes).toEqual(["I led three onboarding pilots."]);
+});
+
+test("language names from the model are stored as tags the client accepts", async () => {
+  const { language_tag } = await import("../src/services/studio-turn");
+  expect(language_tag("english")).toBe("en");
+  expect(language_tag("Telugu")).toBe("te");
+  expect(language_tag("te-IN")).toBe("te-IN");
+  expect(language_tag("klingonese")).toBeUndefined();
+  expect(language_tag("")).toBeUndefined();
 });

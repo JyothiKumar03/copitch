@@ -10,6 +10,6 @@ test("legacy project state preserves notes and attachments without authorizing a
     reply_language: "hi", proposal: null, proposal_heard: false, source_ids: old.source_ids, materials: "Private notes." });
   expect(state.factual_notes).toBeUndefined();
 });
-test("researching permits only language changes", () => {
-  expect(allowed_actions.researching).toEqual(["set_reply_language"]);
+test("researching permits response language and a proposed mission change", () => {
+  expect(allowed_actions.researching).toEqual(["set_reply_language", "mission_command"]);
 });

@@ -9,6 +9,7 @@ import type { TStudioTurnServices } from "../services/studio-turn";
 import { studio_scope_input, studio_turn_input } from "../types/studio-turn";
 import { flush_voice_exchange } from "./live-call";
 import { research_worker } from "./research";
+import { deck_preparation_worker } from "./deck";
 
 const ensure_research = () => {
   if (!process.env.OPENAI_API_KEY || !configured_models_for("research").length) throw new AppError(503, "Research is unavailable until a provider is configured");
@@ -26,7 +27,7 @@ export const create_studio_turn_handler = (services: TStudioTurnServices) => asy
 };
 
 export const studio_turn_handler = create_studio_turn_handler({
-  agent: studio_agent, ensure_research, wake: job_id => research_worker.wake(job_id),
+  agent: studio_agent, ensure_research, wake: job_id => research_worker.wake(job_id), wake_deck: () => deck_preparation_worker.wake(),
 });
 
 export const studio_scope_handler = (req: Request, res: Response) => {
