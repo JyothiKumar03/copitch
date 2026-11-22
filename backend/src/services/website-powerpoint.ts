@@ -6,13 +6,13 @@ import type { TWebsiteCaptureAttempt, TWebsiteWalkthroughPage } from "../../../s
 import { configured_models_for } from "./model-config";
 import { website_walkthrough_plan } from "./prompts";
 
-type TCaptureSlide = TWebsiteWalkthroughPage & { screenshot: Buffer };
-type TWebsiteDeck = { url: string; audience: string; goal: string; pages: TCaptureSlide[]; attempts: TWebsiteCaptureAttempt[] };
+type TCaptureSlide = TWebsiteWalkthroughPage & { screenshot: Buffer; caption?: string; evidence_id?: string };
+type TWebsiteDeck = { url: string; audience: string; goal: string; pages: TCaptureSlide[]; attempts: TWebsiteCaptureAttempt[]; coverage?: { visited: number; blocked: number; remaining: number } };
 const ink = "17251C";
 const paper = "F5F5EC";
 const greens = { deep: "182D20", mid: "44634B", light: "DCF0D2" };
 const evidence = "794E19";
-const note_length = 150;
+const note_length = 240;
 const sentences = new Intl.Segmenter(undefined, { granularity: "sentence" });
 const words = new Intl.Segmenter(undefined, { granularity: "word" });
 const statement_end = /[.!。！]["'’”»)\]]*$/u;
@@ -98,9 +98,18 @@ const select_story = async (pages: TCaptureSlide[], audience: string, goal: stri
   }
 };
 
-export const export_website_powerpoint = async ({ url, audience, goal, pages, attempts }: TWebsiteDeck, signal?: AbortSignal) => {
+// Site titles usually repeat the site name ("Projects — Jane Doe"). Drop a suffix every page shares.
+const shared_title_suffix = (titles: string[]) => {
+  const suffixes = titles.map(title => title.match(/\s+[|–—-]\s+([^|–—-]+)$/u)?.[1]);
+  const first = suffixes[0];
+  return titles.length > 1 && first && suffixes.every(suffix => suffix === first) ? first : undefined;
+};
+
+export const export_website_powerpoint = async ({ url, audience, goal, pages, attempts, coverage }: TWebsiteDeck, signal?: AbortSignal) => {
   signal?.throwIfAborted();
-  const readable_pages = pages.map(page => ({ ...page, facts: page_facts(page) }));
+  const suffix = shared_title_suffix(pages.map(page => page.title));
+  const page_title = (title: string) => suffix ? title.replace(new RegExp(`\\s+[|–—-]\\s+${RegExp.escape(suffix)}$`, "u"), "") : title;
+  const readable_pages = pages.map(page => ({ ...page, facts: page.caption ? page.facts : page_facts(page) }));
   const planned = await select_story(readable_pages, audience, goal, signal);
   const story = planned ?? readable_pages;
   const pptx = new PptxGenJS();
@@ -129,28 +138,34 @@ export const export_website_powerpoint = async ({ url, audience, goal, pages, at
   for (const page of story) {
     const slide = pptx.addSlide();
     slide.background = { color: paper };
-    slide.addText(clean(page.title, 105), { ...fields, x: .55, y: .49, w: 12.25, h: .90,
+    slide.addText(clean(page.caption ? `${page.capture_id}. ${page_title(page.title)}` : page_title(page.title), 105), { ...fields, x: .55, y: .49, w: 12.25, h: .90,
       fontFace: "Aptos Display", fontSize: 34, bold: true, valign: "middle", fit: "shrink" });
     const image = "image/jpeg;base64," + page.screenshot.toString("base64");
     slide.addImage({ data: image, ...image_frame(.55, 1.60, 8.24, 5.22),
       altText: "Captured page for " + clean(page.title, 90) });
-    const facts = planned ? page.facts : selected_facts(page.facts, goal, audience);
+    const facts = page.caption ? page.facts.filter(fact => !page.title.startsWith(fact)).slice(0, 2)
+      : planned ? page.facts : selected_facts(page.facts, goal, audience);
+    if (page.caption) slide.addNotes([page.caption, ...page.facts, page.evidence_id ?? "", page.url].join("\n"));
     if (facts.length) {
-      slide.addText("What the page shows", { ...fields, x: 9.23, y: 1.76, w: 3.45, h: .46, fontSize: 18, bold: true, color: greens.mid });
+      slide.addText(page.caption ? clean(page.caption, 90) : "What the page shows", { ...fields, x: 9.23, y: 1.76, w: 3.45, h: .46, fontSize: 18, bold: true, color: greens.mid });
       for (const [index, fact] of facts.entries()) slide.addText(fact, { ...fields, x: 9.23, y: 2.38 + index * 1.18,
         w: 3.45, h: 1.08, fontSize: 16, valign: "top", fit: "shrink" });
     }
-    slide.addText("Open the captured page", { ...fields, x: .55, y: 6.99, w: 6.5, h: .27, fontSize: 12,
+    slide.addText(page.evidence_id ? `Open the captured page · ${page.evidence_id}` : "Open the captured page", { ...fields, x: .55, y: 6.99, w: 6.5, h: .27, fontSize: 12,
       color: evidence, hyperlink: { url: page.url, tooltip: page.url } });
   }
 
-  const failed = attempts.filter(attempt => attempt.status === "failed");
-  if (failed.length) {
+  // A path captured from another address of the same site (for example www) is not a gap.
+  const captured_paths = new Set(attempts.filter(attempt => attempt.status === "captured").map(attempt => new URL(attempt.observed_url ?? attempt.url).pathname));
+  const failed = attempts.filter(attempt => attempt.status === "failed" && !captured_paths.has(new URL(attempt.url).pathname));
+  if (failed.length || coverage) {
     const slide = pptx.addSlide();
     slide.background = { color: paper };
-    slide.addText("Pages we could not capture", { ...fields, x: .55, y: .55, w: 12.2, h: .75, fontSize: 33, bold: true });
+    slide.addText(coverage ? "Walkthrough coverage" : "Pages we could not capture", { ...fields, x: .55, y: .55, w: 12.2, h: .75, fontSize: 33, bold: true });
+    if (coverage) slide.addText(`${coverage.visited} pages visited · ${coverage.blocked} blocked paths · ${coverage.remaining} paths remaining`,
+      { ...fields, x: .59, y: 1.25, w: 12.1, h: .46, fontSize: 17, color: greens.mid });
     for (const [index, attempt] of failed.slice(0, 8).entries()) {
-      const y = 1.52 + index * .68;
+      const y = (coverage ? 1.94 : 1.52) + index * .68;
       slide.addText(clean(attempt.url, 118), { ...fields, x: .59, y, w: 6.6, h: .58, fontSize: 13, color: evidence, fit: "shrink" });
       slide.addText(clean(attempt.reason ?? "The page was unavailable.", 125), { ...fields, x: 7.35, y, w: 5.3, h: .58, fontSize: 14, fit: "shrink" });
     }

@@ -29,7 +29,20 @@ test("PowerPoint notes keep complete useful statements instead of breadcrumbs, h
   expect(records[1].text).not.toContain("What the page shows Installing Installing");
   expect(records[1].text).not.toContain("How to install a recent Python distribution");
   expect(records[1].text).not.toContain("Are you completely new to programming?");
-  expect(records[2].text).toContain("archived installers and detailed…");
+  expect(records[2].text).toContain("archived installers and detailed documentation before installation begins");
   expect(records[2].text).not.toContain("detailed do…");
   expect(records[2].text).not.toContain("Installation Options");
+});
+
+test("agent walkthrough slide preserves both operating-system commands, its action and citation", async () => {
+  const url = "https://walkthrough.example.com/tutorial";
+  const facts = ["On Windows, run: project-env\\Scripts\\activate", "On Unix or MacOS, run: source project-env/bin/activate"];
+  const deck = await export_website_powerpoint({ url, audience: "Developers", goal: "Activate an environment",
+    pages: [{ capture_id: 1, url, title: "Activate the environment", screenshot: Buffer.from("ffd8ffd9", "hex"),
+      caption: "Viewed code example", evidence_id: "B1000001", facts }], attempts: [], coverage: { visited: 1, blocked: 0, remaining: 2 } });
+  const { records } = await read_pptx(deck);
+  expect(records[1].text).toContain("Viewed code example");
+  expect(records[1].text).toContain("B1000001");
+  for (const fact of facts) expect(records[1].text).toContain(fact);
+  expect(records[2].text).toContain("2 paths remaining");
 });
