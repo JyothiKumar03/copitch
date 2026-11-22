@@ -39,3 +39,10 @@ export const trace_request: RequestHandler = (req, res, next) => {
   });
   next();
 };
+
+// Always logged: a swallowed failure must still leave evidence. Message and name only, never request bodies or keys.
+export const log_failure = (operation: string, error: unknown, detail: Record<string, string | number | boolean | undefined> = {}) => {
+  const failure = error instanceof Error ? error : new Error(String(error));
+  const cause = failure.cause instanceof Error ? failure.cause.message.slice(0, 300) : undefined;
+  console.error(JSON.stringify({ level: "error", operation, error: failure.name, message: failure.message.slice(0, 500), cause, ...detail }));
+};

@@ -12,8 +12,8 @@ import type { TResearchJob } from "../types/research-job";
 export const progress_reply = (job: TResearchJob, language: "en" | "hi") => {
   if (job.status === "needs_input") return job.error ?? "Add a source or a specific example before trying again.";
   const messages = {
-    en: { queued: "Your research is queued.", running: "Research is running.", completed: "Your research context is ready to open.", failed: "Research stopped. You can retry from the studio.", superseded: "A newer brief replaced this research.", needs_input: "Research needs another source or a substantive detail before drafting." },
-    hi: { queued: "आपका शोध कतार में है।", running: "शोध जारी है।", completed: "आपका शोध पढ़ने के लिए तैयार है।", failed: "शोध रुक गया है। आप फिर कोशिश कर सकते हैं।", superseded: "शोध का विषय बदल गया है।", needs_input: "शोध के लिए एक और स्रोत या ठोस जानकारी चाहिए।" },
+    en: { queued: "Your research is queued.", running: "Research is running.", completed: "Your research context is ready to open.", failed: "Research stopped. You can retry from the studio.", superseded: "A newer brief replaced this research.", stopped: "Research stopped. Your saved work is available.", needs_input: "Research needs another source or a substantive detail before drafting." },
+    hi: { queued: "आपका शोध कतार में है।", running: "शोध जारी है।", completed: "आपका शोध पढ़ने के लिए तैयार है।", failed: "शोध रुक गया है। आप फिर कोशिश कर सकते हैं।", superseded: "शोध का विषय बदल गया है।", stopped: "शोध रोक दिया गया है। आपका सहेजा हुआ काम उपलब्ध है।", needs_input: "शोध के लिए एक और स्रोत या ठोस जानकारी चाहिए।" },
   };
   const progress = messages[language][job.status];
   if (job.status !== "running") return progress;

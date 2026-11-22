@@ -4,11 +4,41 @@ import type { TLiveExchange } from "../src/services/live-interviewer";
 import { SessionStore } from "../src/repositories/session";
 import { apply_voice_action, record_voice_exchange, studio_context } from "../src/services/studio-turn";
 import type { TVoiceAction } from "../src/services/studio-turn";
+import type { TMissionTurnBasis } from "../src/services/studio-turn";
 import type { TStudioTurn } from "../src/types/studio-turn";
 
 type TSent = { type: string; item?: { type: string; call_id: string; output: string } };
 const pause = (ms = 15) => new Promise(resolve => setTimeout(resolve, ms));
 const proposal = { proposal_id: "plan-1", summary: "Review jk-ai.in for a bank pitch", urls: ["https://jk-ai.in/"], queries: [], source_policy: "public_search" as const };
+
+test("a spoken count delegates to the controller, records the receipt, and keeps the call open", async () => {
+  const exchanges: TLiveExchange[] = [];
+  const sent: TSent[] = [];
+  const activity = { tool: "prepare_slides", status: "queued", result: "Preparing 4 slides.",
+    deck_preparation: { research_id: "research", slide_count: 4, job_id: "job" } } as const;
+  let calls = 0;
+  let closed = false;
+  const live = create_live_interviewer({ send: event => sent.push(event as TSent), close: () => { closed = true; }, heard: () => {},
+    record: exchange => exchanges.push(exchange), act: (message, action) => {
+      expect(message).toBe("Make it four slides.");
+      expect(action).toEqual({ kind: "prepare_slides", slide_count: 4 });
+      calls++;
+      return { phase: "done", proposal: null, turn_id: "turn", language: "en", created_at: 0, user_text: message,
+        text: "Preparing 4 slides.", activity };
+    } });
+  await live.receive({ type: "session.input_transcript.delta", start_ms: 100, end_ms: 1000, delta: "Make it four slides." });
+  const delegation = { type: "response.event", event: { type: "response.output_item.done", item: {
+    type: "function_call", call_id: "deck-count", name: "prepare_slides", arguments: JSON.stringify({ slide_count: 4, focus: null }) } } };
+  await live.receive(delegation);
+  await live.receive(delegation);
+  await live.receive({ type: "session.output_transcript.delta", start_ms: 1100, end_ms: 1600, delta: "Preparing four slides." });
+  live.flush();
+  expect(calls).toBe(1);
+  expect(sent[0]?.item?.output).toContain("Preparing 4 slides.");
+  expect(exchanges[0]?.activity).toEqual(activity);
+  expect(closed).toBe(false);
+  live.close();
+});
 
 const setup = (result: (action: TVoiceAction) => Partial<TStudioTurn> = () => ({})) => {
   const sent: TSent[] = [];
@@ -185,7 +215,7 @@ test("sideband replay preserves verbatim multilingual fragments and call-scoped 
   });
 });
 
-const first_spoken_approval = async (start_ms: number, end_ms: number) => {
+const first_spoken_approval = async (start_ms: number, end_ms: number, budget: string | null = "two US dollars", translated_outcome?: string) => {
   const db = new SessionStore(":memory:");
   const session = "timed-first-approval";
   const jobs: string[] = [];
@@ -209,7 +239,8 @@ const first_spoken_approval = async (start_ms: number, end_ms: number) => {
       deliverable: "Introductory deck", summary: proposal.summary, urls: proposal.urls, queries: [] }, "offer");
     const offered_turn = studio_context(db, session).state.proposal_turn_id;
     await live.receive({ type: "session.output_transcript.delta", start_ms: 2500, end_ms: 4350,
-      delta: "I'll research jk-ai.in for your bank pitch to your new team. Shall I start?" });
+      delta: "I'll research jk-ai.in for your bank pitch to your new team. " + (translated_outcome ?? (budget
+        ? `I’ll create six slides using public sources. The budget is ${budget} and ten minutes. ` : "")) + "Shall I start?" });
     await live.receive({ type: "session.delegation.created", offset_ms: 5200,
       delegation: { id: "first-approval", target: "responses" } });
     await call("start_research", {}, "first-approval");
@@ -225,6 +256,56 @@ test("one spoken approval starts once when the correlated tool arrives before it
   expect(result.phase).toBe("researching");
   expect(result.jobs).toHaveLength(1);
   expect(result.outputs.at(-2)?.item?.output).toContain("Research has started");
+});
+
+test("the spoken plan can be read back with Hindi or Telugu quantities and source scope", async () => {
+  for (const translated of [
+    "सार्वजनिक स्रोत से छह स्लाइड। बजट २ अमेरिकी डॉलर और दस मिनट। ",
+    "పబ్లిక్ వెబ్ నుంచి ఆరు స్లైడ్లు. బడ్జెట్ ౨ డాలర్లు, పది నిమిషాలు. ",
+  ]) {
+    const result = await first_spoken_approval(4480, 5080, null, translated);
+    expect(result.jobs).toHaveLength(1);
+    expect(result.phase).toBe("researching");
+  }
+});
+
+test("speaking after the research summary cannot approve a mission whose outcome details were not read", async () => {
+  for (const budget of [null, "$20", "12 US dollars"]) {
+    const result = await first_spoken_approval(4480, 5080, budget);
+    expect(result.phase).toBe("proposed");
+    expect(result.jobs).toHaveLength(0);
+    expect(result.outputs.at(-2)?.item?.output).toContain("The spoken approval could not be confirmed");
+  }
+});
+
+test("a spoken plan correction waits for its late transcript and matches the captured mission revision", async () => {
+  const run = async (revised: boolean) => {
+    let mission = { mission_id: "mission-1", revision: 2 };
+    const actions: { message: string; action: TVoiceAction; mission?: TMissionTurnBasis }[] = [];
+    const live = create_live_interviewer({ send: () => {}, close: () => {}, heard: () => {}, record: () => {},
+      mission_version: () => mission, idle_ms: 50, act: (message, action, basis) => {
+        actions.push({ message, action, mission: basis });
+        return { turn_id: "fixture", created_at: 0, user_text: message, text: "Review and approve the revised presentation plan in Mission.",
+          language: "en", phase: "researching", proposal: null };
+      } });
+    try {
+      await live.receive({ type: "session.delegation.created", offset_ms: 1300, delegation: { id: "late-revision", target: "responses" } });
+      await live.receive({ type: "response.event", delegation_id: "late-revision", event: { type: "response.output_item.done", item: {
+        type: "function_call", call_id: "late-tool", name: "mission_command", arguments: JSON.stringify({ slide_count: 4,
+          audience: null, purpose: null, tone: null, add_host_fact: "I use a secure sandbox", files_only: null }),
+      } } });
+      expect(actions).toHaveLength(0);
+      if (revised) mission = { mission_id: "mission-1", revision: 3 };
+      await live.receive({ type: "session.input_transcript.delta", start_ms: 700, end_ms: 1000, delta: "Make four slides and add that " });
+      await live.receive({ type: "session.input_transcript.delta", start_ms: 1000, end_ms: 1200, delta: "I use a secure sandbox." });
+      await pause(35);
+      return actions;
+    } finally { live.close(); }
+  };
+  expect(await run(false)).toEqual([{ message: "Make four slides and add that I use a secure sandbox.",
+    action: { kind: "mission_command", patch: { slide_count: 4, add_host_fact: "I use a secure sandbox" } },
+    mission: { mission_id: "mission-1", revision: 2 } }]);
+  expect(await run(true)).toEqual([]);
 });
 
 test("speech overlapping the plan or arriving after a different delegation cannot release a pending start", async () => {

@@ -45,7 +45,7 @@ const bounded_body = async (input: Response, maximum: number, oversized: AppErro
 };
 
 export const call_voice_worker = async (
-  operation: "transcribe" | "connect" | "speech", content_type: string, body: Blob | string,
+  operation: "transcribe" | "connect" | "presentation-connect" | "speech", content_type: string, body: Blob | string,
   fetch_worker: (url:string, options:RequestInit) => Promise<Response> = fetch,
   language: string = DEFAULT_LANGUAGE,
   client_signal?: AbortSignal,
@@ -81,7 +81,7 @@ export const call_voice_worker = async (
       if (!bytes.length) throw invalid;
       return { kind: "audio" as const, bytes };
     }
-    if (operation === "connect") {
+    if (operation === "connect" || operation === "presentation-connect") {
       if (mime !== "application/sdp") throw invalid;
       const sdp = new TextDecoder().decode(await bounded_body(response, 65536, invalid));
       if (!sdp.startsWith("v=0")) throw invalid;

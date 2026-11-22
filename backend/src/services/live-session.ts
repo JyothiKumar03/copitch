@@ -12,8 +12,11 @@ export const live_session_setup = (db: SessionStore, session: string) => {
   if (!model) throw new Error("The interview model is not configured");
   const { state } = studio_context(db, session);
   const files = db.sources.selected(session, state.source_ids).map(file => file.filename);
+  const current = db.missions.current(session);
+  const mission = current && ["needs_approval", "working", "needs_input"].includes(current.status) ?
+    { status: current.status, slide_count: current.contract.deliverable.slide_count, audience: current.contract.audience } : null;
   const project = { phase: state.phase, goal: state.goal, notes: state.notes, links: state.urls ?? [], files, source_policy: state.source_policy,
-    plan: state.proposal?.summary ?? null };
+    plan: state.proposal?.summary ?? null, mission };
   const history = db.studio.turns(session).slice(-20).flatMap(turn => [
     ...(turn.user_text.trim() ? [message("user", turn.user_text)] : []), ...(turn.text.trim() ? [message("assistant", turn.text)] : [])]);
   return {

@@ -58,6 +58,57 @@ class InterviewVoiceTest(unittest.TestCase):
                 self.assertEqual(client.post("/connect", headers=self.auth, json=body).status_code, 400)
             self.assertEqual(self.calls, [])
 
+    def test_presentation_signaling_keeps_the_secret_in_its_transcription_only_worker(self):
+        offer = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
+        answer = "v=0\r\nm=audio 10000 UDP/TLS/RTP/SAVPF 111\r\n"
+        identity = "4" * 64
+        secret = "ek_fixture_very_short_lived"
+
+        def respond(request):
+            self.calls.append(request)
+            self.assertEqual(request.headers["openai-safety-identifier"], identity)
+            if request.url.path == "/v1/realtime/client_secrets":
+                self.assertEqual(request.headers["authorization"], "Bearer fixture-provider")
+                value = json.loads(request.content)
+                self.assertEqual(value["expires_after"], {"anchor": "created_at", "seconds": 60})
+                self.assertEqual(value["session"], {"type": "transcription", "audio": {"input": {
+                    "transcription": {"model": "gpt-4o-mini-transcribe"},
+                    "turn_detection": {"type": "server_vad", "threshold": 0.5, "prefix_padding_ms": 300, "silence_duration_ms": 500},
+                }}})
+                return httpx.Response(200, json={"value": secret, "session": value["session"]})
+            self.assertEqual(request.url.path, "/v1/realtime/calls")
+            self.assertEqual(request.headers["authorization"], "Bearer " + secret)
+            self.assertEqual(request.headers["content-type"], "application/sdp")
+            self.assertEqual(request.content, offer.encode())
+            # The live provider labels the SDP answer text/plain (observed 2026-11-22); the body is what matters.
+            return httpx.Response(201, content=answer, headers={"Content-Type": "text/plain; charset=utf-8"})
+
+        with patch.dict("os.environ", {"OPENAI_TRANSCRIPTION_MODEL": "gpt-4o-mini-transcribe"}), \
+                TestClient(create_app(httpx.MockTransport(respond))) as client:
+            raw = {"sdp": offer, "safety_identifier": identity}
+            self.assertEqual(client.post("/presentation-connect", json=raw).status_code, 401)
+            self.assertEqual(client.post("/presentation-connect", headers=self.auth, json={**raw, "instructions": "fixture"}).status_code, 400)
+            self.assertEqual(self.calls, [])
+            reply = client.post("/presentation-connect", headers=self.auth, json=raw)
+            self.assertEqual((reply.status_code, reply.text), (200, answer))
+            self.assertEqual(reply.headers["cache-control"], "no-store")
+            self.assertEqual(reply.headers["content-type"], "application/sdp")
+            self.assertNotIn(secret, str(reply.headers))
+            self.assertEqual(len(self.calls), 2)
+
+    def test_presentation_without_server_vad_uses_recorded_fallback(self):
+        def respond(request):
+            self.calls.append(request.url.path)
+            return httpx.Response(200, json={"value": "ek_fixture_very_short_lived", "session": {
+                "type": "transcription", "audio": {"input": {"turn_detection": None}},
+            }})
+
+        with TestClient(create_app(httpx.MockTransport(respond))) as client:
+            reply = client.post("/presentation-connect", headers=self.auth,
+                                json={"sdp": "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n", "safety_identifier": "4" * 64})
+            self.assertEqual(reply.status_code, 503)
+            self.assertEqual(self.calls, ["/v1/realtime/client_secrets"])
+
     def test_invalid_recording_never_reaches_provider(self):
         with TestClient(create_app(httpx.MockTransport(self.provider))) as client:
             self.assertEqual(client.post("/transcribe", headers=self.auth, content=b"invalid").status_code, 415)

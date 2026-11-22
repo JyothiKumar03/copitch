@@ -1,4 +1,4 @@
-"""Private OpenAI adapter for interview audio and approved presentation narration."""
+"""Private OpenAI adapter for interview and presentation audio."""
 
 import asyncio
 import hashlib
@@ -57,12 +57,16 @@ def check_access(request: Request) -> Response | None:
     return None
 
 
-async def provider_request(request: Request, path: str, **kwargs) -> httpx.Response | Response:
+async def provider_request(request: Request, path: str, *, bearer: str | None = None,
+                           safety_identifier: str | None = None, content_type: str | None = None,
+                           **kwargs) -> httpx.Response | Response:
+    headers = {"Authorization": f"Bearer {bearer or os.environ['OPENAI_API_KEY']}"}
+    if safety_identifier:
+        headers["OpenAI-Safety-Identifier"] = safety_identifier
+    if content_type:
+        headers["Content-Type"] = content_type
     try:
-        result = await request.app.state.provider.post(
-            path, headers={"Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}"},
-            **kwargs,
-        )
+        result = await request.app.state.provider.post(path, headers=headers, **kwargs)
     except httpx.TimeoutException:
         return error_response("Voice provider timed out", 504)
     except httpx.RequestError:
@@ -111,6 +115,51 @@ async def connect(request: Request) -> Response:
     except (ValueError, KeyError, TypeError, AttributeError):
         return error_response("Invalid voice provider answer", 502)
     return Response(answer, media_type="application/sdp", headers={**NO_STORE, "X-Voice-Session": session_id})
+
+
+async def presentation_connect(request: Request) -> Response:
+    denied = check_access(request)
+    if denied is not None:
+        return denied
+    raw = await bounded_body(request, 196_608)
+    if raw is None:
+        return error_response("Microphone offer is too large", 413)
+    try:
+        payload = json.loads(raw)
+        offer, safety_identifier = payload["sdp"], payload["safety_identifier"]
+        if (set(payload) != {"sdp", "safety_identifier"} or not isinstance(offer, str) or
+                len(offer) > 65_536 or not re.match(r"v=0\r?\n", offer) or not re.search(r"^m=audio ", offer, re.M) or
+                not isinstance(safety_identifier, str) or not re.fullmatch(r"[a-f0-9]{64}", safety_identifier)):
+            raise ValueError
+    except (ValueError, KeyError, TypeError):
+        return error_response("Invalid presentation microphone offer", 400)
+
+    setup = {"type": "transcription", "audio": {"input": {
+        "transcription": {"model": os.getenv("OPENAI_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe")},
+        "turn_detection": {"type": "server_vad", "threshold": 0.5, "prefix_padding_ms": 300, "silence_duration_ms": 500},
+    }}}
+    created = await provider_request(request, "realtime/client_secrets", safety_identifier=safety_identifier,
+                                     json={"expires_after": {"anchor": "created_at", "seconds": 60}, "session": setup})
+    if isinstance(created, Response):
+        return created
+    try:
+        payload = created.json()
+        secret, effective = payload["value"], payload["session"]
+        if not isinstance(secret, str) or not re.fullmatch(r"ek_[\w-]{8,512}", secret) or effective["type"] != "transcription":
+            raise ValueError
+        vad = effective["audio"]["input"]["turn_detection"]
+        if not isinstance(vad, dict) or vad.get("type") != "server_vad":
+            return error_response("Realtime microphone is unavailable", 503)
+    except (ValueError, KeyError, TypeError):
+        return error_response("Invalid realtime microphone setup", 502)
+    result = await provider_request(request, "realtime/calls", bearer=secret, safety_identifier=safety_identifier,
+                                    content_type="application/sdp", content=offer.encode())
+    if isinstance(result, Response):
+        return result
+    # OpenAI labels the SDP answer text/plain, so validate the body rather than the content type.
+    if not 0 < len(result.content) <= 65_536 or not re.match(r"v=0\r?\n", result.text):
+        return error_response("Invalid realtime microphone answer", 502)
+    return Response(result.text, media_type="application/sdp", headers=NO_STORE)
 
 
 async def transcribe(request: Request) -> Response:
@@ -220,7 +269,7 @@ def create_app(transport: httpx.AsyncBaseTransport | None = None) -> Starlette:
     return Starlette(
         lifespan=lifespan,
         routes=[Route("/connect", connect, methods=["POST"]), Route("/transcribe", transcribe, methods=["POST"]),
-                Route("/speech", speech, methods=["POST"])],
+                Route("/speech", speech, methods=["POST"]), Route("/presentation-connect", presentation_connect, methods=["POST"])],
     )
 
 
