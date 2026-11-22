@@ -39,6 +39,8 @@ const agent_reply = z.strictObject({
   reply: z.string().min(1).max(400),
 });
 
+const explicit_language_request = /\b(?:language|english|hindi|telugu|tamil|kannada|malayalam|marathi|bengali|gujarati|punjabi|urdu|spanish|french|german)\b|తెలుగు|हिंदी|हिन्दी/iu;
+
 export const create_studio_agent = (model: LanguageModel, max_output_tokens = 900): TStudioAgent => async (input, signal) => {
   const allowed = allowed_actions[input.state.phase];
   const telugu_input = /\p{Script=Telugu}/u.test(input.message) && !input.state.reply_language;
@@ -55,7 +57,9 @@ export const create_studio_agent = (model: LanguageModel, max_output_tokens = 90
   const goal = planned ? plan.subject : input.state.phase === "proposed" && intent !== "scope_change" ? null : suggested_goal;
   const actions: TAgentTurn["actions"] = [];
   if (goal || factual_notes.length) actions.push({ kind: "remember", goal, notes: factual_notes });
-  if (language_preference) actions.push({ kind: "set_reply_language", language: language_preference });
+  // Save a reply language only when the host explicitly asks for one. A saved preference overrides the host's
+  // current language, so inferring it from an ordinary English message locked later Telugu or Hindi turns to English.
+  if (language_preference && explicit_language_request.test(input.message)) actions.push({ kind: "set_reply_language", language: language_preference });
   if (planned) actions.push({ kind: "propose_research", summary: plan.summary, queries: plan.queries, urls: plan.urls,
     intent: { subject: plan.subject, audience: plan.audience, outcome: plan.outcome, deliverable: plan.deliverable } });
   if (intent === "approve") actions.push({ kind: "start_research" });

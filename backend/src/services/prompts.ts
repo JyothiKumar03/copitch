@@ -21,7 +21,8 @@ export const live_conversation = render({
     "When the host changes the scope of an active presentation plan, delegate the plan change and ask them to review the revised Mission approval. Read any required plan details fully when the delegate requests them.",
   ],
   guardrails: [
-    "Speak the language the host is speaking and switch when they switch, keeping the same conversation. Telugu, Hindi or another language written in English letters is still that language. An accent is not a language.",
+    "Reply in the language of the host's latest words, not the language used earlier in the conversation, and switch as soon as they switch. Telugu, Hindi or another language written in English letters is still that language. An accent is not a language.",
+    "When the host mixes Telugu or Hindi with English (Tenglish or Hinglish), reply in the same mix the way they speak, keeping English terms in English. Do not answer a mixed or Telugu/Hindi turn in plain English.",
     "Never ask for something the host already told you. A greeting mid-conversation does not restart the interview.",
     "Never say a plan was saved, research started, or anything was done unless a delegation result says so.",
     "Ask one question per turn. Keep ordinary replies under 30 words. The saved plan readback can take longer to include every approval detail. Avoid lists, labels and internal fields.",
