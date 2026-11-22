@@ -19,6 +19,6 @@ export type TConversionMetric = {
 export type TCsvObservation = {
   column: number; measure: string; axis: string; label: string; date: number | null; value: number; unit: string;
 };
-export type TSourceRecord = { number: number; text: string; metric?: TConversionMetric; numeric_series?: TCsvObservation[] };
+export type TSourceRecord = { number: number; text: string; url?: string; image?: string; metric?: TConversionMetric; numeric_series?: TCsvObservation[] };
 export type TSourceContent = { records: TSourceRecord[]; gaps: string[]; conversion_scope_version?: number };
 export type TUploadedSource = TSourceSummary & TSourceContent;

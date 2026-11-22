@@ -100,12 +100,12 @@ export class WebsiteWalkthroughRepository {
       .run(JSON.stringify(attempts), exporting ? "exporting" : "capturing", lease.walkthrough_id, lease.lease_token, now).changes === 1;
   }
 
-  complete(lease: TWebsiteWalkthroughLease, pages: TCapturePage[], powerpoint: Buffer, now = Date.now()) {
+  complete(lease: TWebsiteWalkthroughLease, pages: TCapturePage[], powerpoint?: Buffer, now = Date.now()) {
     return this.db.transaction(() => {
       const changed = this.db.query(`UPDATE website_walkthroughs SET status='completed',pages=?,powerpoint=?,lease_token=NULL,lease_until=NULL
         WHERE walkthrough_id=? AND status='exporting' AND lease_token=? AND lease_until>?`)
         .run(JSON.stringify(pages.map(({ capture_id, url, title, facts, depth }) => ({ capture_id, url, title, facts, depth }))),
-          powerpoint, lease.walkthrough_id, lease.lease_token, now).changes;
+          powerpoint ?? null, lease.walkthrough_id, lease.lease_token, now).changes;
       if (changed !== 1) return false;
       const insert = this.db.query("INSERT INTO website_walkthrough_images(walkthrough_id,capture_id,screenshot) VALUES(?,?,?)");
       for (const page of pages) insert.run(lease.walkthrough_id, page.capture_id, page.screenshot);
@@ -116,6 +116,11 @@ export class WebsiteWalkthroughRepository {
   fail(lease: TWebsiteWalkthroughLease, error: string, now = Date.now()) {
     this.db.query(`UPDATE website_walkthroughs SET status='failed',error=?,lease_token=NULL,lease_until=NULL
       WHERE walkthrough_id=? AND lease_token=? AND lease_until>?`).run(error, lease.walkthrough_id, lease.lease_token, now);
+  }
+
+  has_archived_export(session: string, id: string) {
+    return Boolean(this.db.query("SELECT 1 FROM website_walkthroughs WHERE session_id=? AND walkthrough_id=? AND powerpoint IS NOT NULL")
+      .get(session, id));
   }
 
   download(session: string, id: string) {

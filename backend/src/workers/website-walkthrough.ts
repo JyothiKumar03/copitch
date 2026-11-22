@@ -1,14 +1,13 @@
 import type { TWebsiteCaptureAttempt } from "../../../shared/website-walkthrough";
 import { AppError } from "../errors/app-error";
 import type { SessionStore } from "../repositories/session";
-import { capture_website } from "../services/website-capture";
-import { export_website_powerpoint } from "../services/website-powerpoint";
+import { capture_website, until_aborted } from "../services/website-capture";
 
 export class WebsiteWalkthroughWorker {
   private running = false;
   private timer?: ReturnType<typeof setInterval>;
 
-  constructor(private store: () => SessionStore, private capture = capture_website, private export_deck = export_website_powerpoint) {}
+  constructor(private store: () => SessionStore, private capture = capture_website) {}
 
   async tick() {
     if (this.running) return;
@@ -26,17 +25,17 @@ export class WebsiteWalkthroughWorker {
       renew.unref();
       try {
         const activity: TWebsiteCaptureAttempt[] = [];
-        const captured = await this.capture(lease.url, signal, attempt => {
+        // The worker must always return so later walkthroughs can be claimed, even if a browser call stalls.
+        const captured = await until_aborted(this.capture(lease.url, signal, attempt => {
           activity.push(attempt);
           if (!jobs.progress(lease, activity)) abort.abort();
-        }, undefined, { max_depth: lease.max_depth, goal: lease.goal });
+        }, undefined, { max_depth: lease.max_depth, goal: lease.goal }), signal);
         signal.throwIfAborted();
         if (!jobs.progress(lease, captured.attempts, Boolean(captured.pages.length))) return;
         if (!captured.pages.length) throw new AppError(422, "No pages could be captured. Check the starting URL and try a public page.");
         const pages = captured.pages.map((page, index) => ({ ...page, capture_id: index + 1 }));
-        const powerpoint = await this.export_deck({ ...lease, pages, attempts: captured.attempts }, signal);
         signal.throwIfAborted();
-        jobs.complete(lease, pages, powerpoint);
+        jobs.complete(lease, pages);
       } catch (error) {
         jobs.fail(lease, error instanceof AppError ? error.message : "The walkthrough could not finish. Start another walkthrough to retry.");
       } finally {

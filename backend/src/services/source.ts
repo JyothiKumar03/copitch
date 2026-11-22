@@ -13,9 +13,11 @@ import type { TSourceKind } from "../types/source";
 
 export const max_source_bytes = source_limits.bytes;
 
-export const source_kind = (filename: string): TSourceKind => {
+type TUploadKind = Exclude<TSourceKind, "web" | "web_flow">;
+
+export const source_kind = (filename: string): TUploadKind => {
   const extension = filename.split(".").at(-1)?.toLowerCase();
-  if (extension && Object.hasOwn(source_formats, extension)) return extension as TSourceKind;
+  if (extension && extension !== "web" && extension !== "web_flow" && Object.hasOwn(source_formats, extension)) return extension as TUploadKind;
   throw new AppError(415, "Choose a text PDF, PowerPoint (.ppt or .pptx), or UTF-8 CSV.");
 };
 
@@ -54,16 +56,22 @@ export const parse_source = async (filename: string, bytes: Buffer, limits: TSou
   }
 };
 
+export const source_evidence_prefix = (source_id: string, kind: TSourceKind) => {
+  const prefix = parseInt(createHash("sha256").update(source_id).digest("hex").slice(0,12),16);
+  return (kind === "web_flow" ? "B" : "F") + prefix;
+};
+
 export const source_evidence = (source: TUploadedSource): TEvidence[] => {
-  const prefix = parseInt(createHash("sha256").update(source.source_id).digest("hex").slice(0,12),16);
+  const prefix = source_evidence_prefix(source.source_id, source.kind);
   const unit = source_formats[source.kind].location;
   // Older records did not retain a reported total as a measurement or identify cohort/group rows.
   // Keep their quoted cells usable, but withhold derived conversion metrics until the input is parsed again.
   const ambiguous_legacy_counts = source.kind === "csv" && !source.conversion_scope_version && source.records.some(row =>
     /(?:^|; )(?:(?:cohort|group): |(?:segment|customer segment): (?:overall|all|total|grand total)(?:;|$))/iu.test(row.text));
   return source.records.map(row => ({
-    id: "F" + prefix + String(row.number).padStart(5,"0"), source_id: source.source_id, origin:"material",
+    id: prefix + String(row.number).padStart(5,"0"), source_id: source.source_id, origin:"material",
     location: `${source.filename}, ${unit} ${row.number}`, passage:row.text, ...(row.numeric_series && {numeric_series:row.numeric_series}),
+    ...(row.url && { url: row.url }), ...(row.image && { image: row.image }),
     ...(row.metric && !ambiguous_legacy_counts && { metric:row.metric }),
   }));
 };

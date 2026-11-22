@@ -3,6 +3,9 @@ export const source_formats = {
   ppt: { tool: "parse_ppt", location: "slide" },
   pptx: { tool: "parse_pptx", location: "slide" },
   csv: { tool: "parse_csv", location: "CSV row" },
+  // Captured website pages from an approved walkthrough. They are never accepted as uploads.
+  web: { tool: "capture_website", location: "page" },
+  web_flow: { tool: "browse_site", location: "step" },
 } as const;
 
 export const source_limits = {
