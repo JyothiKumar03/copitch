@@ -9,7 +9,7 @@ This runs the full product (web, API with Chromium, voice, HTTPS gateway) on **o
 ## 0. Architecture
 
 ```
-Browser ──HTTPS 443──► EC2 (Elastic IP, Ubuntu 24.04, m7i.2xlarge)
+Browser ──HTTPS 443──► EC2 (Elastic IP, Ubuntu 24.04, m7i.xlarge)
                         └─ docker compose
                            ├─ gateway  Caddy: automatic Let's Encrypt TLS, / → web, /api/* → api
                            ├─ web      Next.js standalone (serves /voice/presentation-capture.js same-origin)
@@ -21,7 +21,7 @@ Admin: AWS Systems Manager Session Manager (no SSH port open)
 Data: SQLite on the instance's gp3 volume + nightly backup to S3
 ```
 
-**Instance size.** The commands use `m7i.2xlarge` as a demo starting point. Approve the size after estimating cost and checking expected browser concurrency in rehearsal.
+**Instance size.** Owner choice: `m7i.xlarge` (4 vCPU, 16 GB). Room for Chromium, Next.js and on-host builds.
 
 Check the current regional rate before launch. Include volumes, snapshots and public IPv4 in the estimate. [AWS EC2 On-Demand pricing](https://aws.amazon.com/ec2/pricing/on-demand/)
 
@@ -92,7 +92,7 @@ apt-get update && apt-get install -y docker-ce docker-ce-cli containerd.io docke
 curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tmp/awscli.zip && unzip -q /tmp/awscli.zip -d /tmp && /tmp/aws/install
 mkdir -p /srv/copitch/data /srv/copitch/backup
 EOF
-IID=$(aws ec2 run-instances --image-id $AMI --instance-type m7i.2xlarge \
+IID=$(aws ec2 run-instances --image-id $AMI --instance-type m7i.xlarge \
   --subnet-id $SUBNET --security-group-ids $SG --iam-instance-profile Name=$NAME-host \
   --block-device-mappings 'DeviceName=/dev/sda1,Ebs={VolumeSize=100,VolumeType=gp3,Encrypted=true,DeleteOnTermination=false}' \
   --metadata-options HttpTokens=required,HttpPutResponseHopLimit=1 \
