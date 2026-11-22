@@ -102,6 +102,9 @@ export const classify_live_turn: TLiveModel = async (context, signal, on_attempt
   throw new AppError(503, "Live model unavailable");
 };
 
+const question_start = /^\s*(?:what|why|how|when|where|who|whom|whose|which|is|are|am|was|were|can|could|do|does|did|will|would|should|shall|may|might|have|has|had|tell me|explain)\b/iu;
+const is_question = (message: string) => message.trim().endsWith("?") || question_start.test(message);
+
 export const check_live_answer = (decision: TLiveDecision, context: TLiveTurnContext) => {
   if (decision.kind === "ignore") return decision;
   if (context.presentation && decision.kind === "edit" && !decision.text.trim()) {
@@ -109,8 +112,12 @@ export const check_live_answer = (decision: TLiveDecision, context: TLiveTurnCon
   }
   if (!decision.text.trim() || decision.text.length > 6000) throw new AppError(502, "Invalid model reply");
   if (decision.kind !== "answer") return decision;
+  // A presenter's own statement is host evidence (the prompt asks for evidence_id "host"). It may only acknowledge
+  // a statement, never support an answer to a question, so a question cannot vouch for itself.
+  const host_statement = !!context.presentation && !is_question(context.message);
   const valid = decision.support.length && decision.support.every(ref => ref.excerpt.trim() &&
-    context.evidence.some(item => item.id === ref.evidence_id && quotes(item.passage, ref.excerpt)));
+    (host_statement && ref.evidence_id === "host" && quotes(context.message, ref.excerpt) ||
+      context.evidence.some(item => item.id === ref.evidence_id && quotes(item.passage, ref.excerpt))));
   if (!valid) return { kind: "clarify" as const, text: "The available sources do not support that answer. Which source or detail should I use?" };
   return { kind: "answer" as const, text: decision.text, evidence_ids: [...new Set(decision.support.map(ref => ref.evidence_id))],
     ...(context.presentation && { citations: decision.support }) };

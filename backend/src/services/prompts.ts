@@ -152,6 +152,7 @@ export const live_slide_turn = (presentation: boolean) => render({
     ...(presentation ? [
       "Return ignore for noise, backchannels and brief acknowledgements. For explicit navigation use control and an offered slide ID where needed. Approve or reject only a clear decision about the current pending review.",
       "When the host states a new fact, cite evidence_id host and quote the factual words, excluding the edit instruction.",
+      "When the host states a fact without asking for an edit, return answer: acknowledge it in one short sentence as noted and offer to add it to this slide. Cite evidence_id host with the exact words. Never treat the host's own statement as unsupported.",
       "For an addition put only new text in append_highlights or append_narration. Use a replacement field only when asked to replace it. A visual edit requires a request to change the template and quoted support for every label, value, unit and period.",
     ] : []),
   ],
