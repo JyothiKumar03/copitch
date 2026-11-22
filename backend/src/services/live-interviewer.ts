@@ -25,6 +25,9 @@ type TPendingStart = {
 };
 type TPendingHostCommand = {
   call_id: string; delegated_at: number; mission?: TMissionTurnBasis; timer: ReturnType<typeof setTimeout>; apply: () => void;
+  // What the host had said when the tool call arrived. The agent often speaks a lead-in before calling the tool,
+  // so no newer host transcript may follow; these words are then the command's basis.
+  spoken?: { text: string; until: number; mission?: TMissionTurnBasis };
 };
 const HOST_COMMAND_TAIL_MS = 120;
 // Delegation outcomes are otherwise invisible: the voice model keeps talking whatever happens. Names and outcomes only.
@@ -228,13 +231,15 @@ export const create_live_interviewer = (hooks: TLiveHooks) => {
     };
     const apply = () => {
       try {
-        const turn = hooks.act(host, action, action.kind === "mission_command" ? host_mission : undefined);
+        const said = host.trim() ? { text: host, mission: host_mission } : { text: spoken?.text ?? "", mission: spoken?.mission };
+        const turn = hooks.act(said.text, action, action.kind === "mission_command" ? said.mission : undefined);
         if (turn instanceof Promise) void turn.then(done, failed);
         else done(turn);
       } catch (cause) {
         failed(cause);
       }
     };
+    const spoken = host.trim() && host_until !== undefined ? { text: host, until: host_until, mission: host_mission } : undefined;
     if (action.kind === "propose_research") resolve_pending_start(false);
     if (["prepare_slides", "revise_slide", "mission_command"].includes(action.kind)) {
       const transcript_pending = !host.trim() || (dispatch && (host_until ?? 0) <= agent_until);
@@ -242,8 +247,15 @@ export const create_live_interviewer = (hooks: TLiveHooks) => {
         const mission = action.kind === "mission_command" ? dispatch.mission : undefined;
         if (action.kind === "mission_command" && !mission) { reply(call_id, "Open the current Mission to request a change."); return; }
         if (pending_command) { reply(call_id, "The first spoken change is already being checked."); return; }
-        const timer = setTimeout(() => resolve_pending_command(false), hooks.idle_ms ?? LIVE_EXCHANGE_IDLE_MS);
-        pending_command = { call_id, delegated_at: dispatch.at, mission, timer, apply };
+        const timer = setTimeout(() => {
+          // No newer transcript arrived: confirm against the words already heard, if they ended before the call and match the revision.
+          const basis = pending_command?.spoken;
+          const heard = !!basis && basis.until <= dispatch.at &&
+            (!mission || mission.mission_id === basis.mission?.mission_id && mission.revision === basis.mission?.revision);
+          trace({ tool: name, outcome: heard ? "command_confirmed_from_earlier_words" : "command_without_host_words" });
+          resolve_pending_command(heard);
+        }, hooks.idle_ms ?? LIVE_EXCHANGE_IDLE_MS);
+        pending_command = { call_id, delegated_at: dispatch.at, mission, timer, apply, spoken };
         if (!transcript_pending && host_until !== undefined) confirm_command_after_tail(pending_command, host_until);
         else trace({ tool: name, outcome: "awaiting_command_transcript" });
         return;
