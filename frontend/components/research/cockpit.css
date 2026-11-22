@@ -22,7 +22,8 @@ main:has(.studio-cockpit) {
   grid-template-areas: "conversation";
 }
 .studio-cockpit[data-mode=presentation] .conversation-timeline { padding-block: 1rem; }
-.studio-cockpit[data-mode=presentation] .cockpit-chat { background: var(--stage); }
+.studio-cockpit[data-mode=presentation] .cockpit-chat { background: var(--background); }
+.studio-cockpit[data-mode=presentation] .cockpit-chat:has(.deck-live) { background: var(--stage); }
 
 .cockpit-chat {
   --chat-inset: clamp(.8rem, 2vw, 1.75rem);
@@ -66,6 +67,15 @@ main:has(.studio-cockpit) {
 .chat-opening { max-width: 40rem; margin-inline: auto; padding-block: clamp(1rem, 9vh, 6rem) 1.25rem; }
 .chat-opening h3 { margin: .8rem 0 .4rem; font-size: clamp(2rem, 4.4vw, 3.6rem); font-weight: 620; line-height: 1; letter-spacing: -.065em; }
 .chat-opening p { max-width: 35rem; color: var(--muted-foreground); font-size: 1rem; line-height: 1.5; }
+.chat-opening { position: relative; max-width: 44rem; }
+.chat-opening-glow { position: absolute; z-index: 0; top: -4rem; left: -6rem; width: 22rem; height: 22rem; border-radius: 9999px; background: var(--hero-glow); opacity: .55; filter: blur(64px); pointer-events: none; }
+.starter-card {
+  display: flex; width: 100%; height: 100%; align-items: center; gap: .75rem; padding: .8rem .9rem;
+  border: 1px solid var(--border); border-radius: calc(var(--radius) + .125rem); background: color-mix(in oklab, var(--card) 85%, transparent);
+  color: var(--foreground); text-decoration: none; transition: border-color .15s, box-shadow .15s, translate .15s;
+}
+.starter-card:hover { border-color: var(--input); box-shadow: 0 6px 18px -10px rgb(0 0 0 / .35); }
+@media (prefers-reduced-motion: no-preference) { .starter-card:hover { translate: 0 -1px; } }
 .chat-turns { display: grid; max-width: 56rem; margin-inline: auto; gap: 1rem; }
 .chat-turn { width: fit-content; max-width: min(100%, 45rem); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.55; }
 .turn-meta { display: flex; align-items: center; gap: .45rem; line-height: 1.2; }

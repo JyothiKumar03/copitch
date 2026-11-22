@@ -5,9 +5,9 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import type { TResearchJob, TSourceCall, TTurnActivity } from "@/types/research";
 
 const attentionKinds = new Set(["failed", "needs_input", "lookup_failed", "lookup_empty", "verification_skipped", "fallback", "superseded"]);
-const informationKinds = new Set(["queued", "started", "resumed", "lookup_requested", "draft_started", "verification_started"]);
+const informationKinds = new Set(["queued", "started", "resumed", "stopped", "lookup_requested", "draft_started", "verification_started"]);
 const statusNames: Record<TResearchJob["status"], string> = {
-  queued: "Queued", running: "In progress", completed: "Complete", failed: "Failed", needs_input: "Needs input", superseded: "Replaced",
+  queued: "Queued", running: "In progress", completed: "Complete", failed: "Failed", needs_input: "Needs input", superseded: "Replaced", stopped: "Stopped",
 };
 const parseNames = {parse_pdf: "Read PDF", parse_ppt: "Read PowerPoint", parse_pptx: "Read PowerPoint", parse_csv: "Read spreadsheet"};
 
@@ -25,22 +25,31 @@ export const SourceExecution = ({ call }: { call: TSourceCall }) => {
   </div>;
 };
 
-export const TurnExecution = ({ activity }: { activity: TTurnActivity }) => <div className="tool-event">
-  <span className="tool-icon"><Workflow size={15} /></span>
-  <div className="min-w-0"><p className="tool-title">{activity.tool.replaceAll("_", " ")}</p><p className="tool-detail">{activity.result}</p></div>
-  <Badge variant="outline" className="tool-status">{activity.status}</Badge>
-</div>;
+// A turn activity is a receipt of what that turn did. The live research status is shown by ResearchProgress.
+const turnTools: Record<string, { title: string; status: string; detail?: string }> = {
+  queue_research: { title: "Research started", status: "Started", detail: "Live progress appears in Research activity." },
+  read_source: { title: "Read your sources", status: "Done" },
+};
+export const TurnExecution = ({ activity }: { activity: TTurnActivity }) => {
+  const known = turnTools[activity.tool];
+  return <div className="tool-event">
+    <span className="tool-icon"><Workflow size={15} /></span>
+    <div className="min-w-0"><p className="tool-title">{known?.title ?? activity.tool.replaceAll("_", " ")}</p><p className="tool-detail">{known?.detail ?? activity.result}</p></div>
+    <Badge variant="outline" className="tool-status">{known?.status ?? activity.status}</Badge>
+  </div>;
+};
 
 export const ResearchProgress = ({ job }: { job: TResearchJob }) => {
   const activity = job.activity ?? [];
   const active = job.status === "queued" || job.status === "running";
   const needsInput = job.status === "needs_input";
   const failed = job.status === "failed";
+  // Zero counts mean the brief was built directly from attached sources; say so instead of listing zeros.
+  const count = (value: number | undefined, one: string, many: string) => typeof value === "number" && value > 0 ? `${value} ${value === 1 ? one : many}` : null;
   const recordedWork = [
-    typeof job.tool_steps === "number" ? `${job.tool_steps} tool ${job.tool_steps === 1 ? "step" : "steps"}` : null,
-    typeof job.read_pages === "number" ? `${job.read_pages} ${job.read_pages === 1 ? "page" : "pages"} read` : null,
-    typeof job.research_passes === "number" ? `${job.research_passes} research ${job.research_passes === 1 ? "pass" : "passes"}` : null,
-  ].filter(Boolean).join(" · ");
+    count(job.tool_steps, "tool step", "tool steps"), count(job.read_pages, "page read", "pages read"),
+    count(job.research_passes, "research pass", "research passes"),
+  ].filter(Boolean).join(" · ") || (job.status === "completed" ? "Built from your attached sources" : "");
   return <div>
     {(needsInput || failed) && <div className="research-outcome" role="status">
       <h3>{needsInput ? "More evidence needed" : "Research could not finish"}</h3>

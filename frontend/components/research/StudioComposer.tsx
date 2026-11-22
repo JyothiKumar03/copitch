@@ -7,6 +7,7 @@ import type { TSourcePolicy, TUploadedSource } from "@/types/research";
 
 type TComposerProps = {
   inputRef: RefObject<HTMLTextAreaElement | null>;
+  filePickerRef?: RefObject<HTMLInputElement | null>;
   message: string;
   setMessage: (value: string) => void;
   sources: TUploadedSource[];
@@ -36,8 +37,9 @@ const SourceChip = ({ name, kind, remove }: { name: string; kind: "file" | "url"
   </Badge>;
 };
 
-export const StudioComposer = ({ inputRef, ...props }: TComposerProps) => {
-  const picker = useRef<HTMLInputElement>(null);
+export const StudioComposer = ({ inputRef, filePickerRef, ...props }: TComposerProps) => {
+  const localPicker = useRef<HTMLInputElement>(null);
+  const picker = filePickerRef ?? localPicker;
   const paste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
     const files = Array.from(event.clipboardData.files);
     if (files.length) { event.preventDefault(); props.attachFiles(files); return; }

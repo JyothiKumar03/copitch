@@ -29,12 +29,12 @@ export const useStudioEvents = (session: TResearchSession | null) => {
         const value = JSON.parse(event.data);
         if (typeof value.resource_id !== "string") return;
         if (value.kind === "sources") schedule(["source-calls"]);
-        if (value.kind === "job") schedule(["research-job", "host-workspace"]);
-        if (value.kind === "conversation") schedule(["host-workspace"]);
+        if (value.kind === "job") schedule(["research-job", "host-workspace", "host-mission"]);
+        if (value.kind === "conversation") schedule(["host-workspace", "host-mission"]);
       } catch { /* Reconciliation on reconnect also covers interrupted events. */ }
     };
     let fallback: ReturnType<typeof setInterval> | undefined;
-    const reconcile = () => schedule(["source-calls", "research-job", "host-workspace"]);
+    const reconcile = () => schedule(["source-calls", "research-job", "host-workspace", "host-mission"]);
     const ready = () => { clearInterval(fallback); fallback = undefined; reconcile(); };
     const disconnected = () => {
       if (!fallback) fallback = setInterval(() => { if (navigator.onLine) reconcile(); }, 5000);
