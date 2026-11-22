@@ -6,6 +6,7 @@ import { database } from "../repositories/store";
 import { session_for } from "../middleware/host-session";
 import { pitch_variant_key } from "../repositories/deck";
 import { prepare_reviewed_deck } from "../services/deck-render-review";
+import { adopt_approved_mission_edit } from "../services/director";
 import type { TDeck } from "../types/deck";
 import { MAX_PRESENTATION_SLIDES } from "../types/deck";
 import { public_url } from "../services/research";
@@ -35,6 +36,7 @@ export const list_decks = (req: TApiRequest, res: Response) => {
   return res.set("Cache-Control", "private, no-store").json({
     decks: db.decks.variants(session, research.data),
     preparation: db.deck_preparations.active_for_research(session, research.data),
+    recovery: db.deck_preparations.latest_failure(session, research.data),
   });
 };
 
@@ -84,6 +86,27 @@ export const read_deck_preparation = (req: TApiRequest, res: Response) => {
   return res.set("Cache-Control","private, no-store").json(job);
 };
 
+export const read_deck_draft = (req: TApiRequest, res: Response) => {
+  const session = session_for(req);
+  if (!session) return res.status(401).json({ error: "Unauthorized" });
+  const draft = database().deck_preparations.draft(session, req.params.draft_id);
+  if (!draft) throw new AppError(404, "Unknown recovery draft");
+  return res.set("Cache-Control", "private, no-store").json(draft);
+};
+
+const draft_edit = z.strictObject({ base_revision: z.number().int().positive(), slide_id: z.string().min(1).max(128),
+  title: z.string().trim().max(160), highlights: z.array(z.string().trim().min(1).max(240)).max(4), narration: z.string().trim().max(12000) });
+
+export const write_deck_draft = (req: TApiRequest, res: Response) => {
+  const session = session_for(req);
+  if (!session) return res.status(401).json({ error: "Unauthorized" });
+  const parsed = draft_edit.safeParse(req.body);
+  if (!parsed.success) throw new AppError(400, "Supply the draft revision and slide text");
+  const { base_revision, slide_id, ...changes } = parsed.data;
+  return res.set("Cache-Control", "private, no-store").json(
+    database().deck_preparations.edit_draft(session, req.params.draft_id, base_revision, slide_id, changes));
+};
+
 export const read_deck = (req: TApiRequest, res: Response) => {
   const session = session_for(req);
   if (!session) return res.status(401).json({ error: "Unauthorized" });
@@ -115,7 +138,13 @@ export const decide_edit = (req: TApiRequest, res: Response) => {
   const parsed = z.strictObject({ decision: z.enum(["approve","reject"]) }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "Choose approve or reject" });
   preview_editable(session, req.params.deck_id);
-  return res.json(database().decks.decide(session,req.params.deck_id,req.params.proposal_id,parsed.data.decision));
+  const db = database();
+  const result = db.missions.atomic(() => {
+    const decided = db.decks.decide(session, req.params.deck_id, req.params.proposal_id, parsed.data.decision);
+    adopt_approved_mission_edit(db, session, decided);
+    return decided;
+  });
+  return res.json(result);
 };
 
 export const reorder_deck = (req: TApiRequest, res: Response) => {

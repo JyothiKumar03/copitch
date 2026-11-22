@@ -6,11 +6,13 @@ import { join } from "node:path";
 import { chromium } from "playwright";
 import type { TDeck } from "../frontend/types/deck";
 
+const screenshotPath = "/api/sessions/private-project-fixture/site-runs/private-run-fixture/steps/1/screenshot";
 const deck: TDeck = {
   deck_id: "layout-fixture", research_id: "private-fixture", revision: 2, title: "Enterprise pilot",
   sources: [
     { id: "M1", origin: "public", location: "Pilot report", url: "https://www.example.com/pilot" },
     { id: "M2", origin: "material", location: "PRIVATE_UPLOAD_FILENAME.csv" },
+    { id: "B1", origin: "material", location: "Walkthrough screenshot", url: "https://www.example.com/setup", image: screenshotPath },
   ],
   slides: [
     { slide_id: "a", layout: "headline", title: "Start the pilot with enterprise buyers",
@@ -27,6 +29,8 @@ const deck: TDeck = {
       evidence_ids: ["M1"], chart_period: "2025", template: { type: "donut_chart", unit: "%", points: [
         { label: "Enterprise", value: 46 }, { label: "Midmarket", value: 32 }, { label: "Small business", value: 22 },
       ] } },
+    { slide_id: "g", layout: "evidence", title: "Create the pilot project", highlights: ["Open the project setup page."],
+      narration: "PRIVATE_AUDIO_G", evidence_ids: ["B1"] },
   ],
 };
 // Exercise the accepted limits for host-authored copy, including four full-length highlight rows.
@@ -37,7 +41,12 @@ deck.slides.push({
   highlights: Array.from({ length: 4 }, (_, index) => (String(index + 1) + ". " + long_phrase.repeat(4)).slice(0, 240).trimEnd()),
   narration: "PRIVATE_AUDIO_D", evidence_ids: ["M1", "M2"],
 });
-const build = await Bun.build({ entrypoints: ["frontend/lib/export-deck.ts"], target: "browser", format: "esm" });
+const build = await Bun.build({
+  entrypoints: ["frontend/lib/export-deck.ts"],
+  target: "browser",
+  format: "esm",
+  define: { "process.env.NEXT_PUBLIC_API_URL": JSON.stringify("") },
+});
 assert.ok(build.success, build.logs.map(String).join("\n"));
 const module_text = await build.outputs.find(output => output.path.endsWith(".js"))!.text();
 const dir = await mkdtemp(join(tmpdir(), "html-deck-"));
@@ -45,7 +54,19 @@ try {
   const browser = await chromium.launch({ channel: process.env.DECK_BROWSER_CHANNEL || undefined });
   try {
     const page = await browser.newPage();
+    const jpeg = await page.evaluate(() => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 64;
+      canvas.height = 36;
+      const context = canvas.getContext("2d")!;
+      context.fillStyle = "#23574b";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL("image/jpeg").split(",")[1]!;
+    });
     await page.route("http://deck.test/**", route => {
+      if (new URL(route.request().url()).pathname === screenshotPath) {
+        return route.fulfill({ contentType: "image/jpeg", body: Buffer.from(jpeg, "base64") });
+      }
       if (new URL(route.request().url()).pathname === "/export.js") {
         return route.fulfill({ contentType: "application/javascript", body: module_text });
       }
@@ -61,6 +82,8 @@ try {
       assert.ok(!html.includes(private_value), "Export leaked private material");
     }
     assert.ok(html.includes("Supplied material"), "Export should show the source category");
+    assert.ok(html.includes("data:image/jpeg;base64," + jpeg), "Export should embed the screenshot bytes");
+    assert.ok(!html.includes(screenshotPath), "Export leaked the private screenshot path");
     let external = 0;
     const offline = await browser.newContext();
     await offline.route(/^https?:/, route => { external++; return route.abort(); });
@@ -90,11 +113,18 @@ try {
       assert.equal(await viewer.locator('[data-composition="visual"] .slide-points').count(), 0);
       assert.equal(await viewer.getByText("percentage points · FY2025/26", { exact: true }).count(), 1);
       assert.equal(await viewer.locator('[data-template="line_chart"] .line circle').count(), 2);
-      assert.equal(await viewer.locator('[data-composition="mixed"] .slide-points li').count(), 1);
+      assert.equal(await viewer.locator('[data-template="line_chart"][data-composition="mixed"] .slide-points li').count(), 1);
       const donut = viewer.locator('[data-template="donut_chart"]');
       assert.equal(await donut.locator("circle[pathLength='100']").count(), 3);
       assert.deepEqual(await donut.locator("dd").allTextContents(), ["46%", "32%", "22%"]);
       assert.equal(await donut.getByText("Source: example.com", { exact: true }).count(), 1);
+      const screenshot = viewer.locator(".slide-screenshot");
+      assert.equal(await screenshot.count(), 1);
+      assert.equal(await screenshot.evaluate(async image => {
+        if (!(image instanceof HTMLImageElement)) throw new Error("Expected an image element");
+        await image.decode();
+        return image.naturalWidth;
+      }), 64);
       if (width >= 1000) assert.ok(sizes.heights.every(h => h <= height + 1), `Projector slide exceeds ${height}px: ${sizes.heights.join(", ")}`);
       console.log("PASS standalone HTML at " + width + "×" + height);
     }

@@ -6,13 +6,15 @@ import type { TDeck, TSlide, TSlideChanges } from "../types/deck";
 import type { TResearchBundle } from "../types/research";
 import { quotes } from "./excerpt";
 import { presentation_sentences } from "./presentation-live";
+import { is_draft_instruction } from "./slide-content";
 
 const is_plain_text = (text: string) => !/<\/?[a-z][\w:-]*(?:\s[^<>]*)?\s*\/?>/i.test(text);
 const plain_text = (max: number) => z.string().trim().min(1).max(max).refine(is_plain_text, "Use plain text in slide fields");
+const slide_highlights = z.array(plain_text(240)).max(4);
 const fields = {
   layout: z.enum(["headline", "evidence", "takeaway"]),
   title: plain_text(160),
-  highlights: z.array(plain_text(240)).min(1).max(4),
+  highlights: slide_highlights.min(1),
   narration: plain_text(12000),
 };
 export const edit_input = z.strictObject({
@@ -48,7 +50,7 @@ export const live_edit_input = edit_input.extend({
     .refine(value => Object.keys(value).length > 0, "Supply an edit"),
 });
 const slide_schema = z.strictObject({
-  ...fields, highlights: fields.highlights.min(0), chart: chart_schema.optional(), chart_period: plain_text(64).optional(),
+  ...fields, highlights: slide_highlights, chart: chart_schema.optional(), chart_period: plain_text(64).optional(),
   slide_id: z.string().min(1), evidence_ids: z.array(z.string().min(1)),
   template: slide_template_schema.optional(), beat_id: z.string().min(1).optional(), estimated_seconds: z.number().int().positive().optional(),
   sentences: z.array(z.strictObject({ sentence_id: z.string().min(1), text: plain_text(1800), evidence_ids: z.array(z.string().min(1)) })).optional(),
@@ -65,15 +67,18 @@ export const slide_speaking_seconds = (narration: string) => {
 export const deck_sources = (bundle: TResearchBundle, used: Set<string>) => bundle.evidence.filter(item => used.has(item.id)).map(item => ({
   id: item.id,
   origin: item.origin,
-  location: item.origin === "public" ? item.location : "Host-provided source",
-  url: item.origin === "public" && item.url ? public_url(item.url) : undefined,
+  // Captured website pages are public. Keep their page reference so the host can check the slide against it.
+  location: item.origin === "public" || item.origin === "material" && item.image ? item.location : "Host-provided source",
+  url: (item.origin === "public" || item.origin === "material" && item.image) && item.url ? public_url(item.url) : undefined,
+  ...(item.image && { image: item.image }),
 }));
 
 // Use a complete sentence or quoted supporting passage in the visual layer. Keep the full prose for speech.
 const highlight = (prose: string, excerpts: string[], heading: string) => {
   const first_sentence = prose.match(/^.+?[.!?](?:\s|$)/su)?.[0]?.trim();
-  return [first_sentence, ...excerpts, prose, heading].find(candidate =>
-    candidate && candidate.length <= 240) || "Research findings";
+  const excerpt_sentences = excerpts.map(text => text.match(/^.+?[.!?](?:\s|$)/su)?.[0]?.trim());
+  return [first_sentence, ...excerpts, ...excerpt_sentences, prose, heading].find(candidate =>
+    candidate && candidate.length <= 240 && !is_draft_instruction(candidate));
 };
 
 export const compile_deck = (bundle: TResearchBundle): TDeck => {
@@ -84,8 +89,10 @@ export const compile_deck = (bundle: TResearchBundle): TDeck => {
   const title = bundle.findings.title.trim();
   const slides: TSlide[] = [];
   for (const section of bundle.findings.sections) {
-    for (let offset = 0; offset < section.paragraphs.length; offset += 3) {
-      const group = section.paragraphs.slice(offset, offset + 3);
+    if (is_draft_instruction(section.heading)) continue;
+    const paragraphs = section.paragraphs.filter(paragraph => !is_draft_instruction(paragraph.prose));
+    for (let offset = 0; offset < paragraphs.length; offset += 3) {
+      const group = paragraphs.slice(offset, offset + 3);
       const evidence_ids = new Set<string>();
       const highlights: string[] = [];
       for (const paragraph of group) {
@@ -94,11 +101,8 @@ export const compile_deck = (bundle: TResearchBundle): TDeck => {
           throw new AppError(422, "A saved finding has an unresolved evidence reference");
         }
         for (const ref of paragraph.support) evidence_ids.add(ref.evidence_id);
-        if (bundle.grounding?.mode === "source_extracts") {
-          highlights.push(paragraph.prose.length <= 240 ? paragraph.prose : "See the full source passage in the research memo.");
-        } else {
-          highlights.push(highlight(paragraph.prose, paragraph.support.map(ref => ref.excerpt), section.heading));
-        }
+        const point = highlight(paragraph.prose, paragraph.support.map(ref => ref.excerpt), section.heading);
+        if (point) highlights.push(point);
       }
       const chart = chart_for_findings(evidence_ids, bundle.evidence);
       if (chart) chart.rows.forEach(row => evidence_ids.add(row.evidence_id));

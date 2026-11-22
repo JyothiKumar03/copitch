@@ -33,6 +33,20 @@ const shared_browser = () => {
   return browser;
 };
 
+// The review browser has no host cookie, so embed captured page screenshots for an accurate layout check.
+const screenshot_path = /^\/api\/sessions\/([^/]+)\/website-walkthroughs\/([^/]+)\/screenshots\/(\d+)$/u;
+const site_step_path = /^\/api\/sessions\/([^/]+)\/site-runs\/([^/]+)\/steps\/(\d+)\/screenshot$/u;
+const embedded_screenshot = async (deck: TDeck, evidence_ids: string[]) => {
+  const path = evidence_ids.map(id => deck.sources?.find(source => source.id === id)?.image).find(Boolean);
+  const step = path?.match(site_step_path);
+  const match = step ?? path?.match(screenshot_path);
+  if (!match) return;
+  const { database } = await import("../repositories/store");
+  const repository = step ? database().site_runs : database().website_walkthroughs;
+  const bytes = repository.screenshot(match[1], match[2], Number(match[3]));
+  return bytes ? "data:image/jpeg;base64," + Buffer.from(bytes).toString("base64") : undefined;
+};
+
 export const render_deck = async (deck: TDeck, signal?: AbortSignal): Promise<TDeckRender> => {
   signal?.throwIfAborted();
   if (active_reviews >= 2) throw new AppError(503, "The slide renderer is busy. Try again shortly.");
@@ -54,9 +68,10 @@ export const render_deck = async (deck: TDeck, signal?: AbortSignal): Promise<TD
       const page = await session.newPage();
       const response = await page.goto(address.href, { waitUntil: "domcontentloaded", timeout: 15_000 });
       if (!response?.ok() || new URL(page.url()).origin !== address.origin) throw new Error("Slide render page unavailable");
-      const views = deck.slides.map(({ slide_id, layout, title, highlights, evidence_ids, chart, chart_period, template }, index) => ({
-        deckTitle: deck.title, index, total: deck.slides.length, sources: public_source_labels(deck.sources, evidence_ids),
-        slide: { slide_id, layout, title, highlights, evidence_ids, chart, chart_period, template },
+      const views = await Promise.all(deck.slides.map(async ({ slide_id, layout, title, highlights, evidence_ids, chart, chart_period, template }, index) => {
+        const image = await embedded_screenshot(deck, evidence_ids);
+        return { deckTitle: deck.title, index, total: deck.slides.length, sources: public_source_labels(deck.sources, evidence_ids),
+          ...(image && { image }), slide: { slide_id, layout, title, highlights, evidence_ids, chart, chart_period, template } };
       }));
       await page.waitForFunction(() => "setDeckRenderViews" in globalThis, undefined, { timeout: 8_000 });
       await page.evaluate(input => {

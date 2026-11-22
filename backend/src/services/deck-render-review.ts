@@ -1,7 +1,9 @@
+import { metered_model } from "./mission-metering";
 import { createOpenAI } from "@ai-sdk/openai";
 import { generateText, Output } from "ai";
 import { z } from "zod";
 import { AppError } from "../errors/app-error";
+import { DeckPreparationError } from "./deck-preparation-failure";
 import type { TDeck, TDeckLayoutIssue, TDeckPlanInput } from "../types/deck";
 import type { TResearchBundle } from "../types/research";
 import { render_deck, visual_issue } from "./deck-render";
@@ -21,7 +23,7 @@ const inspect_appearance = async (deck: TDeck, screenshot: Buffer, signal?: Abor
   const deadline = AbortSignal.timeout(12_000);
   try {
     const result = await generateText({
-      model: client.responses(model.model), maxOutputTokens: Math.min(900, model.max_output_tokens),
+      model: metered_model(model, client.responses(model.model)), maxOutputTokens: Math.min(900, model.max_output_tokens),
       maxRetries: 0, abortSignal: signal ? AbortSignal.any([signal, deadline]) : deadline,
       providerOptions: { openai: { store: false } }, output: Output.object({ schema: review_schema }),
       instructions: presentation_visual_review,
@@ -83,5 +85,6 @@ export const prepare_reviewed_deck = async (bundle: TResearchBundle, pitch: TDec
     }
   }
   const slides = [...new Set(last_issues.map(issue => deck.slides.findIndex(slide => slide.slide_id === issue.slide_id) + 1))];
-  throw new AppError(422, `Slide review reached its three-pass limit. Check slides ${slides.join(", ")} or choose a different slide count.`);
+  throw new DeckPreparationError("render_review_failed", `Slide review reached its three-pass limit. Check slides ${slides.join(", ")} or choose a different slide count.`, [],
+    deck.grounding_mode === "verified" ? deck.slides : []);
 };

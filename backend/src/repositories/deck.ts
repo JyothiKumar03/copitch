@@ -8,7 +8,7 @@ import { propose_slide } from "../services/deck";
 import { public_url } from "../services/research";
 
 const pitch_variant_version = 3;
-const context_slides_version = 6;
+const context_slides_version = 7;
 
 export const pitch_variant_key = (pitch?: TDeckPlanInput) => {
   if (!pitch) return "";

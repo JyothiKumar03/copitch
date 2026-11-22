@@ -55,7 +55,7 @@ export type TDeck = {
   revision: number;
   title: string;
   slides: TSlide[];
-  sources?: { id: string; origin: "host" | "material" | "public"; location: string; url?: string }[];
+  sources?: { id: string; origin: "host" | "material" | "public"; location: string; url?: string; image?: string }[];
   grounding_mode?: "verified" | "source_extracts";
   render_review?: { rounds: number; status: "passed" };
 };
