@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { capture_website, website_capture_url } from "../src/services/website-capture";
+import { capture_website, until_aborted, website_capture_url } from "../src/services/website-capture";
 import type { TWebsiteCaptureAttempt, TWebsiteCaptureServices } from "../src/services/website-capture";
 
 const ipv4 = "93.184.215.14";
@@ -139,4 +139,31 @@ test("learning and download goals prioritize useful visible links over paths tha
     root, origin + "/downloads/", origin + "/about/gettingstarted/", origin + "/start/", origin + "/doc/",
   ]);
   expect(await run("Walk through Python")).toEqual([root, ...links.slice(0, 4).map(link => link.url)]);
+});
+
+test("a bare domain whose certificate only covers www is captured from the www host", async () => {
+  const resolved: string[] = [];
+  const result = await capture_website("https://portfolio.example", AbortSignal.timeout(1000), undefined, {
+    resolve: async hostname => { resolved.push(hostname); return [ipv4]; },
+    read: async url => {
+      if (url.hostname === "portfolio.example") throw new Error("Hostname/IP does not match certificate's altnames");
+      return { url: url.href, status: 200, content_type: "text/html", body: Buffer.from("fixture") };
+    },
+    launch: async () => ({ close: async () => {}, capture: async document => ({
+      url: document.url, title: "Portfolio", facts: ["Builds agents for production teams."], screenshot: Buffer.from("image"), links: [],
+    }) }),
+  }, { max_depth: 0, goal: "Introduce the portfolio" });
+  expect(resolved).toEqual(["portfolio.example", "www.portfolio.example"]);
+  expect(result.pages.map(page => page.url)).toEqual(["https://www.portfolio.example/"]);
+  expect(result.attempts.map(attempt => [attempt.status, attempt.url])).toEqual([
+    ["failed", "https://portfolio.example/"], ["captured", "https://www.portfolio.example/"],
+  ]);
+});
+
+test("a stalled browser call stops waiting when its deadline ends, so the queue can move on", async () => {
+  const stalled = new Promise<never>(() => {});
+  const started = performance.now();
+  await expect(until_aborted(stalled, AbortSignal.timeout(50))).rejects.toThrow();
+  expect(performance.now() - started).toBeLessThan(1000);
+  await expect(until_aborted(Promise.resolve("done"), AbortSignal.timeout(1000))).resolves.toBe("done");
 });

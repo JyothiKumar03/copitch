@@ -12,7 +12,7 @@ export type TWebsiteCaptureAttempt = { url: string; status: "captured" | "failed
 export type TWebsiteCaptureResult = { pages: TWebsiteCapturedPage[]; attempts: TWebsiteCaptureAttempt[] };
 export type TWebsiteCaptureScope = { max_depth: number; goal: string };
 
-type TWebsiteResponse = {
+export type TWebsiteResponse = {
   url: string; status: number; location?: string; content_type: string; content_security_policy?: string; body: Buffer;
 };
 type TWebsiteLink = { url: string; label: string };
@@ -51,6 +51,15 @@ const secret_query_key = /(?:api[_-]?key|access[_-]?key|auth|credential|password
 
 class WebsiteCaptureError extends Error {}
 
+// Browser calls such as evaluate and close have no deadline of their own. Stop waiting when the signal ends.
+export const until_aborted = <T>(work: Promise<T>, signal: AbortSignal) => new Promise<T>((resolve, reject) => {
+  if (signal.aborted) { reject(signal.reason); return; }
+  const stop = () => reject(signal.reason);
+  signal.addEventListener("abort", stop, { once: true });
+  work.then(resolve, reject).finally(() => signal.removeEventListener("abort", stop));
+});
+const settle_within = (work: Promise<unknown>, ms: number) => until_aborted(work, AbortSignal.timeout(ms)).catch(() => {});
+
 export const website_capture_url = (value: string) => {
   const normalized = public_url(value.trim());
   if (!normalized || normalized.length > 2048) return;
@@ -59,7 +68,7 @@ export const website_capture_url = (value: string) => {
   return url;
 };
 
-const same_destination = (from: URL, to: URL) =>
+export const same_destination = (from: URL, to: URL) =>
   from.hostname === to.hostname && (from.protocol === to.protocol || from.protocol === "http:" && to.protocol === "https:");
 
 const safe_path = (target: URL) => {
@@ -104,11 +113,11 @@ const link_relevance = (goal: string, host: string) => {
   };
 };
 
-const resolve_ipv4: TWebsiteCaptureServices["resolve"] = async host =>
+export const resolve_ipv4: TWebsiteCaptureServices["resolve"] = async host =>
   (await lookup(host, { family: 4, all: true })).map(result => result.address);
 
 // The socket dials only the resolved IPv4 address. TLS certificate checks and SNI still use the approved hostname.
-const read_pinned: TWebsiteCaptureServices["read"] = (url, ipv4, max_bytes, signal) =>
+export const read_pinned: TWebsiteCaptureServices["read"] = (url, ipv4, max_bytes, signal) =>
   new Promise((resolve, reject) => {
     signal.throwIfAborted();
     const get = url.protocol === "https:" ? https_get : http_get;
@@ -159,7 +168,7 @@ const launch_browser = async (): Promise<TWebsiteBrowser> => {
     timeout: 10_000,
   });
   return {
-    close: () => browser.close(),
+    close: () => settle_within(browser.close(), 5_000),
     capture: async (document_response, load_asset, signal) => {
       const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1,
         serviceWorkers: "block", acceptDownloads: false });
@@ -205,9 +214,11 @@ const launch_browser = async (): Promise<TWebsiteBrowser> => {
           };
           const clean = (value: string) => value.replace(/\s+/gu, " ").trim();
           const main = document.querySelector("main,[role=main],article") ?? document.body;
-          const facts = [...new Set([...main.querySelectorAll("h1,h2,h3,p,li")]
+          // Keep statements and figures. Short labels such as "Status" or "What I build" are navigation, not facts.
+          const facts = [...new Set([...main.querySelectorAll("h1,h2,h3,p,li,dd,blockquote,figcaption")]
             .filter(node => visible(node) && !node.closest("header,nav,footer,form,[aria-hidden=true]"))
-            .map(node => clean(node.innerText).slice(0, 340)).filter(Boolean))].slice(0, 8);
+            .map(node => clean(node.innerText).slice(0, 340))
+            .filter(text => text.split(" ").length >= 4 || /\d/u.test(text) && text.split(" ").length >= 2))].slice(0, 12);
           if (!facts.length && visible(main)) {
             const text = clean(main.innerText).slice(0, 340);
             if (text) facts.push(text);
@@ -224,7 +235,7 @@ const launch_browser = async (): Promise<TWebsiteBrowser> => {
         return { url: page.url(), title: content.title, facts: content.facts, links: content.links, screenshot };
       } finally {
         signal.removeEventListener("abort", stop);
-        await context.close();
+        await settle_within(context.close(), 3_000);
       }
     },
   };
@@ -247,10 +258,24 @@ const find_address = async (services: TWebsiteCaptureServices, host: string, sig
   } finally { deadline.removeEventListener("abort", on_abort); }
 };
 
+// A bare domain often serves a certificate or redirect only for its www host. When nothing on the approved
+// apex could be captured, try the same site under www before reporting the walkthrough as empty.
 export const capture_website = async (value: string, signal: AbortSignal, observe?: (attempt: TWebsiteCaptureAttempt) => void,
   overrides: Partial<TWebsiteCaptureServices> = {}, scope: TWebsiteCaptureScope = {
     max_depth: DEFAULT_WEBSITE_WALKTHROUGH_DEPTH, goal: "",
   }): Promise<TWebsiteCaptureResult> => {
+  const first = await capture_site(value, signal, observe, overrides, scope);
+  const root = website_capture_url(value);
+  if (first.pages.length || !root || root.hostname.startsWith("www.") || root.hostname.split(".").length !== 2) return first;
+  const alternate = new URL(root);
+  alternate.hostname = "www." + root.hostname;
+  const retry = await capture_site(alternate.href, signal, observe, overrides, scope);
+  const reason = `This address did not open, often because its certificate covers only ${alternate.hostname}. Captured ${alternate.hostname} instead.`;
+  return { pages: retry.pages, attempts: [...(retry.pages.length ? first.attempts.map(attempt => ({ ...attempt, reason })) : first.attempts), ...retry.attempts] };
+};
+
+const capture_site = async (value: string, signal: AbortSignal, observe: ((attempt: TWebsiteCaptureAttempt) => void) | undefined,
+  overrides: Partial<TWebsiteCaptureServices>, scope: TWebsiteCaptureScope): Promise<TWebsiteCaptureResult> => {
   const services = { ...default_services, ...overrides };
   const root = website_capture_url(value);
   if (!root) throw new AppError(422, "Enter a public HTTP or HTTPS website on its standard port.");
@@ -260,7 +285,12 @@ export const capture_website = async (value: string, signal: AbortSignal, observ
   }
   const relevance = link_relevance(goal, root.hostname);
   const result: TWebsiteCaptureResult = { pages: [], attempts: [] };
-  const record = (attempt: TWebsiteCaptureAttempt) => { result.attempts.push(attempt); observe?.(attempt); };
+  const started = performance.now();
+  const record = (attempt: TWebsiteCaptureAttempt) => {
+    result.attempts.push(attempt); observe?.(attempt);
+    if (process.env.TRACE_LOGS === "1") console.log(JSON.stringify({ operation: "website.capture_attempt", status: attempt.status,
+      depth: attempt.depth, elapsed_ms: Math.round(performance.now() - started) }));
+  };
   const failure = (error: unknown, default_message: string) => error instanceof WebsiteCaptureError ? error.message : default_message;
   let address: string;
   try { address = await find_address(services, root.hostname, signal); }
@@ -316,7 +346,7 @@ export const capture_website = async (value: string, signal: AbortSignal, observ
         let asset_count = 0;
         let asset_bytes = capture_limits.assets_bytes_per_page;
         const observed = new URL(document.url);
-        const captured = await browser.capture(document, async asset => {
+        const captured = await until_aborted(browser.capture(document, async asset => {
           const candidate = website_capture_url(asset);
           if (!candidate || !same_destination(observed, candidate) || asset_count >= capture_limits.assets_per_page || asset_bytes <= 0) {
             throw new WebsiteCaptureError("The asset is outside the approved page or capture limits.");
@@ -327,7 +357,7 @@ export const capture_website = async (value: string, signal: AbortSignal, observ
           const response = await read(candidate, reserved_bytes, page_signal, true);
           asset_bytes += Math.max(0, reserved_bytes - response.body.length);
           return response;
-        }, page_signal);
+        }, page_signal), page_signal);
         if (captured.url !== document.url || !captured.screenshot.length) throw new WebsiteCaptureError("The page changed before it could be captured.");
         result.pages.push({ url: captured.url, title: captured.title || observed.hostname, facts: captured.facts, screenshot: captured.screenshot, depth });
         attempt = { url: current.href, observed_url, status: "captured", depth };
@@ -351,6 +381,6 @@ export const capture_website = async (value: string, signal: AbortSignal, observ
       }
       record(attempt);
     }
-  } finally { await browser.close(); }
+  } finally { await settle_within(browser.close(), 5_000); }
   return result;
 };
