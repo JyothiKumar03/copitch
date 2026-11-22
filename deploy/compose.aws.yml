@@ -8,7 +8,6 @@ services:
       CORS_ORIGIN: https://${PUBLIC_HOST:?Set PUBLIC_HOST}
       TRACE_LOGS: "1"
       COPITCH_TRUST_GATEWAY: "1"
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       SITE_AGENT_ALLOW_PRIVATE: "0"
     volumes:
       - ${SESSION_DATA_DIR:?Set SESSION_DATA_DIR on mounted EBS}:/data
