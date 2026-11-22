@@ -6,7 +6,7 @@ import { AppError } from "../src/errors/app-error";
 import { ensure_retry_provider, mission_view, retry_mission } from "../src/services/mission-retry";
 import { SessionStore } from "../src/repositories/session";
 import { adopt_host_deck_request, approve_mission, outcome_gaps, sync_mission_proposal } from "../src/services/director";
-import { MissionWorker } from "../src/workers/mission";
+import { MissionWorker, outcome_review_input } from "../src/workers/mission";
 import { initial_studio_context } from "../src/services/studio-state";
 import type { TResearchBundle } from "../src/types/research";
 import type { TDeck } from "../src/types/deck";
@@ -393,4 +393,23 @@ test("an approved revision gets a fresh time allowance instead of inheriting an 
   const before = Date.now();
   const approved = approve_mission(db,"owner",plan.mission_id,1);
   expect(approved.started_at!).toBeGreaterThanOrEqual(before);
+});
+
+test("outcome judge sees the approved count, saved slide citations and host passage while missing subject matter stays visible", () => {
+  const db = new SessionStore(":memory:");
+  const plan = propose(db);
+  const m = approve_mission(db,"owner",plan.mission_id,1);
+  const bundle = finish_research(db,m.research_job_id!);
+  const deck = reviewed(bundle);
+  m.contract.purpose = "Introduce the host and teach feedback.";
+  bundle.evidence.push({ id: "M9", origin: "material", location: "Private attachment", passage: "Uncited private text" });
+  const input = outcome_review_input(m,deck,bundle.evidence);
+  expect(input.deliverable.slide_count).toBe(2);
+  expect(input.actual_slide_count).toBe(2);
+  expect(input.slides[0].evidence_ids).toEqual(["H1"]);
+  expect(input.sources).toEqual([{ id: "H1", origin: "host" }]);
+  expect(input.host_quotes[0]).toEqual({ id: "H1", passage: "I love classical music and mangoes." });
+  expect(JSON.stringify(input)).not.toContain("Uncited private text");
+  expect(input.purpose).toContain("teach feedback");
+  expect(JSON.stringify(input.slides)).not.toContain("feedback");
 });
