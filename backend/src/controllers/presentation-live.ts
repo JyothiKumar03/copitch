@@ -6,6 +6,7 @@ import { presentation_snapshot } from "../repositories/presentation-live";
 import type { TPresentationRoute } from "../repositories/presentation-live";
 import { database } from "../repositories/store";
 import { call_voice_worker } from "../services/interview-voice";
+import { upcoming_narration } from "../services/presentation-live";
 import { check_live_answer, classify_live_turn, live_context } from "../services/live-turn";
 import { verify_presentation_claims } from "../services/presentation-grounding";
 import type { TPresentationClaim } from "../services/presentation-grounding";
@@ -64,10 +65,14 @@ export const presentation_audio = (fetch_worker = fetch) => async (req: TApiRequ
   const session = host(req, res);
   const db = database();
   db.presentations.refresh_stage(session, req.params.deck_id);
-  const { state } = db.presentations.current(session, req.params.deck_id);
+  const { state, deck } = db.presentations.current(session, req.params.deck_id);
   const attempt = state.attempt;
   if (!attempt || attempt.attempt_id !== req.params.attempt_id) throw new AppError(409, "This playback attempt already changed");
   if (attempt.text.length > 4000) throw new AppError(422, "Split this narration sentence into shorter sentences");
+  // Generate the next sentences now. The voice worker caches by text, so their own requests return without a gap.
+  for (const text of upcoming_narration(state, deck, 2)) {
+    if (text.length <= 4000) void call_voice_worker("speech", "application/json", JSON.stringify({ text }), fetch_worker).catch(() => {});
+  }
   const abort = new AbortController();
   res.once("close", () => { if (!res.writableEnded) abort.abort(); });
   const audio = await call_voice_worker("speech", "application/json", JSON.stringify({ text: attempt.text }), fetch_worker, undefined, abort.signal);

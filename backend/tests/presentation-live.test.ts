@@ -273,7 +273,8 @@ test("signed-in presentation fences stale speech, pins Q&A and publishes only ap
     expect(first_sound.text).toBe("First sentence.");
     expect((await send(live + "/audio/" + first_sound.attempt_id, undefined, token)).status).toBe(401);
     expect((await send(live + "/audio/" + first_sound.attempt_id)).headers.get("content-type")).toContain("audio/mpeg");
-    expect(spoken).toEqual(["First sentence."]);
+    // The requested sentence, plus the next two generated early so playback has no gap between sentences.
+    expect(spoken).toEqual(["Second sentence.", "Wrap up.", "First sentence."]);
     state = await complete(state);
     expect(state.cursor).toEqual({ slide_id: "intro", sentence_index: 1 });
     const second = state.attempt!.attempt_id;

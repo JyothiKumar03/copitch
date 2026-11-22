@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { TPresentationAction, TPresentationState } from "@/types/presentation";
 
+const NARRATION_RATE = 1.2;
+
 export const useNarration = (
   attemptId: string | undefined,
   load: (attemptId: string, signal: AbortSignal) => Promise<Blob>,
@@ -81,6 +83,9 @@ export const useNarration = (
         if (abort.signal.aborted) return;
         objectUrl = URL.createObjectURL(blob);
         audio = new Audio(objectUrl);
+        // TTS reads at about 150 words per minute and ignores pace instructions; 1.2x keeps the pitch and sounds like a live presenter.
+        audio.playbackRate = NARRATION_RATE;
+        audio.preservesPitch = true;
         if (ducks.size) audio.volume = 0.2;
         unobserve = latest.current.observeAudio(audio);
         audio.onplaying = () => {

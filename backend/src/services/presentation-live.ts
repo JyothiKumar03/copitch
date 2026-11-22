@@ -98,6 +98,20 @@ const onward = (state: TPresentationStored, deck: TDeck, publish: TPublishSlide)
   }
 };
 
+// The sentences after the one now playing, so their audio can be generated before the browser asks for it.
+export const upcoming_narration = (state: TPresentationStored, deck: TDeck, count: number): string[] => {
+  const pending = state.pending_advance;
+  if (pending) return pending.sentences.slice(pending.next + 1, pending.next + 1 + count);
+  const index = deck.slides.findIndex(slide => slide.slide_id === state.cursor.slide_id);
+  if (index < 0) return [];
+  const texts = presentation_sentences(deck.slides[index]).slice(state.cursor.sentence_index + 1).map(sentence => sentence.text);
+  for (const slide of deck.slides.slice(index + 1)) {
+    if (texts.length >= count) break;
+    texts.push(...presentation_sentences(slide).map(sentence => sentence.text));
+  }
+  return texts.slice(0, count);
+};
+
 export const cue_presentation = (state: TPresentationStored, deck: TDeck, publish: TPublishSlide) => {
   if (state.attempt || state.pin || state.proposal || !state.wants_playback) return;
   if (!state.painted) { state.status = "awaiting_paint"; return; }
