@@ -5,6 +5,7 @@ import { SessionStore } from "../src/repositories/session";
 import { apply_voice_action, record_voice_exchange, studio_context } from "../src/services/studio-turn";
 import type { TVoiceAction } from "../src/services/studio-turn";
 import type { TMissionTurnBasis } from "../src/services/studio-turn";
+import type { TOutcomeContract } from "../src/types/mission";
 import type { TStudioTurn } from "../src/types/studio-turn";
 
 type TSent = { type: string; item?: { type: string; call_id: string; output: string } };
@@ -215,7 +216,11 @@ test("sideband replay preserves verbatim multilingual fragments and call-scoped 
   });
 });
 
-const first_spoken_approval = async (start_ms: number, end_ms: number, budget: string | null = "two US dollars", translated_outcome?: string) => {
+const read_english_outcome = (contract: TOutcomeContract, budget = `${contract.budget.usd} US dollars`) =>
+  `I’ll create ${contract.deliverable.slide_count} slides using public sources. The budget is ${budget} and ${contract.budget.minutes} minutes. `;
+
+const first_spoken_approval = async (start_ms: number, end_ms: number,
+  read_outcome: ((contract: TOutcomeContract) => string) | null = read_english_outcome) => {
   const db = new SessionStore(":memory:");
   const session = "timed-first-approval";
   const jobs: string[] = [];
@@ -238,9 +243,10 @@ const first_spoken_approval = async (start_ms: number, end_ms: number, budget: s
     await call("propose_research", { subject: "Portfolio", audience: "Bank team", outcome: "Know the host's background",
       deliverable: "Introductory deck", summary: proposal.summary, urls: proposal.urls, queries: [] }, "offer");
     const offered_turn = studio_context(db, session).state.proposal_turn_id;
+    const contract = db.missions.current(session)?.contract;
+    if (!contract || typeof contract.deliverable.slide_count !== "number") throw new Error("Expected a saved count and budget for the spoken plan");
     await live.receive({ type: "session.output_transcript.delta", start_ms: 2500, end_ms: 4350,
-      delta: "I'll research jk-ai.in for your bank pitch to your new team. " + (translated_outcome ?? (budget
-        ? `I’ll create six slides using public sources. The budget is ${budget} and ten minutes. ` : "")) + "Shall I start?" });
+      delta: "I'll research jk-ai.in for your bank pitch to your new team. " + (read_outcome?.(contract) ?? "") + "Shall I start?" });
     await live.receive({ type: "session.delegation.created", offset_ms: 5200,
       delegation: { id: "first-approval", target: "responses" } });
     await call("start_research", {}, "first-approval");
@@ -259,19 +265,21 @@ test("one spoken approval starts once when the correlated tool arrives before it
 });
 
 test("the spoken plan can be read back with Hindi or Telugu quantities and source scope", async () => {
-  for (const translated of [
-    "सार्वजनिक स्रोत से छह स्लाइड। बजट २ अमेरिकी डॉलर और दस मिनट। ",
-    "పబ్లిక్ వెబ్ నుంచి ఆరు స్లైడ్లు. బడ్జెట్ ౨ డాలర్లు, పది నిమిషాలు. ",
+  const hindi = new Intl.NumberFormat("hi-IN-u-nu-deva", { useGrouping: false, maximumFractionDigits: 20 });
+  const telugu = new Intl.NumberFormat("te-IN-u-nu-telu", { useGrouping: false, maximumFractionDigits: 20 });
+  for (const read_outcome of [
+    (plan: TOutcomeContract) => `सार्वजनिक स्रोत से ${hindi.format(Number(plan.deliverable.slide_count))} स्लाइड। बजट ${hindi.format(plan.budget.usd)} अमेरिकी डॉलर और ${hindi.format(plan.budget.minutes)} मिनट। `,
+    (plan: TOutcomeContract) => `పబ్లిక్ వెబ్ నుంచి ${telugu.format(Number(plan.deliverable.slide_count))} స్లైడ్లు. బడ్జెట్ ${telugu.format(plan.budget.usd)} డాలర్లు, ${telugu.format(plan.budget.minutes)} నిమిషాలు. `,
   ]) {
-    const result = await first_spoken_approval(4480, 5080, null, translated);
+    const result = await first_spoken_approval(4480, 5080, read_outcome);
     expect(result.jobs).toHaveLength(1);
     expect(result.phase).toBe("researching");
   }
 });
 
 test("speaking after the research summary cannot approve a mission whose outcome details were not read", async () => {
-  for (const budget of [null, "$20", "12 US dollars"]) {
-    const result = await first_spoken_approval(4480, 5080, budget);
+  for (const budget of [null, "$2", "$200"]) {
+    const result = await first_spoken_approval(4480, 5080, budget === null ? null : contract => read_english_outcome(contract, budget));
     expect(result.phase).toBe("proposed");
     expect(result.jobs).toHaveLength(0);
     expect(result.outputs.at(-2)?.item?.output).toContain("The spoken approval could not be confirmed");
